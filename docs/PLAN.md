@@ -319,7 +319,7 @@ tự suy luận trạng thái.
 **Đơn vị của `danger_spans`**: khoảng nửa mở `[start, end)` tính bằng chỉ số **ký tự Unicode** (scalar value,
 tức code point) trong `command_normalized`; không phải byte UTF-8, không phải UTF-16 code unit.
 - Hub: `regex::Match` trả offset byte → đổi bằng `text[..byte].chars().count()` trước khi gửi.
-- UI: cắt bằng `Array.from(command_normalized).slice(start, end)`, không dùng `String.prototype.slice`.
+- UI: cắt bằng `Array.from(command_normalized).slice(start, end).join('')`, không dùng `String.prototype.slice`.
 - Lý do: lệnh có thể chứa đường dẫn tiếng Việt, emoji hoặc ký tự ngoài BMP; byte và UTF-16 lệch nhau ở các ký tự này
   và làm tô sáng sai chỗ.
 
@@ -518,8 +518,9 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 3. state.apply(ev)  -> agent chuyển waiting/approval ; broadcast
 4. ctx = ApprovalCtx { agent, tool, tool_input, cwd }
 5. outcome = policy.decide(&ctx)                    // T3: Policy giả luôn trả AskUser{risk: Medium}
-6. nếu team.paused và outcome là AutoAllow: đổi thành AskUser{risk đã tính}
-   // tạm dừng tắt mọi AutoAllow (T14) và phải chạy TRƯỚC khi trả allow; tạm dừng không tự từ chối
+   nếu team.paused và outcome là AutoAllow: outcome = AskUser{risk đã tính}
+   // tạm dừng tắt mọi AutoAllow (T14), phải chạy TRƯỚC khi xét nhánh dưới; tạm dừng không tự từ chối
+6. match outcome:
    - AutoAllow{reason}  -> ghi approvals(status=allowed, decided_by=policy) -> trả allow
    - AskUser{risk,…}    -> tiếp bước 7
    (Policy KHÔNG có nhánh AutoDeny trong v0.)
@@ -639,8 +640,9 @@ qua toàn bộ bảng mẫu × mọi trust grant giả và batch rule giả).
 **Test bắt buộc:** mỗi luật ≥3 ca khớp và ≥2 ca không khớp (ví dụ `rm -r dir` không phải critical, `git push origin main` là medium);
 `zero_width_inside_rm_still_detected`; `bidi_override_flagged`; `quoted_semicolon_not_split`;
 `critical_never_auto_allowed_with_any_grant_or_batch`;
-`danger_spans_are_char_indices_with_non_ascii` (ví dụ `echo "thư mục" && rm -rf đầu-ra`: ký tự ngoài ASCII nằm **trước** chỗ khớp, nên span theo byte và theo
-ký tự khác nhau; test khẳng định span theo ký tự).
+`danger_spans_are_char_indices_with_non_ascii` (ví dụ `echo "🚀 thư mục" && rm -rf đầu-ra`: ký tự tiếng Việt và
+ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte, theo UTF-16 và theo ký tự đều khác nhau; test khẳng
+định span theo ký tự). T12 dùng lại đúng chuỗi này cho test tô sáng phía UI.
 
 ### T9 · ARC-30 · Gom nhóm và batch rule
 

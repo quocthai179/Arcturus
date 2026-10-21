@@ -35,13 +35,14 @@ Hub là daemon riêng. Đóng app thì hub vẫn chạy và vẫn giữ hàng đ
 3. Policy quyết theo thứ tự (chi tiết: `docs/PLAN.md` T3, T8–T10, T14):
    1. Khớp **danger list** (risk Critical) → luôn hỏi người (không bao giờ tự allow).
    2. Có **trust grant** còn hạn cho (persona) × (`group_key`) ở mức 6 và risk ≤ Medium → tự allow, ghi log
-      `decided_by=policy`. Mức 5 → vẫn hỏi người, kèm đếm ngược phủ quyết.
+      `decided_by=policy`. Mức 5 → vẫn hỏi người; đếm ngược phủ quyết chỉ hiện khi yêu cầu `reversible`
+      (v0: chỉ risk Low).
    3. Có **batch rule** đang mở cho `group_key` ("cho phép `Bash:npm test` 1 giờ") và risk ≤ Medium → tự allow.
    4. Còn lại → vào hàng đợi.
 
    Đội đang **tạm dừng** (`team.paused`): mọi kết quả tự allow ở bước 2–3 bị đổi thành hỏi người. Tạm dừng không
    tự từ chối và ở v0 không dừng được agent thật (xem T14).
-4. Vào hàng đợi: tạo `oneshot` channel, broadcast `approval.requested` qua WebSocket.
+4. Vào hàng đợi: tạo `oneshot` channel, broadcast thông điệp WebSocket `approval_requested`.
 5. Người quyết qua UI → hub gửi vào channel → trả JSON decision cho Claude Code.
 6. Hết 110 giây (timeout hook = 120) → trả `{}`. Claude Code tự hỏi trong terminal. Đánh dấu `decided_by=timeout`.
 7. Mọi quyết định ghi vào bảng `approvals` (ai, lúc nào, qua thiết bị nào, độ trễ).
@@ -61,7 +62,7 @@ Bảng đầy đủ theo tool (kể cả `act_text`): `docs/PLAN.md` §3.2 và �
 | PreToolUse Bash | running | working |
 | PostToolUse | thinking | working |
 | PermissionRequest | waiting | approval |
-| PostToolUseFailure, StopFailure | error | error |
+| PostToolUseFailure, StopFailure | — (giữ nguyên) | error (giữ tới sự kiện kế tiếp) |
 | Stop | idle | done (3 giây) → idle |
 | SubagentStart/Stop | tạo/xóa agent con `kind=subagent` | |
 | SessionEnd | xóa agent | |
@@ -108,8 +109,9 @@ trường nào có nhiều giá trị thì liệt kê các giá trị hợp lệ
 - `activity`, `tool`, `approval`, `metrics`, `raw_ref` có thể là `null`; `tool.risk` chỉ policy được điền.
 - `type: "unknown"`: sự kiện hook lạ được giữ lại, không bao giờ làm hub trả lỗi.
 - Tên, vai trò, bảng màu không nằm trong Event: hub gắn persona khi dựng `AgentView` (`docs/PLAN.md` §3.4).
-- `raw_ref` là khóa tới JSON hook gốc trong SQLite (`events.raw_json`). UI chỉ nhận `AgentView`/`ApprovalView`
-  (tóm tắt hoạt động và lệnh cần duyệt), không nhận diff hay nội dung file.
+- `raw_ref` là khóa tới JSON hook gốc trong SQLite (`events.raw_json`). UI chỉ nhận `AgentView`/`ApprovalView`,
+  không nhận Event thô. `AgentView` chỉ có tóm tắt hoạt động; `ApprovalView` mang `tool_input` đầy đủ của yêu cầu
+  cần duyệt (`command_original`, `command_normalized`), nên với Edit/Write có thể chứa nội dung file.
 
 ## Bảng SQLite
 
