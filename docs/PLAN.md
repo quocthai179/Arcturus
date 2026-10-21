@@ -126,7 +126,7 @@ pub struct Event {
     pub tool: Option<ToolInfo>,
     pub approval: Option<ApprovalInfo>,
     pub metrics: Option<Metrics>,
-    pub raw_ref: Option<String>,    // khóa tới JSON gốc trong SQLite
+    // Không có raw_ref: JSON hook gốc nằm ở cột events.raw_json, tra theo `id` (§3.5).
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -247,6 +247,7 @@ Bind mặc định `127.0.0.1:7878` (cấu hình được nhưng **từ chối**
 | POST | `/hooks/event` | Bearer | `204` ngay; xử lý bất đồng bộ qua `mpsc` |
 | POST | `/hooks/permission` | Bearer | `200` + JSON quyết định, hoặc `200 {}` |
 | GET | `/ws` | Bearer (header) hoặc `?token=` (cho webview) | Nâng cấp WebSocket |
+| GET | `/approvals/{request_id}/input` | Bearer | `200` + `tool_input` đầy đủ của yêu cầu đang chờ (nút "Xem đầy đủ", T12); `404` nếu không còn chờ |
 | GET | `/healthz` | không | `200 ok` |
 
 - Token: biến môi trường `ARCTURUS_TOKEN`; không có thì hub **không khởi động** (thông báo cách tạo).
@@ -287,7 +288,8 @@ pub enum ClientMsg {
     DecideGroup { group_key: String, decision: Decision },          // T9
     BatchOpen { group_key: String, minutes: u32 },                  // T9
     BatchClose { group_key: String },                               // T9
-    TeamPause, TeamResume, FocusSet { on: bool },                   // T14
+    TeamPause, TeamResume,                                          // hub: T5; UI: T14
+    FocusSet { on: bool },                                          // T14
     SuggestionAnswer { id: String, accept: bool },                  // T10
     ReturnToTerminal { request_id: RequestId },                     // nếu Q1 cần
 }
@@ -302,9 +304,11 @@ pub struct AgentView {
 
 pub struct ApprovalView {
     pub request_id: RequestId, pub agent_id: AgentId, pub agent_name: String,
-    pub tool: String, pub command_original: String,   // tool_input gốc dạng chuỗi, KHÔNG rút gọn
+    pub tool: String, pub command_original: String,   // tool_input gốc dạng chuỗi (giới hạn nội dung: xem dưới)
     pub command_normalized: String,                    // sau normalize
     pub danger_spans: Vec<(usize, usize)>,             // [start, end) theo chỉ số ký tự Unicode trong command_normalized
+    pub suspicions: Vec<Suspicion>,                    // từ normalize (T8): hidden_chars, subshell, eval, encoded
+    pub truncated: bool,                               // true nếu nội dung Edit/Write bị cắt (xem dưới)
     pub risk: Risk, pub reversible: bool,
     pub group_key: String, pub created_at: OffsetDateTime, pub deadline_at: OffsetDateTime,
 }
@@ -322,6 +326,13 @@ tức code point) trong `command_normalized`; không phải byte UTF-8, không p
 - UI: cắt bằng `Array.from(command_normalized).slice(start, end).join('')`, không dùng `String.prototype.slice`.
 - Lý do: lệnh có thể chứa đường dẫn tiếng Việt, emoji hoặc ký tự ngoài BMP; byte và UTF-16 lệch nhau ở các ký tự này
   và làm tô sáng sai chỗ.
+
+**Giới hạn nội dung trong `ApprovalView`** (giữ WebSocket và popup trong ngân sách, quy tắc bất biến 6):
+- Bash và mọi trường đường dẫn (`file_path`, `path`, `pattern`) **không bao giờ bị cắt** (quy tắc bất biến 3).
+- Trường nội dung của Edit/Write/MultiEdit/NotebookEdit (`content`, `old_string`, `new_string`, `edits`, `new_source`)
+  bị cắt còn 2.000 ký tự Unicode mỗi trường, kèm dòng `… [đã cắt, tổng N ký tự]`; khi đó `truncated = true`.
+- Luật danger cho các tool này chỉ khớp trên đường dẫn (T8), nên `danger_spans` luôn nằm trong phần không bị cắt.
+- Bản đầy đủ lấy theo yêu cầu qua `GET /approvals/{request_id}/input` (§3.3), không gửi qua broadcast.
 
 ### 3.5 SQLite (`hub-core/src/store.rs`)
 
@@ -426,6 +437,9 @@ palette = { hair = "#1F1F24", outfit = "#4C8DF6", acc = "#9AA3B5" }
   `["Muphrid","Seginus","Nekkar","Xuange","Genghe","Merga","Qigong","Ceginus","Alkalurops","Alazal"]`, hết thì `"Agent <4 ký tự đầu session_id>"`.
   Bảng màu mặc định chọn theo hash ổn định (FNV-1a) của session_id từ 6 bảng màu cố định.
 - Tên đã gán cho một session_id được giữ nguyên trong suốt phiên.
+- Khớp `match_cwd`: trước khi so, đổi mọi `\` thành `/` (đường dẫn Windows); trên Windows so không phân biệt hoa
+  thường. Persona khớp nếu `cwd` **hoặc một thư mục cha của `cwd`** khớp glob (agent chạy trong thư mục con của
+  worktree vẫn đúng persona). Nhiều persona cùng khớp: lấy persona khai báo trước trong file.
 
 ## 4. Kiến trúc nội bộ hub
 
@@ -517,11 +531,15 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 2. input = HookInput(body); ev = to_event(input)   // EventKind::ApprovalRequested
 3. state.apply(ev)  -> agent chuyển waiting/approval ; broadcast
 4. ctx = ApprovalCtx { agent, tool, tool_input, cwd }
-5. outcome = policy.decide(&ctx)                    // T3: Policy giả luôn trả AskUser{risk: Medium}
+5. outcome = policy.decide(&ctx)                    // T3: Policy giả luôn trả AskUser{risk: Medium};
+                                                    // test tiêm được Policy giả trả AutoAllow (trait hoặc hàm dựng cho test)
    nếu team.paused và outcome là AutoAllow: outcome = AskUser{risk đã tính}
    // tạm dừng tắt mọi AutoAllow (T14), phải chạy TRƯỚC khi xét nhánh dưới; tạm dừng không tự từ chối
 6. match outcome:
-   - AutoAllow{reason}  -> ghi approvals(status=allowed, decided_by=policy) -> trả allow
+   - AutoAllow{reason}  -> ghi approvals(status=allowed, decided_by=policy) VÀ CHỜ writer xác nhận đã commit
+                           (oneshot ack, tối đa 1 s) -> trả allow
+                           ghi lỗi / kênh đóng / quá 1 s -> log error, outcome = AskUser{risk đã tính}, tiếp bước 7
+                           // không có bản ghi kiểm toán thì không tự allow (quy tắc bất biến 1)
    - AskUser{risk,…}    -> tiếp bước 7
    (Policy KHÔNG có nhánh AutoDeny trong v0.)
 7. tạo RequestId, ApprovalView, (tx, rx) = oneshot; pending.insert; store approvals(pending); broadcast ApprovalRequested
@@ -546,6 +564,8 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - `malformed_json_returns_400`
 - `shutdown_returns_empty_object_for_pending`
 - `decide_on_expired_request_is_noop`
+- `paused_converts_auto_allow_to_ask_user` (Policy giả trả AutoAllow, đặt `paused = true`)
+- `auto_allow_store_failure_falls_back_to_ask_user` (writer giả trả lỗi hoặc không ack)
 
 ### T4 · ARC-25 · State machine và persona
 
@@ -557,6 +577,7 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - `subagent_start_creates_child_with_parent`, `subagent_stop_removes_child`
 - `session_end_removes_agent_and_children`
 - `persona_matches_by_cwd_glob`, `unmatched_gets_star_name_in_order`, `name_stable_for_session`
+- `persona_matches_windows_backslash_path`, `persona_matches_subdirectory_of_worktree`
 - `palette_hash_is_deterministic`
 - `invalid_config_fails_with_line_number`
 
@@ -568,9 +589,14 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - Kết nối: kiểm token → gửi `Snapshot` → vòng lặp `select!` giữa `broadcast::Receiver` và tin nhắn client.
 - Ping mỗi 30 giây; client không trả lời 2 lần → đóng.
 - Thông điệp client không hợp lệ → gửi `Feed` báo lỗi, không đóng kết nối.
+- `TeamPause` / `TeamResume`: đặt `TeamState.paused`, broadcast `TeamUpdated`. Phần hub của "Tạm dừng cả đội" làm ở
+  task này (làn `hub`); T14 chỉ làm nút và hiển thị (làn `ui`).
+- `GET /approvals/{request_id}/input` (§3.3): trả `tool_input` đầy đủ từ `pending`; không còn chờ → `404`.
 
 **Test bắt buộc**
 - `ws_rejects_without_token`, `ws_sends_snapshot_first`
+- `ws_team_pause_sets_paused_and_broadcasts`, `ws_team_resume_clears_paused`
+- `approval_input_returns_full_tool_input`, `approval_input_unknown_returns_404`, `approval_input_requires_token`
 - `ws_decide_resolves_pending_request` (kết hợp với T3)
 - `ws_lagged_client_gets_fresh_snapshot`
 - `protocol_roundtrip_serde` cho mọi biến thể
@@ -603,6 +629,10 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 ```rust
 pub struct Normalized { pub text: String, pub segments: Vec<String>, pub suspicious: Vec<Suspicion> }
 pub fn normalize(cmd: &str) -> Normalized;
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Suspicion { HiddenChars, Subshell, Eval, Encoded }   // gửi tới UI trong ApprovalView.suspicions
 ```
 1. Bỏ ký tự vô hình và điều khiển hướng: U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF, U+00AD;
    ghi `Suspicion::HiddenChars` nếu có.
@@ -698,12 +728,17 @@ interface CharacterProps { mood: Mood; width?: number; hair?: string; outfit?: s
 
 **UI (`views/LitePopup.tsx`)**
 - Danh sách `ApprovalCard`: nhân vật 40px, tên, nguồn/máy, `command_normalized` (đầy đủ, không rút gọn; quy tắc bất biến 3) trong khối mono có tô sáng `danger_spans` (đơn vị ký tự Unicode, §3.4), nhãn rủi ro (chữ + màu; không dùng màu đơn thuần), thời gian chờ.
+- `suspicions` có `hidden_chars` → nhãn cảnh báo "Chứa ký tự ẩn" (chữ + màu) và nút "Xem bản gốc": hiện
+  `command_original` với mỗi ký tự vô hình/điều khiển hướng thay bằng mã nhìn thấy được, ví dụ `⟨U+200B⟩`
+  (hiện nguyên ký tự ẩn thì người duyệt vẫn không thấy).
+- `truncated = true` → dòng "Nội dung đã cắt" và nút "Xem đầy đủ" gọi `GET /approvals/{request_id}/input`.
 - Nhóm cùng `group_key` có ≥2 yêu cầu → hiện "Duyệt cả N" (ẩn với Critical).
 - Phím: ↑/↓ chọn, Enter đồng ý, Esc từ chối (trong popup, không toàn cục).
 - Nếu Q1 = terminal bị treo: thêm nút "Trả về terminal" gửi `ReturnToTerminal` (hub trả `{}` ngay).
 
 **Test:** reducer áp snapshot/delta đúng; `ApprovalCard` hiển thị `command_normalized` và tô sáng đúng vị trí, kể cả lệnh có ký tự ngoài ASCII/ngoài BMP; phím tắt gửi đúng `ClientMsg`;
-nhóm Critical không có nút duyệt gộp. Đo tay: popup mở ≤300 ms, RSS app sau khi đóng ≤60 MB (ghi vào BUDGET.md).
+nhóm Critical không có nút duyệt gộp; `hidden_chars` hiện nhãn cảnh báo và "Xem bản gốc" hiện mã `⟨U+…⟩`;
+`truncated` hiện nút "Xem đầy đủ". Đo tay: popup mở ≤300 ms, RSS app sau khi đóng ≤60 MB (ghi vào BUDGET.md).
 
 ### T13 · ARC-34 · Văn phòng 2D
 
@@ -718,14 +753,15 @@ nhóm Critical không có nút duyệt gộp. Đo tay: popup mở ≤300 ms, RSS
 
 ### T14 · ARC-35 · Lệnh cho cả đội
 
-- Nút "Tạm dừng cả đội" → `TeamPause`. Hub v0: đặt `paused=true`, broadcast; **không** chặn agent (chưa có cơ chế
+- Nút "Tạm dừng cả đội" → `TeamPause` (phần hub đã làm ở T3 và T5). Hub v0 **không** chặn agent (chưa có cơ chế
   dừng Claude Code từ ngoài một cách an toàn) — chỉ: (a) mọi `AutoAllow` bị tắt khi paused, (b) UI hiển thị trạng thái
   "đã tạm dừng". Ghi rõ giới hạn này trong UI tooltip và `docs/ARCHITECTURE.md`.
 - "Giờ tập trung" → `FocusSet{on}`: UI ẩn badge/âm báo cho yêu cầu risk Low/Medium; High/Critical vẫn báo.
 - Đếm ngược phủ quyết: hiển thị khi `ApprovalView.reversible` và hub gửi `countdown` (T10 mức 5). Hết giờ: UI gửi
   `Decide Allow`. Nút "Dừng lại" gửi Deny, "Chạy ngay" gửi Allow. Không bao giờ hiển thị cho Critical/High.
 
-**Test:** paused tắt AutoAllow (test ở hub); focus lọc thông báo theo risk; countdown chỉ xuất hiện khi reversible.
+**Test:** nút tạm dừng gửi `TeamPause`/`TeamResume` và hiển thị theo `TeamView.paused` (phía hub đã test ở T3, T5);
+focus lọc thông báo theo risk; countdown chỉ xuất hiện khi reversible.
 
 ### T15 · ARC-36 · Replay
 

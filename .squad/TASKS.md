@@ -27,7 +27,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 |---|---|---|---|---|---|
 | T3 · ARC-24 | hub | Luồng duyệt: `/hooks/permission` giữ request bằng oneshot, timeout 110 s trả `{}`, hủy khi SessionEnd | T2 | 3 | todo |
 | T4 · ARC-25 | hub | State machine agent theo bảng trong ARCHITECTURE.md; persona từ `arcturus.toml` | T2 | 2 | todo |
-| T5 · ARC-26 | hub | WebSocket `/ws`: snapshot + delta; viết `docs/PROTOCOL.md`; xác thực token | T3, T4 | 2 | todo |
+| T5 · ARC-26 | hub | WebSocket `/ws`: snapshot + delta; viết `docs/PROTOCOL.md`; xác thực token; xử lý `TeamPause`/`TeamResume` phía hub; `GET /approvals/{id}/input` | T3, T4 | 2 | todo |
 | T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | todo |
 | T7 · ARC-28 | hub | Đối soát `claude agents --json` mỗi 30 s, dọn phiên chết | T4 | 1 | todo |
 | T8 · ARC-29 | policy | Danger list + chuẩn hóa lệnh (bỏ ký tự ẩn/bidi), tính `risk` | T2 | 2 | todo |
@@ -36,7 +36,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | T11 · ARC-32 | ui | Component nhân vật SVG (mood × palette), port từ mockup | T0 | 1 | todo |
 | T12 · ARC-33 | ui | Tray + badge số người giơ tay; popup Lite (hàng đợi, duyệt/từ chối, duyệt gộp) | T5, T11 | 3 | todo |
 | T13 · ARC-34 | ui | Văn phòng 2D: lưới bàn, trạng thái, "phòng hỗ trợ" gom agent rảnh (đội hình chính ≤5) | T5, T11 | 3 | todo |
-| T14 · ARC-35 | ui | Nút "Tạm dừng cả đội", "Giờ tập trung"; đếm ngược phủ quyết cho yêu cầu đảo ngược được | T12 | 2 | todo |
+| T14 · ARC-35 | ui | Nút "Tạm dừng cả đội" (chỉ UI, hub ở T5), "Giờ tập trung"; đếm ngược phủ quyết cho yêu cầu đảo ngược được | T12 | 2 | todo |
 | T15 · ARC-36 | lab | `tools/replay`: phát lại fixture với số phiên/tốc độ tùy chọn | T2 | 1 | todo |
 | T16 · ARC-37 | lab | Kịch bản đo ngân sách + bảng lịch sử trong BUDGET.md; chạy trên máy yếu | T15, T5 | 1 | todo |
 | T17 · ARC-38 | lab | Test e2e: Claude Code thật (headless `-p`) + hub, kiểm tra allow/deny/timeout | T3 | 2 | todo |

@@ -42,6 +42,7 @@ Hub là daemon riêng. Đóng app thì hub vẫn chạy và vẫn giữ hàng đ
 
    Đội đang **tạm dừng** (`team.paused`): mọi kết quả tự allow ở bước 2–3 bị đổi thành hỏi người. Tạm dừng không
    tự từ chối và ở v0 không dừng được agent thật (xem T14).
+   Tự allow chỉ được trả sau khi bản ghi `approvals` đã ghi xong; ghi lỗi thì đổi thành hỏi người.
 4. Vào hàng đợi: tạo `oneshot` channel, broadcast thông điệp WebSocket `approval_requested`.
 5. Người quyết qua UI → hub gửi vào channel → trả JSON decision cho Claude Code.
 6. Hết 110 giây (timeout hook = 120) → trả `{}`. Claude Code tự hỏi trong terminal. Đánh dấu `decided_by=timeout`.
@@ -71,7 +72,8 @@ Bảng đầy đủ theo tool (kể cả `act_text`): `docs/PLAN.md` §3.2 và �
 
 - Khóa agent: `session_id` → `agt_<session_id>`. Agent con: `session_id + agent_id` từ SubagentStart →
   `agt_<session_id>_<agent_id>`.
-- Persona gán qua `arcturus.toml` theo `cwd` (glob `match_cwd`, `docs/PLAN.md` §3.7):
+- Persona gán qua `arcturus.toml` theo `cwd` (glob `match_cwd`, `docs/PLAN.md` §3.7). Đường dẫn Windows được đổi
+  `\` thành `/` trước khi so; thư mục con của worktree cũng khớp:
 
 ```toml
 [[persona]]
@@ -101,17 +103,18 @@ trường nào có nhiều giá trị thì liệt kê các giá trị hợp lệ
   "activity": "typing | reading | running | thinking | waiting | idle",
   "tool": { "name": "Bash", "summary": "npm test", "risk": "low | medium | high | critical" },
   "approval": { "request_id": "req_01J...", "deadline_ms": 110000, "decided_by": "user | policy | timeout | cancelled", "decision": "allow | deny" },
-  "metrics": { "context_pct": 0.62 },
-  "raw_ref": "evt_01J..."
+  "metrics": { "context_pct": 0.62 }
 }
 ```
 
-- `activity`, `tool`, `approval`, `metrics`, `raw_ref` có thể là `null`; `tool.risk` chỉ policy được điền.
+- `activity`, `tool`, `approval`, `metrics` có thể là `null`; `tool.risk` chỉ policy được điền.
 - `type: "unknown"`: sự kiện hook lạ được giữ lại, không bao giờ làm hub trả lỗi.
 - Tên, vai trò, bảng màu không nằm trong Event: hub gắn persona khi dựng `AgentView` (`docs/PLAN.md` §3.4).
-- `raw_ref` là khóa tới JSON hook gốc trong SQLite (`events.raw_json`). UI chỉ nhận `AgentView`/`ApprovalView`,
-  không nhận Event thô. `AgentView` chỉ có tóm tắt hoạt động; `ApprovalView` mang `tool_input` đầy đủ của yêu cầu
-  cần duyệt (`command_original`, `command_normalized`), nên với Edit/Write có thể chứa nội dung file.
+- JSON hook gốc lưu ở cột `events.raw_json`, tra theo `id` của Event (Event không có trường trỏ riêng).
+- UI chỉ nhận `AgentView`/`ApprovalView`, không nhận Event thô. `AgentView` chỉ có tóm tắt hoạt động.
+  `ApprovalView` mang lệnh cần duyệt: Bash và đường dẫn không bao giờ bị cắt; nội dung Edit/Write bị cắt còn
+  2.000 ký tự mỗi trường (`truncated = true`), bản đầy đủ lấy qua `GET /approvals/{request_id}/input`
+  (`docs/PLAN.md` §3.4).
 
 ## Bảng SQLite
 
