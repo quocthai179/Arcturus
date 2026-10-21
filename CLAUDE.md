@@ -113,5 +113,15 @@ messaging) hoặc ghi vào mục "Blocked" trong `.squad/TASKS.md`.
   Exit code 2 không có tác dụng với sự kiện này. Hook allow không vượt được deny rule trong settings.
 - Chỉ chạy khi Claude Code sắp hỏi người; lệnh đã allow sẵn không đi qua hook này.
 - Timeout mặc định của http hook là 600 giây; ta đặt 120 giây và hub tự trả `{}` ở 110 giây.
-- CHƯA kiểm chứng (làm ở T1/T3): terminal có hiện hộp thoại trong lúc hub giữ request không; dạng đầu vào chính xác
-  của `PermissionRequest` ở phiên bản đang dùng; hành vi với subagent và agent teams.
+- Đã kiểm chứng ở T1 (Claude Code 2.1.239 và 2.1.306, bằng chứng trong `docs/HOOK_FINDINGS.md` và `fixtures/hooks/`):
+  - Terminal **hiện hộp thoại duyệt song song** trong lúc hub giữ request (không treo): người dùng có thể trả lời ở
+    terminal trước khi hub trả lời.
+  - Trả `{}`: hộp thoại vẫn giữ nguyên, chờ người. Ở headless `-p` không có người hỏi nên lệnh bị **từ chối**.
+  - Đầu vào `PermissionRequest`: `session_id`, `cwd`, `tool_name`, `tool_input`, `permission_mode`,
+    `permission_suggestions`, `prompt_id`; **không có `tool_use_id`**.
+  - Subagent gửi `PermissionRequest` riêng; mọi sự kiện của subagent có `agent_id` và `agent_type`.
+  - Hook `type: "http"` **không chạy cho `SessionStart`**: muốn nhận sự kiện này phải dùng hook `type: "command"`
+    gọi `curl` (stdin là JSON hook). Hub không được giả định luôn có SessionStart.
+  - Chế độ auto và lệnh chỉ đọc (ví dụ `hostname`) không hỏi người nên không sinh `PermissionRequest`.
+- CHƯA kiểm chứng: trả lời ở terminal trong lúc hub đang giữ request thì Claude Code có đóng kết nối HTTP không
+  (Q1b, làm ở T3/T17); non-2xx, lỗi kết nối và hết giờ trên máy thật (T17); agent teams (Q9).
