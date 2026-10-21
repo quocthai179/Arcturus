@@ -1,0 +1,826 @@
+# Arcturus v0 — Kế hoạch triển khai
+
+Tài liệu này dành cho Claude Code. Mỗi task (T0…T21, mã ARC trong `.squad/TASKS.md`) có một mục riêng ở phần 6
+với: mục tiêu, file tạo/sửa, thiết kế chi tiết, test bắt buộc, lệnh kiểm tra.
+
+**Cách dùng**
+1. Đọc phần 1–5 một lần (hợp đồng chung, áp dụng cho mọi task).
+2. Khi nhận task Tn: đọc mục `### Tn` ở phần 6, dùng nó làm khung cho kế hoạch (plan mode) rồi code.
+3. Gặp mâu thuẫn giữa file này và hành vi thật của Claude Code (ghi trong `docs/HOOK_FINDINGS.md`): **hành vi thật thắng**.
+   Ghi rõ chỗ lệch vào báo cáo cuối và đề xuất sửa file này; không tự sửa phần hợp đồng chung (phần 3) nếu chưa có người duyệt.
+4. Phiên bản thư viện: luôn thêm bằng `cargo add` / `pnpm add` để lấy bản ổn định mới nhất. Không chép số phiên bản từ trí nhớ.
+
+Quy tắc bất biến và định nghĩa "xong" nằm ở `CLAUDE.md` và áp dụng cho mọi task ở đây.
+
+---
+
+## 1. Cấu trúc repo khi xong v0
+
+```
+arcturus/
+├── Cargo.toml                    # [workspace] members = crates/*, tools/replay ; resolver = "2"
+├── crates/
+│   ├── hub-core/                 # thư viện thuần, không I/O mạng
+│   │   └── src/
+│   │       ├── lib.rs
+│   │       ├── schema.rs         # Event v1, Agent, Approval… (nguồn sự thật)
+│   │       ├── hook.rs           # JSON hook → HookInput (chịu lỗi) → Event
+│   │       ├── state.rs          # TeamState: agents, sessions, state machine
+│   │       ├── persona.rs        # arcturus.toml → Persona, khớp theo cwd, tên mặc định
+│   │       ├── config.rs         # Config (đọc arcturus.toml)
+│   │       ├── protocol.rs       # ServerMsg / ClientMsg (WebSocket)
+│   │       ├── store.rs          # SQLite: migrations, ghi/đọc, dọn TTL
+│   │       ├── standup.rs        # (T19) tổng hợp standup
+│   │       └── policy/
+│   │           ├── mod.rs        # Policy::decide(&ApprovalCtx) -> PolicyOutcome
+│   │           ├── normalize.rs  # chuẩn hóa lệnh
+│   │           ├── danger.rs     # vùng khóa
+│   │           ├── risk.rs       # phân loại rủi ro
+│   │           ├── batch.rs      # gom nhóm + batch rule
+│   │           └── trust.rs      # trust grant + streak
+│   ├── hub/                      # binary daemon
+│   │   └── src/
+│   │       ├── main.rs           # đọc config, mở store, chạy server
+│   │       ├── server.rs         # axum Router
+│   │       ├── auth.rs           # kiểm Bearer token
+│   │       ├── hooks.rs          # /hooks/event, /hooks/permission
+│   │       ├── approvals.rs      # PendingApprovals (oneshot), timeout
+│   │       ├── ws.rs             # /ws
+│   │       ├── reconcile.rs      # (T7) claude agents --json
+│   │       └── hub.rs            # struct Hub (Arc), broadcast, state lock
+│   └── app/                      # Tauri 2 (src-tauri bên trong)
+├── ui/                           # Vite + React + TS
+│   └── src/
+│       ├── main.tsx
+│       ├── protocol.ts           # kiểu khớp protocol.rs
+│       ├── ws.ts                 # client WebSocket, tự kết nối lại
+│       ├── store.ts              # useReducer: snapshot + delta
+│       ├── components/
+│       │   ├── Character.tsx     # SVG nhân vật (phụ lục A)
+│       │   ├── ApprovalCard.tsx
+│       │   ├── QueueList.tsx
+│       │   ├── AgentDesk.tsx
+│       │   └── TeamBar.tsx
+│       └── views/
+│           ├── LitePopup.tsx
+│           └── Office.tsx
+├── tools/replay/                 # binary replay
+├── fixtures/hooks/<SựKiện>/*.json
+├── hooks/arcturus-dogfood.json
+├── arcturus.example.toml
+└── docs/  (ARCHITECTURE, PLAN, PROTOCOL, BUDGET, HOOK_FINDINGS, WORKFLOW)
+```
+
+## 2. Thư viện
+
+**Rust** (thêm bằng `cargo add`):
+| Crate | Dùng cho | Ghi chú |
+|---|---|---|
+| tokio | runtime | features `rt-multi-thread`, `macros`, `sync`, `time`, `process`, `signal` |
+| axum | HTTP + WebSocket | feature `ws` |
+| serde, serde_json | JSON | `derive` |
+| thiserror | lỗi trong hub-core | |
+| anyhow | lỗi trong binary | chỉ ở `hub`, `replay` |
+| tracing, tracing-subscriber | log | `env-filter`; mặc định `info`, không log nội dung lệnh ở mức info |
+| rusqlite | SQLite | feature `bundled` |
+| ulid | id sự kiện, request | |
+| time | thời gian RFC 3339 | features `serde`, `formatting`, `parsing` |
+| toml | đọc config | |
+| globset | khớp `match_cwd` | |
+| regex | danger list | biên dịch một lần (`std::sync::LazyLock`) |
+| dirs | thư mục dữ liệu | |
+| clap | CLI của `hub`, `replay` | `derive` |
+| reqwest | replay gửi HTTP | `rustls-tls`, `json`; tắt default features |
+| **dev:** insta | snapshot test | feature `json` |
+| **dev:** tokio-tungstenite | test WebSocket | |
+
+**UI** (`pnpm -C ui add`): react, react-dom; dev: vite, @vitejs/plugin-react, typescript, vitest, jsdom,
+@testing-library/react, @testing-library/user-event.
+
+**App**: Tauri 2 (`@tauri-apps/cli`, crate `tauri` với feature tray icon theo tài liệu Tauri 2 hiện hành).
+
+Không thêm thư viện khác nếu chưa ghi lý do trong báo cáo cuối của task.
+
+## 3. Hợp đồng chung (không đổi nếu chưa có người duyệt)
+
+### 3.1 Schema (`hub-core/src/schema.rs`)
+
+```rust
+pub const SCHEMA_VERSION: u32 = 1;
+
+pub type AgentId = String;      // "agt_<session_id>" hoặc "agt_<session_id>_<agent_id>"
+pub type RequestId = String;    // "req_<ulid>"
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct Event {
+    pub v: u32,
+    pub id: String,                 // "evt_<ulid>"
+    pub ts: OffsetDateTime,         // RFC 3339
+    pub host: String,               // hostname
+    pub source: Source,             // ClaudeCode (v0)
+    pub session_id: String,
+    pub agent: AgentRef,
+    #[serde(rename = "type")]
+    pub kind: EventKind,
+    pub activity: Option<Activity>,
+    pub tool: Option<ToolInfo>,
+    pub approval: Option<ApprovalInfo>,
+    pub metrics: Option<Metrics>,
+    pub raw_ref: Option<String>,    // khóa tới JSON gốc trong SQLite
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum Source { ClaudeCode }
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct AgentRef { pub id: AgentId, pub parent_id: Option<AgentId>, pub kind: AgentKind }
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum AgentKind { Session, Subagent, Teammate }
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum EventKind {
+    #[serde(rename = "session.started")] SessionStarted,
+    #[serde(rename = "prompt.submitted")] PromptSubmitted,
+    #[serde(rename = "tool.pre")] ToolPre,
+    #[serde(rename = "tool.post")] ToolPost,
+    #[serde(rename = "tool.failed")] ToolFailed,
+    #[serde(rename = "approval.requested")] ApprovalRequested,
+    #[serde(rename = "approval.resolved")] ApprovalResolved,
+    #[serde(rename = "subagent.started")] SubagentStarted,
+    #[serde(rename = "subagent.stopped")] SubagentStopped,
+    #[serde(rename = "notification")] Notification,
+    #[serde(rename = "turn.stopped")] TurnStopped,
+    #[serde(rename = "turn.failed")] TurnFailed,
+    #[serde(rename = "session.ended")] SessionEnded,
+    #[serde(rename = "unknown")] Unknown,   // sự kiện chưa hỗ trợ: giữ lại, không lỗi
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Activity { Typing, Reading, Running, Thinking, Waiting, Idle }
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Mood { Idle, Working, Approval, Error, Done }
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+#[serde(rename_all = "snake_case")]
+pub enum Risk { Low, Medium, High, Critical }
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ToolInfo {
+    pub name: String,               // "Bash", "Edit", "Read", …
+    pub summary: String,            // lệnh/đường dẫn đã chuẩn hóa, ≤200 ký tự cho UI
+    pub risk: Option<Risk>,         // chỉ policy được điền
+}
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct ApprovalInfo {
+    pub request_id: RequestId,
+    pub deadline_ms: u64,
+    pub decided_by: Option<DecidedBy>,
+    pub decision: Option<Decision>,
+}
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum Decision { Allow, Deny }
+
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "snake_case")]
+pub enum DecidedBy { User, Policy, Timeout, Cancelled }
+
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
+pub struct Metrics { pub context_pct: Option<f32> }
+```
+
+`Unknown` là bắt buộc: sự kiện hook mới hoặc lạ **không bao giờ** làm hub trả lỗi.
+
+### 3.2 Đọc JSON hook (`hub-core/src/hook.rs`)
+
+Hình dạng chính xác chốt ở T1 từ fixture. Thiết kế đọc chịu lỗi:
+
+```rust
+pub struct HookInput { pub raw: serde_json::Value }
+
+impl HookInput {
+    pub fn event_name(&self) -> &str;          // "hook_event_name"
+    pub fn session_id(&self) -> Option<&str>;  // "session_id"
+    pub fn cwd(&self) -> Option<&str>;         // "cwd"
+    pub fn tool_name(&self) -> Option<&str>;   // "tool_name"
+    pub fn tool_input(&self) -> Option<&serde_json::Value>; // "tool_input"
+    pub fn agent_id(&self) -> Option<&str>;    // trường subagent (tên trường chốt ở Q4)
+}
+
+pub fn to_event(input: &HookInput, host: &str, now: OffsetDateTime) -> Event;
+pub fn tool_summary(tool_name: &str, tool_input: &serde_json::Value) -> String;
+```
+
+- Thiếu `session_id`: dùng `"unknown"`, vẫn tạo Event (ghi `tracing::warn`).
+- `tool_summary`: Bash → `command`; Edit/Write/Read → `file_path`; Grep/Glob → `pattern`; khác → tên tool.
+- Ánh xạ `hook_event_name` → `EventKind`:
+
+| hook_event_name | EventKind | activity |
+|---|---|---|
+| SessionStart | SessionStarted | idle |
+| UserPromptSubmit | PromptSubmitted | thinking |
+| PreToolUse | ToolPre | theo tool (bảng 3.6) |
+| PostToolUse | ToolPost | thinking |
+| PostToolUseFailure | ToolFailed | — |
+| PermissionRequest | ApprovalRequested | waiting |
+| SubagentStart / SubagentStop | SubagentStarted / SubagentStopped | — |
+| Notification | Notification | — |
+| Stop / StopFailure | TurnStopped / TurnFailed | idle / — |
+| SessionEnd | SessionEnded | — |
+| khác | Unknown | — |
+
+### 3.3 HTTP (`hub`)
+
+Bind mặc định `127.0.0.1:7878` (cấu hình được nhưng **từ chối** địa chỉ không phải loopback trong v0).
+
+| Phương thức | Đường dẫn | Xác thực | Phản hồi |
+|---|---|---|---|
+| POST | `/hooks/event` | Bearer | `204` ngay; xử lý bất đồng bộ qua `mpsc` |
+| POST | `/hooks/permission` | Bearer | `200` + JSON quyết định, hoặc `200 {}` |
+| GET | `/ws` | Bearer (header) hoặc `?token=` (cho webview) | Nâng cấp WebSocket |
+| GET | `/healthz` | không | `200 ok` |
+
+- Token: biến môi trường `ARCTURUS_TOKEN`; không có thì hub **không khởi động** (thông báo cách tạo).
+- So sánh token bằng so sánh thời gian hằng (constant-time).
+- `/hooks/permission` sai token: trả `401`. Claude Code coi đó là lỗi không chặn → hỏi trong terminal (an toàn).
+- Body tối đa 1 MB; JSON hỏng → `400` (vẫn là lỗi không chặn với Claude Code).
+- Phản hồi quyết định:
+
+```json
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}}
+{"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"deny","message":"Trưởng nhóm từ chối: <lý do nếu có>"}}}
+```
+
+Trường `message` khi deny: xác nhận ở Q6; nếu Claude Code không đọc thì bỏ, không lỗi.
+
+### 3.4 WebSocket (`hub-core/src/protocol.rs`, mô tả ở `docs/PROTOCOL.md`)
+
+JSON, `{"t": "<loại>", ...}`.
+
+```rust
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum ServerMsg {
+    Snapshot { agents: Vec<AgentView>, queue: Vec<ApprovalView>, team: TeamView },
+    AgentUpdated { agent: AgentView },
+    AgentRemoved { id: AgentId },
+    ApprovalRequested { approval: ApprovalView },
+    ApprovalResolved { request_id: RequestId, decision: Decision, decided_by: DecidedBy },
+    TeamUpdated { team: TeamView },
+    Feed { text: String, ts: OffsetDateTime },
+    Suggestion { suggestion: TrustSuggestionView },   // T10
+}
+
+#[derive(Serialize, Deserialize)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum ClientMsg {
+    Decide { request_id: RequestId, decision: Decision, message: Option<String> },
+    DecideGroup { group_key: String, decision: Decision },          // T9
+    BatchOpen { group_key: String, minutes: u32 },                  // T9
+    BatchClose { group_key: String },                               // T9
+    TeamPause, TeamResume, FocusSet { on: bool },                   // T14
+    SuggestionAnswer { id: String, accept: bool },                  // T10
+    ReturnToTerminal { request_id: RequestId },                     // nếu Q1 cần
+}
+
+pub struct AgentView {
+    pub id: AgentId, pub parent_id: Option<AgentId>, pub kind: AgentKind,
+    pub name: String, pub role: String, pub palette: Palette,
+    pub mood: Mood, pub activity: Activity, pub act_text: String,   // "Đang sửa LoginForm.tsx"
+    pub host: String, pub source: Source, pub cwd: String,
+    pub context_pct: Option<f32>, pub last_event_at: OffsetDateTime,
+}
+
+pub struct ApprovalView {
+    pub request_id: RequestId, pub agent_id: AgentId, pub agent_name: String,
+    pub tool: String, pub command_original: String,   // tool_input gốc dạng chuỗi, KHÔNG rút gọn
+    pub command_normalized: String,                    // sau normalize
+    pub danger_spans: Vec<(usize, usize)>,             // vị trí cần tô sáng trong command_normalized
+    pub risk: Risk, pub reversible: bool,
+    pub group_key: String, pub created_at: OffsetDateTime, pub deadline_at: OffsetDateTime,
+}
+
+pub struct TeamView { pub paused: bool, pub focus: bool, pub roster_max: u8 }
+pub struct Palette { pub hair: String, pub outfit: String, pub acc: String }
+```
+
+Quy tắc: client mới kết nối luôn nhận `Snapshot` trước. Mọi thay đổi sau đó là delta. Client không bao giờ phải
+tự suy luận trạng thái.
+
+### 3.5 SQLite (`hub-core/src/store.rs`)
+
+Tệp: `<data_dir>/arcturus/arcturus.db` (`dirs::data_dir()`), `PRAGMA journal_mode=WAL; PRAGMA synchronous=NORMAL;`.
+Migration đánh số bằng `PRAGMA user_version`.
+
+```sql
+-- v1
+CREATE TABLE events (
+  id TEXT PRIMARY KEY, ts TEXT NOT NULL, session_id TEXT NOT NULL,
+  kind TEXT NOT NULL, event_json TEXT NOT NULL, raw_json TEXT
+);
+CREATE INDEX events_ts ON events(ts);
+CREATE INDEX events_session ON events(session_id, ts);
+
+CREATE TABLE approvals (
+  request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  tool TEXT NOT NULL, command_original TEXT NOT NULL, command_normalized TEXT NOT NULL,
+  risk TEXT NOT NULL, group_key TEXT NOT NULL,
+  status TEXT NOT NULL CHECK (status IN ('pending','allowed','denied','timed_out','cancelled')),
+  decided_by TEXT, created_at TEXT NOT NULL, decided_at TEXT, latency_ms INTEGER, channel TEXT
+);
+CREATE INDEX approvals_created ON approvals(created_at);
+
+-- v2 (T9, T10)
+CREATE TABLE batch_rules (group_key TEXT PRIMARY KEY, opened_at TEXT NOT NULL, expires_at TEXT NOT NULL);
+CREATE TABLE trust_grants (
+  id TEXT PRIMARY KEY, subject TEXT NOT NULL, pattern TEXT NOT NULL, level INTEGER NOT NULL,
+  granted_at TEXT NOT NULL, expires_at TEXT NOT NULL, reason TEXT NOT NULL, revoked_at TEXT
+);
+CREATE TABLE streaks (
+  subject TEXT NOT NULL, pattern TEXT NOT NULL, approved_in_row INTEGER NOT NULL DEFAULT 0,
+  first_at TEXT, last_at TEXT, last_incident_at TEXT, PRIMARY KEY (subject, pattern)
+);
+CREATE TABLE trust_log (id TEXT PRIMARY KEY, ts TEXT NOT NULL, subject TEXT, pattern TEXT,
+  from_level INTEGER, to_level INTEGER, reason TEXT NOT NULL);
+```
+
+Ghi qua một task riêng (`tokio::task::spawn_blocking` hoặc thread riêng) nhận lệnh từ `mpsc::channel(1024)`.
+Kênh đầy: bỏ bản ghi `events` (đếm số bị bỏ, log warn), **không bao giờ** bỏ bản ghi `approvals`.
+Dọn TTL: mỗi 6 giờ xóa `events` cũ hơn `event_ttl_days`.
+
+### 3.6 Trạng thái agent (`hub-core/src/state.rs`)
+
+```rust
+pub struct TeamState {
+    pub agents: BTreeMap<AgentId, AgentRuntime>,
+    pub paused: bool, pub focus: bool,
+}
+pub struct AgentRuntime { pub view: AgentView, pub done_until: Option<OffsetDateTime> }
+
+impl TeamState {
+    /// Áp một Event, trả danh sách thay đổi để broadcast.
+    pub fn apply(&mut self, ev: &Event, personas: &PersonaBook, now: OffsetDateTime) -> Vec<ServerMsg>;
+    /// Gọi định kỳ (mỗi 1 s chỉ khi có agent trong trạng thái Done) để chuyển Done → Idle.
+    pub fn tick(&mut self, now: OffsetDateTime) -> Vec<ServerMsg>;
+}
+```
+
+Bảng chuyển trạng thái (PreToolUse theo tool):
+
+| Tool | activity | mood | act_text |
+|---|---|---|---|
+| Edit, Write, MultiEdit, NotebookEdit | typing | working | "Đang sửa <tên file>" |
+| Read, Grep, Glob, LS | reading | working | "Đang đọc <file/pattern>" |
+| Bash | running | working | "Đang chạy <lệnh, 60 ký tự>" |
+| WebFetch, WebSearch | reading | working | "Đang tra cứu" |
+| Task/Agent | thinking | working | "Đang giao việc cho trợ lý" |
+| khác | thinking | working | "Đang dùng <tool>" |
+
+Sự kiện khác: PermissionRequest → waiting/approval; PostToolUseFailure, StopFailure → mood error (giữ tới sự kiện
+kế tiếp); Stop → done trong 3 giây rồi idle; SessionEnd → xóa agent (và agent con), hủy yêu cầu đang chờ.
+
+`tick` chỉ được lên lịch khi có ít nhất một agent ở trạng thái Done (không timer thường trực).
+
+### 3.7 Persona và cấu hình (`persona.rs`, `config.rs`)
+
+```toml
+[hub]
+bind = "127.0.0.1:7878"
+approval_timeout_secs = 110
+reconcile_interval_secs = 30
+event_ttl_days = 30
+
+[team]
+main_roster_max = 5
+
+[trust]
+streak_threshold = 20
+streak_window_days = 7
+grant_days = 30
+
+[[persona]]
+match_cwd = "**/.claude/worktrees/hub*"
+name = "Khoa"
+role = "backend"
+palette = { hair = "#1F1F24", outfit = "#4C8DF6", acc = "#9AA3B5" }
+```
+
+- Thiếu file: dùng mặc định. File hỏng: hub không khởi động, báo dòng lỗi.
+- Không khớp persona: tên lấy lần lượt từ danh sách sao chòm Boötes chưa dùng:
+  `["Muphrid","Seginus","Nekkar","Xuange","Genghe","Merga","Qigong","Ceginus","Alkalurops","Alazal"]`, hết thì `"Agent <4 ký tự đầu session_id>"`.
+  Bảng màu mặc định chọn theo hash ổn định (FNV-1a) của session_id từ 6 bảng màu cố định.
+- Tên đã gán cho một session_id được giữ nguyên trong suốt phiên.
+
+## 4. Kiến trúc nội bộ hub
+
+```rust
+pub struct Hub {
+    pub cfg: Config,
+    pub host: String,
+    pub personas: PersonaBook,
+    pub state: tokio::sync::RwLock<TeamState>,
+    pub pending: tokio::sync::Mutex<HashMap<RequestId, Pending>>,
+    pub tx: tokio::sync::broadcast::Sender<ServerMsg>,   // capacity 256
+    pub store: StoreHandle,                               // mpsc tới writer
+    pub policy: tokio::sync::Mutex<Policy>,
+    pub events_in: tokio::sync::mpsc::Sender<HookInput>,  // từ /hooks/event
+}
+
+pub struct Pending {
+    pub view: ApprovalView,
+    pub reply: tokio::sync::oneshot::Sender<Decided>,
+}
+pub struct Decided { pub decision: Decision, pub by: DecidedBy, pub message: Option<String> }
+```
+
+- Một task nền đọc `events_in`, gọi `hook::to_event`, `state.apply`, ghi store, broadcast. Thứ tự sự kiện của cùng
+  session được giữ nguyên.
+- Không giữ khóa `state` qua `.await` dài. Không bao giờ giữ đồng thời `state` và `pending` (tránh deadlock;
+  nếu cần cả hai thì lấy `pending` trước).
+- Broadcast lag: client chậm nhận `RecvError::Lagged` → server gửi lại `Snapshot` cho client đó.
+- Tắt hub (SIGINT/SIGTERM): trả `{}` cho mọi yêu cầu đang chờ (để Claude Code hỏi terminal), flush store, thoát.
+
+## 5. Quy ước test
+
+- Test đơn vị trong cùng file (`#[cfg(test)]`), test tích hợp ở `crates/hub/tests/`.
+- Test tích hợp dựng hub thật trên cổng ngẫu nhiên (`127.0.0.1:0`) với thư mục dữ liệu tạm.
+- Thời gian: hàm nhận `now` làm tham số; timeout dùng `tokio::time::pause()` + `advance()` trong test.
+- Fixture: `fixtures/hooks/<EventName>/<mô-tả>.json`; test parse chạy trên **toàn bộ** thư mục (glob).
+- UI: Vitest + Testing Library; giả lập WebSocket bằng lớp `FakeSocket` trong `ui/src/test/`.
+- Tên test mô tả hành vi bằng tiếng Anh snake_case, ví dụ `timeout_returns_empty_object_never_allow`.
+
+---
+
+## 6. Từng task
+
+### T0 · ARC-21 · Scaffold
+
+**Tạo**
+- `Cargo.toml` workspace; crate `hub-core` (lib), `hub` (bin), `tools/replay` (bin), mỗi crate một test mẫu.
+- `crates/app`: `pnpm create tauri-app` hoặc khởi tạo thủ công Tauri 2, frontend trỏ tới `../../ui` (dev URL Vite, build `ui/dist`).
+- `ui/`: Vite React TS, `tsconfig` strict, Vitest với jsdom, một test mẫu.
+- `.github/workflows/ci.yml`: Ubuntu; cài Rust stable, pnpm; chạy `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`, `pnpm -C ui install --frozen-lockfile`, `pnpm -C ui test --run`, `pnpm -C ui build`. Bỏ qua build `crates/app` trên CI ở v0 nếu thiếu thư viện hệ thống (ghi chú lý do).
+- `rust-toolchain.toml` (channel stable), `rustfmt.toml` (mặc định), `clippy.toml` không cần.
+
+**Kiểm tra:** mọi lệnh trong mục "Lệnh" của `CLAUDE.md`.
+
+### T1 · ARC-22 · Hook lab
+
+**Tạo**
+- `hub` có chế độ `--record <dir>`: endpoint `/hooks/event` và `/hooks/permission` chỉ ghi body thô ra
+  `<dir>/<hook_event_name>/<ulid>.json` và trả `204` / `{}` (không quyết định gì). Vẫn bắt buộc token.
+- `tools/scrub.py` hoặc lệnh `replay scrub`: thay đường dẫn home bằng `/home/user`, xóa token, rút ngắn transcript_path.
+- Settings thí nghiệm trong `lab/settings.local.json` (không đụng `~/.claude/settings.json`), dùng cấu hình như
+  `hooks/arcturus-dogfood.json` nhưng trỏ cả `PermissionRequest` tới endpoint ghi băng.
+
+**Làm**
+- Dùng agent `hook-spike` cho từng câu hỏi Q1–Q4 trong `docs/HOOK_FINDINGS.md`.
+- Q1: cho endpoint `/hooks/permission` ngủ 20 giây trước khi trả `{}` (cờ `--record-delay 20`), quan sát terminal.
+
+**Xong khi:** ≥30 fixture đúng thư mục; bảng Q1–Q4 có kết quả và fixture; cập nhật mục "Kiến thức đã kiểm chứng"
+trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
+
+### T2 · ARC-23 · Schema và chuẩn hóa
+
+**Tạo:** `schema.rs` (3.1), `hook.rs` (3.2), các test.
+
+**Test bắt buộc**
+- `every_fixture_parses_to_event` (glob toàn bộ `fixtures/hooks`)
+- `unknown_event_name_maps_to_unknown_kind`
+- `missing_session_id_uses_unknown`
+- `tool_summary_bash_uses_command`, `tool_summary_edit_uses_file_path`
+- Snapshot `insta::assert_json_snapshot!` cho mỗi loại sự kiện (một fixture đại diện)
+
+### T3 · ARC-24 · Luồng duyệt
+
+**Tạo:** `hub/src/approvals.rs`, `hub/src/hooks.rs` (phần permission), test tích hợp `tests/permission.rs`.
+
+**Thuật toán `/hooks/permission`**
+```
+1. auth (401 nếu sai)
+2. input = HookInput(body); ev = to_event(input)   // EventKind::ApprovalRequested
+3. state.apply(ev)  -> agent chuyển waiting/approval ; broadcast
+4. ctx = ApprovalCtx { agent, tool, tool_input, cwd }
+5. outcome = policy.decide(&ctx)                    // T3: Policy giả luôn trả AskUser{risk: Medium}
+   - AutoAllow{reason}  -> ghi approvals(status=allowed, decided_by=policy) -> trả allow
+   - AskUser{risk,…}    -> tiếp bước 6
+   (Policy KHÔNG có nhánh AutoDeny trong v0.)
+6. nếu team.paused: vẫn xếp hàng (tạm dừng không tự từ chối)
+7. tạo RequestId, ApprovalView, (tx, rx) = oneshot; pending.insert; store approvals(pending); broadcast ApprovalRequested
+8. match timeout(cfg.approval_timeout, rx):
+     Ok(Ok(Decided{Allow,..})) -> trả allow
+     Ok(Ok(Decided{Deny,..}))  -> trả deny (+message)
+     Ok(Err(_)) /* sender bị drop: phiên kết thúc, hủy */ -> trả {}
+     Err(_) /* hết giờ */ -> pending.remove; store timed_out; broadcast resolved(timeout) -> trả {}
+9. sau khi trả: agent về activity thinking (sẽ được sự kiện kế tiếp cập nhật)
+```
+- Hủy khi `SessionEnded`: xóa mọi pending của session (drop `reply` sender) → handler rơi vào nhánh `Ok(Err)` và trả `{}`; ghi `status=cancelled`.
+- `ClientMsg::Decide`: lấy `pending.remove(id)`; không tồn tại (đã hết giờ) → gửi `Feed` "Yêu cầu đã hết hạn", không lỗi.
+- Một handler không bao giờ được trả `allow` ở nhánh lỗi: viết hàm `fn response_for(result: Result<…>) -> Json<Value>` với `match` đầy đủ và test cho từng nhánh.
+
+**Test bắt buộc** (`tests/permission.rs`)
+- `user_allow_returns_allow_decision`
+- `user_deny_returns_deny_decision`
+- `timeout_returns_empty_object_never_allow` (tokio time pause)
+- `session_end_while_pending_returns_empty_object`
+- `two_sessions_concurrent_requests_routed_correctly`
+- `wrong_token_returns_401`
+- `malformed_json_returns_400`
+- `shutdown_returns_empty_object_for_pending`
+- `decide_on_expired_request_is_noop`
+
+### T4 · ARC-25 · State machine và persona
+
+**Tạo:** `state.rs` (3.6), `persona.rs`, `config.rs` (3.7).
+
+**Test bắt buộc**
+- Mỗi dòng bảng 3.6 một test (`pre_tool_edit_sets_typing` …)
+- `stop_sets_done_then_idle_after_3s`
+- `subagent_start_creates_child_with_parent`, `subagent_stop_removes_child`
+- `session_end_removes_agent_and_children`
+- `persona_matches_by_cwd_glob`, `unmatched_gets_star_name_in_order`, `name_stable_for_session`
+- `palette_hash_is_deterministic`
+- `invalid_config_fails_with_line_number`
+
+### T5 · ARC-26 · WebSocket
+
+**Tạo:** `protocol.rs` (3.4), `hub/src/ws.rs`, `docs/PROTOCOL.md` (chép định nghĩa 3.4 + ví dụ JSON cho mỗi loại).
+
+**Hành vi**
+- Kết nối: kiểm token → gửi `Snapshot` → vòng lặp `select!` giữa `broadcast::Receiver` và tin nhắn client.
+- Ping mỗi 30 giây; client không trả lời 2 lần → đóng.
+- Thông điệp client không hợp lệ → gửi `Feed` báo lỗi, không đóng kết nối.
+
+**Test bắt buộc**
+- `ws_rejects_without_token`, `ws_sends_snapshot_first`
+- `ws_decide_resolves_pending_request` (kết hợp với T3)
+- `ws_lagged_client_gets_fresh_snapshot`
+- `protocol_roundtrip_serde` cho mọi biến thể
+
+### T6 · ARC-27 · Lưu trữ
+
+**Tạo:** `store.rs` (3.5) với `StoreHandle` (mpsc) và `StoreReader` (kết nối đọc riêng).
+
+**Test bắt buộc**
+- `migrations_apply_from_empty_and_are_idempotent`
+- `approval_lifecycle_persisted` (pending → allowed, latency_ms đúng)
+- `events_older_than_ttl_are_deleted`
+- `full_channel_drops_events_never_approvals`
+- `survives_restart` (đóng, mở lại, dữ liệu còn)
+
+### T7 · ARC-28 · Đối soát
+
+**Tạo:** `hub/src/reconcile.rs`.
+- Mỗi `reconcile_interval_secs`: `tokio::process::Command::new("claude").args(["agents","--json"])`, timeout 5 giây.
+- Lệnh lỗi hoặc không có `claude`: log debug, bỏ qua lần này (không xóa gì).
+- Phiên có trong state nhưng không có trong kết quả **hai lần liên tiếp** → coi như SessionEnded.
+- Trường JSON chốt ở Q8; parse chịu lỗi (thiếu trường thì bỏ qua phần tử).
+
+**Test:** dùng trait `AgentLister` để giả lập: `removes_session_missing_twice`, `keeps_session_missing_once`,
+`command_failure_removes_nothing`.
+
+### T8 · ARC-29 · Danger list, chuẩn hóa, rủi ro
+
+**`normalize.rs`**
+```rust
+pub struct Normalized { pub text: String, pub segments: Vec<String>, pub suspicious: Vec<Suspicion> }
+pub fn normalize(cmd: &str) -> Normalized;
+```
+1. Bỏ ký tự vô hình và điều khiển hướng: U+200B–U+200F, U+202A–U+202E, U+2060–U+2064, U+2066–U+2069, U+FEFF, U+00AD;
+   ghi `Suspicion::HiddenChars` nếu có.
+2. Thay mọi khoảng trắng Unicode (U+00A0, U+2000–U+200A, U+3000, tab) bằng dấu cách; gộp nhiều dấu cách.
+3. Tách `segments` theo `;`, `&&`, `||`, `|`, xuống dòng (không tách bên trong dấu nháy đơn/kép).
+4. Đánh dấu `Suspicion::Subshell` nếu có `$(`, dấu backtick; `Suspicion::Eval` nếu segment bắt đầu bằng `eval`, `source`, `.`;
+   `Suspicion::Encoded` nếu có `base64 -d`/`--decode`, `xxd -r`, `printf '\x`.
+
+**`danger.rs`**: danh sách luật, mỗi luật có `id`, `description`, hàm khớp trên `Normalized` hoặc trên tool khác Bash.
+| id | Khớp |
+|---|---|
+| `rm_recursive_force` | segment có lệnh `rm` với cờ chứa cả `r`/`R` và `f` (gộp `-rf`, `-fr`, `-r -f`, `--recursive --force`) |
+| `git_force_push` | `git push` có `--force`, `-f`, `--force-with-lease`, hoặc refspec bắt đầu bằng `+` |
+| `git_hard_reset` | `git reset --hard`, `git clean -fd…` |
+| `pipe_to_shell` | segment trước là `curl`/`wget`/`fetch` và segment sau là `sh`/`bash`/`zsh`/`python…`/`node` |
+| `sql_destructive` | `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE` (không phân biệt hoa thường) |
+| `read_secret` | Read/Grep/Bash(cat, less, head, tail…) trên đường dẫn khớp `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.ssh/`, `.aws/credentials`, `**/secrets/**` |
+| `write_outside_workspace` | Edit/Write/MultiEdit có `file_path` tuyệt đối không nằm dưới `cwd` (sau khi chuẩn hóa `..`) |
+| `outbound_network` | `curl`, `wget`, `nc`, `ncat`, `ssh`, `scp`, `rsync`, `ftp` tới host không phải `localhost`/`127.0.0.1`/`::1` |
+| `privilege` | `sudo`, `su `, `chmod 777`, `chown -R` |
+
+**`risk.rs`**
+```
+Critical  nếu khớp bất kỳ luật danger
+High      nếu có Suspicion (HiddenChars, Subshell, Eval, Encoded) hoặc cài package (npm i, pnpm add, pip install, cargo add/install, brew install, apt)
+Medium    git push (không force), migration, ghi file trong workspace, lệnh không nhận diện
+Low       chỉ đọc trong workspace, chạy test/lint/build (npm test, pnpm test, cargo test, cargo clippy, pytest, go test)
+```
+`reversible = true` chỉ khi Low hoặc là migration có lệnh rollback được khai trong config (v0: chỉ Low).
+`danger_spans`: vị trí khớp trong `Normalized.text` để UI tô sáng.
+
+**Bất biến:** `Policy::decide` với risk Critical **luôn** trả `AskUser`. Viết test thuộc tính (property-style, lặp
+qua toàn bộ bảng mẫu × mọi trust grant giả và batch rule giả).
+
+**Test bắt buộc:** mỗi luật ≥3 ca khớp và ≥2 ca không khớp (ví dụ `rm -r dir` không phải critical, `git push origin main` là medium);
+`zero_width_inside_rm_still_detected`; `bidi_override_flagged`; `quoted_semicolon_not_split`;
+`critical_never_auto_allowed_with_any_grant_or_batch`.
+
+### T9 · ARC-30 · Gom nhóm và batch rule
+
+**`group_key`**: `"<tool>:<pattern>"`, với Bash là hai token đầu của segment đầu sau chuẩn hóa, bỏ đường dẫn
+(`npm test -- auth` → `Bash:npm test`; `cargo test -p hub` → `Bash:cargo test`); tool khác là `"<tool>:*"`.
+
+- `DecideGroup{group_key, decision}`: áp quyết định cho mọi pending cùng `group_key` **có risk ≤ High**; Critical trong nhóm vẫn ở lại hàng đợi (UI hiển thị riêng).
+- `BatchOpen{group_key, minutes}` (1–240): lưu `batch_rules`; trong thời hạn, `Policy::decide` trả `AutoAllow` cho yêu cầu khớp và risk ≤ Medium.
+- `BatchClose` hoặc hết hạn: xóa rule; broadcast `Feed`.
+
+**Test:** `group_key_examples` (bảng), `decide_group_skips_critical`, `batch_rule_auto_allows_until_expiry`,
+`batch_rule_never_applies_to_high_or_critical`, `batch_close_stops_auto_allow`.
+
+### T10 · ARC-31 · Trust grant
+
+- `subject`: tên persona (ổn định qua phiên) — không dùng session_id.
+- `pattern`: chính `group_key`.
+- Sau mỗi quyết định của **người** cho yêu cầu risk ≤ Medium:
+  - Allow → `approved_in_row += 1`, cập nhật `last_at` (đặt `first_at` nếu rỗng).
+  - Deny → `approved_in_row = 0`, `last_incident_at = now`; nếu đang có grant cho (subject, pattern) → hạ một mức (6→5, 5→4 tức là thu hồi), ghi `trust_log`, broadcast `Feed`.
+- Khi `approved_in_row >= streak_threshold` và `now - first_at <= streak_window_days` và không có incident trong cửa sổ → gửi `Suggestion` (một lần cho mỗi cặp cho tới khi được trả lời).
+- `SuggestionAnswer{accept: true}` → tạo grant mức 6, hạn `grant_days`; `accept: false` → không đề xuất lại trong 7 ngày.
+- `Policy::decide`: grant còn hạn mức 6 và risk ≤ Medium → `AutoAllow{reason: "trust:<id>"}`; mức 5 → trả `AskUser{countdown: Some(10s)}` (UI hiển thị đếm ngược, hết giờ UI gửi Decide Allow). Nếu không có UI nào đang mở thì không ai gửi Allow → hết giờ hub trả `{}` (an toàn).
+- Hoàn tác (revert) chưa đo được tự động trong v0: để API `trust.report_incident(subject, pattern)` cho bước sau.
+
+**Test:** `suggests_after_threshold_within_window`, `no_suggestion_if_incident_in_window`, `accept_creates_grant_level_6`,
+`deny_under_grant_demotes`, `grant_expires`, `critical_ignores_grant` (dùng lại bảng của T8).
+
+### T11 · ARC-32 · Component nhân vật
+
+`ui/src/components/Character.tsx`:
+```ts
+type Mood = 'idle' | 'working' | 'approval' | 'error' | 'done';
+interface CharacterProps { mood: Mood; width?: number; hair?: string; outfit?: string; acc?: string; label?: string }
+```
+- Port SVG ở **Phụ lục A**; mỗi nhóm `<g>` theo mood hiển thị bằng điều kiện React (không dùng opacity).
+- `role="img"`, `aria-label` (mặc định theo mood: "Đang rảnh", "Đang làm việc", "Giơ tay xin duyệt", "Gặp lỗi", "Vừa xong việc").
+- Không animation CSS vô hạn. Cho phép một hiệu ứng ngắn (≤600 ms) khi đổi sang `approval` hoặc `done`, tắt khi `prefers-reduced-motion`.
+
+**Test:** render đủ 5 mood (kiểm phần tử đặc trưng có mặt), `aria-label` đúng, màu prop được áp.
+
+### T12 · ARC-33 · Tray và popup Lite
+
+**Tauri (`crates/app/src-tauri`)**
+- Không mở cửa sổ khi khởi động; chỉ tạo tray icon.
+- Click trái tray: nếu popup chưa có → tạo `WebviewWindow` nhãn `popup` (380×560, không viền, luôn ở trên, đặt gần khay);
+  nếu có → đóng (**destroy**, không hide).
+- Mất focus → đóng popup.
+- Menu tray: "Mở văn phòng", "Tạm dừng cả đội", "Thoát".
+- Badge: macOS dùng tiêu đề tray (số); Windows/Linux đổi giữa hai ảnh icon (thường / có chấm) và tooltip "N yêu cầu đang chờ".
+  Số lấy từ một kết nối WebSocket nhẹ ở phía Rust của app (không cần webview).
+- Token cho webview: app đọc `ARCTURUS_TOKEN` và truyền qua `invoke` (không nhúng vào URL công khai).
+
+**UI (`views/LitePopup.tsx`)**
+- Danh sách `ApprovalCard`: nhân vật 40px, tên, nguồn/máy, `command_original` trong khối mono có tô sáng `danger_spans`, nhãn rủi ro (chữ + màu; không dùng màu đơn thuần), thời gian chờ.
+- Nhóm cùng `group_key` có ≥2 yêu cầu → hiện "Duyệt cả N" (ẩn với Critical).
+- Phím: ↑/↓ chọn, Enter đồng ý, Esc từ chối (trong popup, không toàn cục).
+- Nếu Q1 = terminal bị treo: thêm nút "Trả về terminal" gửi `ReturnToTerminal` (hub trả `{}` ngay).
+
+**Test:** reducer áp snapshot/delta đúng; `ApprovalCard` hiển thị lệnh gốc và tô sáng; phím tắt gửi đúng `ClientMsg`;
+nhóm Critical không có nút duyệt gộp. Đo tay: popup mở ≤300 ms, RSS app sau khi đóng ≤60 MB (ghi vào BUDGET.md).
+
+### T13 · ARC-34 · Văn phòng 2D
+
+`views/Office.tsx` trong cửa sổ `office` (mở từ menu tray, destroy khi đóng).
+- Lưới `AgentDesk` (CSS grid auto-fill, min 210px): ô nhân vật, nhãn trạng thái, tên, vai trò, nguồn, máy, thanh context.
+- Sắp xếp: giơ tay → lỗi → đang làm → xong → rảnh; trong nhóm theo `last_event_at`.
+- Đội hình chính: `roster_max` agent đầu; agent **rảnh** còn lại gom vào thẻ "Phòng hỗ trợ" (số lượng + chấm màu). Agent không rảnh không bao giờ bị gom.
+- Bên phải: `QueueList` dùng lại `ApprovalCard`.
+- Hiệu năng: không `requestAnimationFrame` thường trực; chỉ CSS transition ngắn khi đổi trạng thái. Lắng nghe `visibilitychange`: khi ẩn thì ngắt mọi timer UI.
+
+**Test:** gom phòng hỗ trợ đúng (không gom agent đang làm), thứ tự sắp xếp, bấm agent đang giơ tay cuộn tới thẻ duyệt.
+
+### T14 · ARC-35 · Lệnh cho cả đội
+
+- Nút "Tạm dừng cả đội" → `TeamPause`. Hub v0: đặt `paused=true`, broadcast; **không** chặn agent (chưa có cơ chế
+  dừng Claude Code từ ngoài một cách an toàn) — chỉ: (a) mọi `AutoAllow` bị tắt khi paused, (b) UI hiển thị trạng thái
+  "đã tạm dừng". Ghi rõ giới hạn này trong UI tooltip và `docs/ARCHITECTURE.md`.
+- "Giờ tập trung" → `FocusSet{on}`: UI ẩn badge/âm báo cho yêu cầu risk Low/Medium; High/Critical vẫn báo.
+- Đếm ngược phủ quyết: hiển thị khi `ApprovalView.reversible` và hub gửi `countdown` (T10 mức 5). Hết giờ: UI gửi
+  `Decide Allow`. Nút "Dừng lại" gửi Deny, "Chạy ngay" gửi Allow. Không bao giờ hiển thị cho Critical/High.
+
+**Test:** paused tắt AutoAllow (test ở hub); focus lọc thông báo theo risk; countdown chỉ xuất hiện khi reversible.
+
+### T15 · ARC-36 · Replay
+
+`tools/replay`: `replay <dir> --url http://127.0.0.1:7878 --sessions N --rate R/s --duration D [--permission-mode allow|skip]`.
+- Đọc fixture, thay `session_id` bằng `replay-<i>`, gửi tới `/hooks/event` (và `/hooks/permission` nếu bật; đóng vai người
+  trả lời qua WebSocket với chế độ `allow`).
+- In p50/p95/p99 độ trễ và số lỗi; mã thoát ≠0 nếu p99 > 5 ms cho `/hooks/event` (cờ `--assert-p99-ms`).
+
+### T16 · ARC-37 · Đo ngân sách
+
+`scripts/measure.sh` (Linux/macOS) và `scripts/measure.ps1` (Windows) theo kịch bản `docs/BUDGET.md`; xuất CSV
+`ts,rss_kb,cpu_pct` và một dòng tóm tắt. Agent `budget-guard` dùng các script này.
+
+### T17 · ARC-38 · E2E với Claude Code thật
+
+`crates/hub/tests/e2e_claude.rs`, đánh dấu `#[ignore]` (chạy tay hoặc với biến `ARCTURUS_E2E=1`).
+- Tạo thư mục tạm có `package.json` với script `test` vô hại; settings cục bộ trỏ hook về hub test.
+- Chạy `claude -p "chạy npm test"` với permission mode buộc hỏi; 4 kịch bản: allow, deny, timeout (timeout hub 5 s), hub tắt.
+- Kiểm: file đánh dấu do lệnh tạo ra có/không xuất hiện đúng theo kịch bản.
+
+### T18 · ARC-39 · Dogfood
+
+- `hooks/arcturus-dogfood.json` hoàn chỉnh; `scripts/dogfood-install.sh` và `dogfood-uninstall.sh` gộp/gỡ khối `hooks`
+  trong `~/.claude/settings.json` **có sao lưu** (`settings.json.bak-<ts>`), dùng `jq`; không đụng các khóa khác.
+- `docs/DOGFOOD.md`: các bước, cách gỡ, cách kiểm tra hub tắt vẫn an toàn.
+
+### T19 · ARC-40 · Standup
+
+`standup.rs`: `fn build(store: &StoreReader, since: OffsetDateTime, now: OffsetDateTime, git: &dyn GitLog) -> Standup`.
+- Theo persona: số task xong (TurnStopped), commit (từ `git log --since` trong cwd của persona), test pass/fail (PostToolUse Bash khớp mẫu test + exit code nếu có), yêu cầu đang chờ, lỗi lặp lại ≥3 lần.
+- Văn bản sinh bằng template tiếng Việt cố định; không LLM.
+- Endpoint `GET /standup` (Bearer) trả JSON; UI hiển thị ở v1.
+
+**Test:** dữ liệu giả lập → đúng số liệu và câu chữ (snapshot).
+
+### T20 · ARC-41 · Chỉ số dogfood
+
+`replay metrics` hoặc truy vấn SQL trong `scripts/metrics.sql`: thời gian chờ trung bình mỗi yêu cầu theo ngày,
+tỉ lệ `decided_by=policy`, số deny, số timeout. Baseline (trước Arcturus) đo tay, ghi vào `docs/DOGFOOD.md`.
+
+### T21 · ARC-42 · Cổng v0
+
+Chạy `/milestone-gate v0`. Không code mới.
+
+---
+
+## Phụ lục A — SVG nhân vật (port sang `Character.tsx`)
+
+viewBox `0 0 200 240`, chiều cao = width × 1.2. `H` = hair, `O` = outfit, `A` = acc.
+
+```
+Luôn có:
+<ellipse cx=100 cy=231 rx=52 ry=7 fill=#000 opacity=.25/>
+<path d="M36 104 Q32 38 100 34 Q168 38 164 104 L160 160 Q150 176 140 162 L140 122 L60 122 L60 162 Q50 176 40 160 Z" fill=H/>
+<path d="M52 232 Q50 166 100 160 Q150 166 148 232 Z" fill=O/>
+<path d="M84 163 L100 182 L116 163" fill=none stroke=#F4F1FF stroke-width=4 stroke-linejoin=round opacity=.85/>
+<rect x=90 y=146 width=20 height=18 rx=6 fill=#F7D3C1/>
+<ellipse cx=100 cy=104 rx=56 ry=52 fill=#FFE6D8/>
+<path d="M42 100 Q44 44 100 42 Q156 44 158 100 Q146 78 128 80 Q122 64 106 76 Q94 60 80 76 Q62 70 56 88 Q48 90 42 100 Z" fill=H/>
+<path d="M100 44 Q104 22 122 24 Q108 30 106 46 Z" fill=H/>
+<path d="M40 104 Q38 30 100 28 Q162 30 160 104" fill=none stroke=A stroke-width=8 stroke-linecap=round/>
+<rect x=28 y=92 width=18 height=34 rx=9 fill=A/>  <rect x=154 y=92 width=18 height=34 rx=9 fill=A/>
+<ellipse cx=70 cy=122 rx=9 ry=5 fill=#FF8FA8 opacity=.55/> <ellipse cx=130 cy=122 rx=9 ry=5 fill=#FF8FA8 opacity=.55/>
+
+Mắt:
+approval: <ellipse cx=78 cy=106 rx=7 ry=10 fill=#241B4D/><ellipse cx=122 cy=106 rx=7 ry=10 fill=#241B4D/>
+          <circle cx=80.5 cy=102 r=3 fill=#fff/><circle cx=124.5 cy=102 r=3 fill=#fff/>
+done:     stroke #241B4D w4 round: <path d="M70 108 Q78 98 86 108"/><path d="M114 108 Q122 98 130 108"/>
+working:  <ellipse cx=78 cy=110 rx=7 ry=6 fill=#241B4D/><ellipse cx=122 cy=110 rx=7 ry=6 fill=#241B4D/>
+          <path d="M69 101 L87 103 M113 103 L131 101" stroke=#241B4D w3 round fill=none/>
+idle:     stroke #241B4D w3.5 round: <path d="M70 106 Q78 112 86 106"/><path d="M114 106 Q122 112 130 106"/>
+error:    stroke #241B4D w4 round join-round: <path d="M71 100 L85 107 L71 114"/><path d="M129 100 L115 107 L129 114"/>
+
+Miệng (màu #B4445E):
+idle, working: <path d="M93 130 Q100 136 107 130" stroke w3 round fill=none/>
+done:          <path d="M91 128 L109 128 Q107 141 100 141 Q93 141 91 128 Z" fill/>
+approval:      <ellipse cx=100 cy=132 rx=4.5 ry=5.5 fill/>
+error:         <path d="M90 133 Q95 128 100 133 Q105 138 110 133" stroke w3 round fill=none/>
+
+Phụ kiện theo mood:
+approval: <path d="M144 192 Q160 172 164 148" stroke=O w16 round fill=none/><circle cx=165 cy=140 r=11 fill=#FFE6D8/>
+          <circle cx=178 cy=42 r=16 fill=#FFB020/><path d="M178 32 L178 45" stroke=#241B4D w4 round/><circle cx=178 cy=52 r=2.5 fill=#241B4D/>
+done:     fill #FFB020: <path d="M22 50 L26 60 L36 64 L26 68 L22 78 L18 68 L8 64 L18 60 Z"/>
+          <path d="M178 28 L181 36 L189 39 L181 42 L178 50 L175 42 L167 39 L175 36 Z"/>
+working:  <rect x=146 y=18 width=46 height=26 rx=13 fill=#fff/> + 3 chấm r=3.5 fill=O tại (159,31) (169,31) (179,31)
+idle:     <path d="M160 30 L174 30 L160 44 L174 44" stroke=#C3C8D4 w3 round join-round fill=none/>   (chữ Z ngủ)
+error:    <path d="M152 68 Q159 79 152 86 Q145 79 152 68 Z" fill=#7CC4F2/>                          (giọt mồ hôi)
+```
+
+## Phụ lục B — Bảng màu và kiểu chữ UI (từ mockup)
+
+| Token | Giá trị | Dùng cho |
+|---|---|---|
+| bg | `#111318` | nền |
+| surface | `#1A1D24` | thẻ |
+| raised | `#222631` | chip |
+| border | `#2C303B` | viền |
+| text | `#E8EAF0` | chữ chính |
+| muted | `#A3A9B8` | chữ phụ (đạt 4,5:1 trên surface) |
+| approval | `#FFB020` | giơ tay, viền yêu cầu |
+| working | `#8B7CF6` | đang làm |
+| allow-bg / allow-fg | `#34D1B5` / `#06201B` | nút Đồng ý |
+| risk-low | bg `#123A33` fg `#7EE6CF` | |
+| risk-medium | bg `#3A2A0E` fg `#FFD27A` | |
+| risk-high/critical | bg `#3A1A16` fg `#FF9F87` | |
+
+Phông: Be Vietnam Pro (giao diện), JetBrains Mono (lệnh). Đóng gói phông cục bộ trong app, không tải từ mạng.
+
+Bảng màu nhân vật mặc định (persona không cấu hình), theo thứ tự hash:
+`(#2E2A5C,#8B7CF6,#FF7A59) (#5A3A22,#2BB5A0,#FFD166) (#1F1F24,#4C8DF6,#9AA3B5) (#7A2E3B,#E2627F,#FFB020) (#244A3A,#F2A65A,#8B7CF6) (#3B3B3B,#6FCF97,#56CCF2)`

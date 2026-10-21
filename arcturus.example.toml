@@ -1,0 +1,35 @@
+# Chép thành arcturus.toml (đã gitignore). Gán tên, vai trò, màu cho từng phiên theo đường dẫn làm việc.
+# Phiên không khớp mẫu nào sẽ được đặt tên tự động.
+
+[hub]
+bind = "127.0.0.1:7878"
+approval_timeout_secs = 110     # phải nhỏ hơn timeout của hook (120)
+reconcile_interval_secs = 30
+event_ttl_days = 30
+
+[team]
+main_roster_max = 5             # đội hình chính; agent rảnh còn lại gom vào "phòng hỗ trợ"
+
+[[persona]]
+match_cwd = "**/.claude/worktrees/hub*"
+name = "Khoa"
+role = "backend"
+palette = { hair = "#1F1F24", outfit = "#4C8DF6", acc = "#9AA3B5" }
+
+[[persona]]
+match_cwd = "**/.claude/worktrees/policy*"
+name = "Minh"
+role = "tester"
+palette = { hair = "#5A3A22", outfit = "#2BB5A0", acc = "#FFD166" }
+
+[[persona]]
+match_cwd = "**/.claude/worktrees/ui*"
+name = "Linh"
+role = "frontend"
+palette = { hair = "#2E2A5C", outfit = "#8B7CF6", acc = "#FF7A59" }
+
+[[persona]]
+match_cwd = "**/.claude/worktrees/lab*"
+name = "Vy"
+role = "researcher"
+palette = { hair = "#244A3A", outfit = "#F2A65A", acc = "#8B7CF6" }

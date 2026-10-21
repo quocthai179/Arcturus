@@ -1,0 +1,24 @@
+# Claude Code
+.claude/worktrees/
+.claude/settings.local.json
+
+# Rust / Tauri
+target/
+crates/app/src-tauri/target/
+
+# Node
+node_modules/
+ui/dist/
+
+# Dữ liệu cục bộ của hub
+*.db
+*.db-wal
+*.db-shm
+/data/
+
+# Bí mật và cấu hình cá nhân
+.env
+.env.*
+arcturus.toml
+*.pem
+*.key
