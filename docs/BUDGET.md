@@ -38,4 +38,4 @@ Kịch bản chuẩn:
 
 | Ngày | Commit | Máy | Hub idle | Hub 20 phiên | App Lite | 2D | Ghi chú |
 |---|---|---|---|---|---|---|---|
-| | | | | | | | |
+| 2026-10-21 | a5fd9f5 | i5-12400F 6C/12T, 32 GB, Windows 11 Pro | 8,3 MB WS / 1,5 MB private, CPU 0,00% | chưa đo (không có replay); tải curl ~22 req/s: đỉnh 8,7 MB WS / 2,1 MB private, CPU ~0,2%; sau nghỉ 60 s 8,7 MB, CPU 0% | chưa đo | chưa đo | T1 record mode, kịch bản rút gọn (chưa có replay). Ingest curl `time_total`: p50 1,8 ms, p99 18 ms (mỗi request một TCP mới + ghi file trước khi trả, chưa đại diện cho p99 ≤ 5 ms) |

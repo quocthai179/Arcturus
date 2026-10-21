@@ -27,11 +27,14 @@ enum Command {
     Scrub {
         /// Thư mục ghi băng (đầu ra của `hub --record`).
         input: PathBuf,
-        /// Thư mục đích (ví dụ fixtures/hooks). Không được trùng hoặc nằm trong IN.
+        /// Thư mục đích (ví dụ fixtures/hooks). Không được trùng, nằm trong, hoặc chứa IN.
         output: PathBuf,
         /// Thư mục home cần thay (mặc định USERPROFILE hoặc HOME).
         #[arg(long)]
         home: Option<String>,
+        /// Tên người dùng cần thay thêm (lặp được; mặc định USERNAME hoặc USER).
+        #[arg(long)]
+        username: Vec<String>,
         /// Biến môi trường chứa giá trị cần xóa (lặp được). Mặc định: token hub và tên máy.
         #[arg(long = "secret-env", default_values_t = ["ARCTURUS_TOKEN".to_owned(), "COMPUTERNAME".to_owned(), "HOSTNAME".to_owned()])]
         secret_env: Vec<String>,
@@ -45,13 +48,22 @@ fn main() -> anyhow::Result<()> {
             input,
             output,
             home,
+            username,
             secret_env,
         }) => {
             let home = home
                 .or_else(|| std::env::var("USERPROFILE").ok())
                 .or_else(|| std::env::var("HOME").ok());
+            let usernames = if username.is_empty() {
+                ["USERNAME", "USER"]
+                    .iter()
+                    .filter_map(|k| std::env::var(k).ok())
+                    .collect()
+            } else {
+                username
+            };
             let secrets = secret_env.iter().filter_map(|k| std::env::var(k).ok());
-            let scrubber = Scrubber::new(home.as_deref(), secrets);
+            let scrubber = Scrubber::new(home.as_deref(), usernames, secrets);
             let n = scrub_dir(&scrubber, &input, &output)?;
             println!(
                 "scrub: {n} file từ {} → {}",
@@ -108,11 +120,12 @@ fn scrub_dir(scrubber: &Scrubber, input: &Path, output: &Path) -> anyhow::Result
     std::fs::create_dir_all(output)
         .with_context(|| format!("không tạo được {}", output.display()))?;
     let output_abs = std::fs::canonicalize(output)?;
-    if output_abs.starts_with(&input_abs) {
+    // Hai chiều: OUT trong IN thì đọc lại chính đầu ra; IN trong OUT thì bản ghi thô nằm lẫn trong fixture.
+    if output_abs.starts_with(&input_abs) || input_abs.starts_with(&output_abs) {
         bail!(
-            "OUT ({}) không được nằm trong IN ({})",
-            output.display(),
-            input.display()
+            "IN ({}) và OUT ({}) không được trùng hoặc lồng nhau",
+            input.display(),
+            output.display()
         );
     }
 
@@ -153,12 +166,23 @@ mod tests {
         d
     }
 
-    /// Kiểm bộ fixture đã commit: tên thư mục khớp `hook_event_name`, đủ số lượng, home đã được scrub.
+    /// Kiểm bộ fixture đã commit: tên thư mục khớp `hook_event_name`, đủ số lượng, không còn dữ liệu nhạy cảm.
     #[test]
     fn committed_fixtures_are_consistent_and_scrubbed() {
         let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/hooks");
         let files = json_files(&root).unwrap();
         assert!(files.len() >= 30, "T1 cần ≥30 fixture, có {}", files.len());
+
+        // Scrub lại bằng thông tin của máy đang chạy test (home, tên người dùng, tên máy): phải không đổi gì.
+        let env = |k: &str| std::env::var(k).ok();
+        let home = env("USERPROFILE").or_else(|| env("HOME"));
+        let users: Vec<String> = ["USERNAME", "USER"].iter().filter_map(|k| env(k)).collect();
+        let secrets: Vec<String> = ["ARCTURUS_TOKEN", "COMPUTERNAME", "HOSTNAME"]
+            .iter()
+            .filter_map(|k| env(k))
+            .collect();
+        let scrubber = Scrubber::new(home.as_deref(), users, secrets);
+
         for rel in &files {
             let text = std::fs::read_to_string(root.join(rel)).unwrap();
             let v: serde_json::Value = serde_json::from_str(&text).unwrap();
@@ -169,28 +193,70 @@ mod tests {
                 .as_os_str()
                 .to_string_lossy();
             assert_eq!(v["hook_event_name"], *dir, "{rel:?}");
+
+            let mut again = v.clone();
+            scrubber.scrub_value(&mut again);
+            assert_eq!(
+                again, v,
+                "{rel:?}: scrub lại vẫn thay đổi, fixture còn dữ liệu nhạy cảm"
+            );
+
             let mut strings = Vec::new();
             collect_strings(&v, &mut strings);
             for s in strings {
-                for pat in ["\\Users\\", "/Users/", "C--Users-", "/home/"] {
-                    for (i, _) in s.match_indices(pat) {
+                let lower = s.to_ascii_lowercase();
+                for pat in ["\\users\\", "/users/", "-users-", "/home/"] {
+                    for (i, _) in lower.match_indices(pat) {
                         assert!(
-                            s[i + pat.len()..].starts_with("user"),
+                            lower[i + pat.len()..]
+                                .trim_start_matches(['\\', '/'])
+                                .starts_with("user"),
                             "{rel:?}: đường dẫn home chưa scrub: {s}"
                         );
                     }
                 }
+                assert!(!looks_like_email(s), "{rel:?}: có địa chỉ email: {s}");
             }
         }
     }
 
+    /// Duyệt cả khóa lẫn giá trị chuỗi.
     fn collect_strings<'a>(v: &'a serde_json::Value, out: &mut Vec<&'a str>) {
         match v {
             serde_json::Value::String(s) => out.push(s),
             serde_json::Value::Array(a) => a.iter().for_each(|x| collect_strings(x, out)),
-            serde_json::Value::Object(m) => m.values().for_each(|x| collect_strings(x, out)),
+            serde_json::Value::Object(m) => {
+                for (k, x) in m {
+                    out.push(k);
+                    collect_strings(x, out);
+                }
+            }
             _ => {}
         }
+    }
+
+    fn looks_like_email(s: &str) -> bool {
+        s.split(|c: char| c.is_whitespace() || "<>()\"',;`".contains(c))
+            .any(|w| match w.split_once('@') {
+                Some((user, domain)) => {
+                    !user.is_empty()
+                        && user
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c))
+                        && domain.contains('.')
+                        && domain
+                            .chars()
+                            .all(|c| c.is_ascii_alphanumeric() || ".-".contains(c))
+                }
+                None => false,
+            })
+    }
+
+    #[test]
+    fn email_detector() {
+        assert!(looks_like_email("liên hệ a.b+c@example.com nhé"));
+        assert!(!looks_like_email("git@ không phải"));
+        assert!(!looks_like_email("@scope/pkg"));
     }
 
     #[test]
@@ -233,7 +299,7 @@ mod tests {
         )
         .unwrap();
 
-        let s = Scrubber::new(Some("C:\\Users\\PC"), Vec::new());
+        let s = Scrubber::new(Some("C:\\Users\\PC"), Vec::new(), Vec::new());
         let n = scrub_dir(&s, &input, &output).unwrap();
 
         let out = std::fs::read_to_string(output.join("SessionStart").join("01.json")).unwrap();
@@ -251,7 +317,11 @@ mod tests {
         let input = temp_dir("bad");
         let output = temp_dir("badout");
         std::fs::write(input.join("x.json"), "{hỏng").unwrap();
-        let err = scrub_dir(&Scrubber::new(None, Vec::new()), &input, &output);
+        let err = scrub_dir(
+            &Scrubber::new(None, Vec::new(), Vec::new()),
+            &input,
+            &output,
+        );
         std::fs::remove_dir_all(&input).unwrap();
         std::fs::remove_dir_all(&output).unwrap();
         assert!(err.is_err());
@@ -260,8 +330,29 @@ mod tests {
     #[test]
     fn scrub_dir_rejects_output_inside_input() {
         let input = temp_dir("nest");
-        let err = scrub_dir(&Scrubber::new(None, Vec::new()), &input, &input.join("out"));
+        let err = scrub_dir(
+            &Scrubber::new(None, Vec::new(), Vec::new()),
+            &input,
+            &input.join("out"),
+        );
         std::fs::remove_dir_all(&input).unwrap();
         assert!(err.is_err());
+    }
+
+    #[test]
+    fn scrub_dir_rejects_input_inside_output() {
+        let output = temp_dir("outer");
+        let input = output.join("raw");
+        std::fs::create_dir_all(&input).unwrap();
+        let err = scrub_dir(
+            &Scrubber::new(None, Vec::new(), Vec::new()),
+            &input,
+            &output,
+        );
+        std::fs::remove_dir_all(&output).unwrap();
+        assert!(
+            err.is_err(),
+            "bản ghi thô không được nằm trong thư mục fixture"
+        );
     }
 }

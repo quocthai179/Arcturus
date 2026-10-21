@@ -54,6 +54,10 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
   Q1b (Claude Code có đóng kết nối HTTP không).
 - T4: hook http cho `SessionStart` không bắn (F1): tạo agent từ sự kiện đầu tiên của một `session_id` lạ, không chờ
   SessionStart.
+- T5: audit T1 (finding 8): `/ws?token=` không có CORS bảo vệ → bắt buộc allowlist `Origin` (origin của Tauri) và `Host`
+  (`127.0.0.1:<cổng>`, `localhost:<cổng>`), không log query token. Cân nhắc `subtle` cho so sánh token (finding 9).
+- T3/T15: p99 ingest đo ở T1 là 18 ms (curl, mỗi request một kết nối TCP mới, ghi file trước khi trả). `/hooks/event`
+  thật phải trả 204 trước khi đụng đĩa/SQLite; đo lại bằng `replay` có keep-alive (`docs/BUDGET.md`).
 - T12: Q1 = không treo → không cần nút "Trả về terminal" theo điều kiện ở PLAN T12; thẻ duyệt nên ghi rõ "cũng đang hỏi
   trong terminal".
 - T18: `hooks/arcturus-dogfood.json` phải đổi `SessionStart` sang hook `type: "command"` gọi `curl` (F1); hook http

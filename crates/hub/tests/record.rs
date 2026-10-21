@@ -10,7 +10,7 @@ use std::time::{Duration, Instant};
 use hub::record::{self, RecordConfig};
 use hub::{auth, server};
 
-const TOKEN: &str = "test-token-0123456789abcdef";
+const TOKEN: &str = "test-token-0123456789abcdef-arcturus-t1";
 
 struct TestHub {
     addr: SocketAddr,
@@ -63,6 +63,15 @@ impl TestHub {
             req = req.header("authorization", format!("Bearer {t}"));
         }
         req.send().await.unwrap()
+    }
+}
+
+impl Drop for TestHub {
+    fn drop(&mut self) {
+        // Dọn thư mục ghi tạm (có thể là file ở test write_failure_never_allows, hoặc chưa từng được tạo).
+        if self.dir.is_dir() {
+            let _ = std::fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -134,7 +143,11 @@ async fn wrong_token_returns_401() {
     let body = r#"{"hook_event_name":"PreToolUse"}"#;
 
     for path in ["/hooks/event", "/hooks/permission"] {
-        for token in [Some("wrong-token-0123456789abcdef"), Some(""), None] {
+        for token in [
+            Some("wrong-token-0123456789abcdef-arcturus-t1"),
+            Some(""),
+            None,
+        ] {
             let res = hub.post(path, token, body).await;
             assert_eq!(res.status(), 401, "{path} với token {token:?}");
             assert!(!res.text().await.unwrap().contains("allow"));
@@ -209,6 +222,38 @@ async fn body_over_1mb_rejected() {
     let res = hub.post("/hooks/permission", Some(TOKEN), body).await;
 
     assert_eq!(res.status(), 413);
+    assert!(recorded_files(&hub.dir).is_empty());
+}
+
+#[tokio::test]
+async fn unauthenticated_oversized_body_gets_401_not_413() {
+    // Xác thực chạy trước khi đọc body: kẻ không có token không bắt hub đệm 1 MB.
+    // Gửi header khai báo body > 1 MB nhưng chỉ gửi 1 KB đầu: nhận được 401 ngay chứng tỏ hub không đọc body.
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    let hub = TestHub::start(Duration::ZERO).await;
+    let declared = record::MAX_BODY_BYTES + 1024;
+
+    for path in ["/hooks/event", "/hooks/permission"] {
+        let mut stream = tokio::net::TcpStream::connect(hub.addr).await.unwrap();
+        let head = format!(
+            "POST {path} HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Type: application/json\r\n\
+             Content-Length: {declared}\r\n\r\n"
+        );
+        stream.write_all(head.as_bytes()).await.unwrap();
+        stream.write_all(&[b'x'; 1024]).await.unwrap();
+
+        let mut buf = [0u8; 64];
+        let n = tokio::time::timeout(Duration::from_secs(5), stream.read(&mut buf))
+            .await
+            .expect("hub phải trả lời trước khi nhận đủ body")
+            .unwrap();
+        let status_line = String::from_utf8_lossy(&buf[..n]);
+        assert!(
+            status_line.starts_with("HTTP/1.1 401"),
+            "{path}: {status_line}"
+        );
+    }
     assert!(recorded_files(&hub.dir).is_empty());
 }
 

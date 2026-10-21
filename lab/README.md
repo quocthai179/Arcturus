@@ -14,4 +14,6 @@ ARCTURUS_TOKEN=<token> target/debug/replay scrub <thư-mục-tạm>/rec fixtures
 - Muốn có `PermissionRequest`, chạy với `--permission-mode default`: chế độ auto không hỏi nên không gửi hook này.
 - Hook http cho `SessionStart` không bắn; muốn ghi SessionStart, dùng hook `type: "command"` gọi `curl`
   (`docs/HOOK_FINDINGS.md` F1).
+- Chế độ ghi băng không giới hạn số file hay số kết nối đang giữ (`--record-delay`): chỉ chạy khi thí nghiệm, tắt ngay
+  sau đó. Ghi vào thư mục tạm ngoài repo; `replay scrub` từ chối IN/OUT lồng nhau.
 - Rà lại fixture sau khi scrub (home, slug `C--Users-<tên>`, token, tên máy) trước khi commit.

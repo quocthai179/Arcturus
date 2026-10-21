@@ -11,13 +11,17 @@ use axum::response::{IntoResponse, Response};
 /// Biến môi trường chứa token. Thiếu thì hub không khởi động.
 pub const TOKEN_ENV: &str = "ARCTURUS_TOKEN";
 
-/// Token ngắn hơn mức này bị từ chối (gợi ý tạo: `openssl rand -hex 24`).
-pub const MIN_TOKEN_LEN: usize = 16;
+/// Token ngắn hơn mức này bị từ chối (gợi ý tạo: `openssl rand -hex 24`, 48 ký tự).
+pub const MIN_TOKEN_LEN: usize = 32;
+
+/// Token phải có ít nhất chừng này ký tự khác nhau (chặn `aaaa…`, `abab…`).
+pub const MIN_DISTINCT_CHARS: usize = 10;
 
 #[derive(Debug, PartialEq, Eq)]
 pub enum TokenError {
     Missing,
     TooShort { len: usize },
+    TooFewDistinct { distinct: usize },
 }
 
 impl fmt::Display for TokenError {
@@ -30,6 +34,10 @@ impl fmt::Display for TokenError {
             TokenError::TooShort { len } => write!(
                 f,
                 "{TOKEN_ENV} chỉ có {len} ký tự, cần ít nhất {MIN_TOKEN_LEN}; tạo bằng `openssl rand -hex 24`"
+            ),
+            TokenError::TooFewDistinct { distinct } => write!(
+                f,
+                "{TOKEN_ENV} chỉ có {distinct} ký tự khác nhau, cần ít nhất {MIN_DISTINCT_CHARS}; tạo bằng `openssl rand -hex 24`"
             ),
         }
     }
@@ -46,6 +54,13 @@ pub fn token_from_env(value: Option<String>) -> Result<String, TokenError> {
     let len = token.chars().count();
     if len < MIN_TOKEN_LEN {
         return Err(TokenError::TooShort { len });
+    }
+    let distinct = token
+        .chars()
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    if distinct < MIN_DISTINCT_CHARS {
+        return Err(TokenError::TooFewDistinct { distinct });
     }
     Ok(token)
 }
@@ -103,11 +118,26 @@ mod tests {
         assert!(!bearer_matches(None, t));
     }
 
+    const GOOD: &str = "4f1c9a7e2b8d6035e1a94c7f0b2d8e63";
+
     #[test]
     fn token_is_trimmed() {
         assert_eq!(
-            token_from_env(Some("  0123456789abcdef\n".to_owned())),
-            Ok("0123456789abcdef".to_owned())
+            token_from_env(Some(format!("  {GOOD}\n"))),
+            Ok(GOOD.to_owned())
         );
+    }
+
+    #[test]
+    fn weak_tokens_rejected() {
+        assert_eq!(
+            token_from_env(Some("0123456789abcdef".to_owned())),
+            Err(TokenError::TooShort { len: 16 })
+        );
+        assert_eq!(
+            token_from_env(Some("ab".repeat(20))),
+            Err(TokenError::TooFewDistinct { distinct: 2 })
+        );
+        assert!(token_from_env(Some(GOOD.to_owned())).is_ok());
     }
 }

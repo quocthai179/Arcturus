@@ -116,9 +116,10 @@ pub fn event_dir_name(value: &Value) -> &str {
 }
 
 fn is_safe_dir_name(name: &str) -> bool {
-    const WINDOWS_RESERVED: [&str; 22] = [
-        "CON", "PRN", "AUX", "NUL", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7", "COM8",
-        "COM9", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8", "LPT9",
+    const WINDOWS_RESERVED: [&str; 24] = [
+        "CON", "PRN", "AUX", "NUL", "COM0", "COM1", "COM2", "COM3", "COM4", "COM5", "COM6", "COM7",
+        "COM8", "COM9", "LPT0", "LPT1", "LPT2", "LPT3", "LPT4", "LPT5", "LPT6", "LPT7", "LPT8",
+        "LPT9",
     ];
     !name.is_empty()
         && name.len() <= 64
@@ -160,6 +161,8 @@ mod tests {
             "C:",
             "CON",
             "lpt1",
+            "COM0",
+            "lpt0",
             "Tên",
             &"x".repeat(65),
         ] {
