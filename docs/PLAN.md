@@ -192,7 +192,7 @@ pub enum Decision { Allow, Deny }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
-pub enum DecidedBy { User, Policy, Timeout, Cancelled }
+pub enum DecidedBy { User, Countdown, Policy, Timeout, Cancelled }   // Countdown: hết giờ đếm ngược phủ quyết (T10, T14)
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Default)]
 pub struct Metrics { pub context_pct: Option<f32> }
@@ -284,7 +284,7 @@ pub enum ServerMsg {
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ClientMsg {
-    Decide { request_id: RequestId, decision: Decision, message: Option<String> },
+    Decide { request_id: RequestId, decision: Decision, message: Option<String>, origin: DecideOrigin },
     DecideGroup { group_key: String, decision: Decision },          // T9
     BatchOpen { group_key: String, minutes: u32 },                  // T9
     BatchClose { group_key: String },                               // T9
@@ -311,7 +311,11 @@ pub struct ApprovalView {
     pub truncated: bool,                               // true nếu nội dung Edit/Write bị cắt (xem dưới)
     pub risk: Risk, pub reversible: bool,
     pub group_key: String, pub created_at: OffsetDateTime, pub deadline_at: OffsetDateTime,
+    pub countdown_ms: Option<u64>,                     // đếm ngược phủ quyết (T10 mức 5); None khi đội tạm dừng
 }
+
+#[serde(rename_all = "snake_case")]
+pub enum DecideOrigin { User, Countdown }       // người bấm, hay UI tự gửi khi hết đếm ngược
 
 pub struct TeamView { pub paused: bool, pub focus: bool, pub roster_max: u8 }
 pub struct Palette { pub hair: String, pub outfit: String, pub acc: String }
@@ -333,6 +337,17 @@ tức code point) trong `command_normalized`; không phải byte UTF-8, không p
   bị cắt còn 2.000 ký tự Unicode mỗi trường, kèm dòng `… [đã cắt, tổng N ký tự]`; khi đó `truncated = true`.
 - Luật danger cho các tool này chỉ khớp trên đường dẫn (T8), nên `danger_spans` luôn nằm trong phần không bị cắt.
 - Bản đầy đủ lấy theo yêu cầu qua `GET /approvals/{request_id}/input` (§3.3), không gửi qua broadcast.
+
+**Đếm ngược phủ quyết và tạm dừng** (bất biến: khi đội tạm dừng, không có allow nào mà người không bấm):
+- Hub chỉ đặt `countdown_ms = Some(..)` khi policy trả `AskUser{countdown}` (T10 mức 5), yêu cầu `reversible` và
+  đội **không** tạm dừng.
+- Hub chấp nhận `Decide{decision: Allow, origin: Countdown}` chỉ khi cả ba đúng: yêu cầu đó đang có
+  `countdown_ms = Some(c)`, đội không tạm dừng, và `now ≥ created_at + c`. Sai bất kỳ điều kiện nào: **giữ nguyên**
+  yêu cầu trong hàng đợi (không deny), gửi `Feed` "Cần trưởng nhóm bấm duyệt". `origin: Countdown` kèm `Deny` cũng
+  bị từ chối như vậy (đếm ngược chỉ được allow).
+- Allow được chấp nhận ghi `decided_by = countdown`; người bấm ghi `decided_by = user`.
+- `TeamPause`: hub đặt `countdown_ms = None` cho **mọi** yêu cầu đang chờ rồi broadcast `TeamUpdated`. `TeamResume`
+  không khôi phục đếm ngược cho yêu cầu cũ; chỉ yêu cầu tới sau mới có thể có đếm ngược.
 
 ### 3.5 SQLite (`hub-core/src/store.rs`)
 
@@ -552,6 +567,8 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 ```
 - Hủy khi `SessionEnded`: xóa mọi pending của session (drop `reply` sender) → handler rơi vào nhánh `Ok(Err)` và trả `{}`; ghi `status=cancelled`.
 - `ClientMsg::Decide`: lấy `pending.remove(id)`; không tồn tại (đã hết giờ) → gửi `Feed` "Yêu cầu đã hết hạn", không lỗi.
+  `origin: Countdown` kiểm theo quy tắc "Đếm ngược phủ quyết và tạm dừng" (§3.4) **trước** khi remove; không đạt thì
+  giữ nguyên pending. Ở T3 chưa có đếm ngược (`countdown_ms` luôn `None`) nên mọi `origin: Countdown` đều bị từ chối.
 - Một handler không bao giờ được trả `allow` ở nhánh lỗi: viết hàm `fn response_for(result: Result<…>) -> Json<Value>` với `match` đầy đủ và test cho từng nhánh.
 
 **Test bắt buộc** (`tests/permission.rs`)
@@ -566,6 +583,9 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - `decide_on_expired_request_is_noop`
 - `paused_converts_auto_allow_to_ask_user` (Policy giả trả AutoAllow, đặt `paused = true`)
 - `auto_allow_store_failure_falls_back_to_ask_user` (writer giả trả lỗi hoặc không ack)
+- `countdown_origin_rejected_without_countdown` (yêu cầu vẫn pending, không bị deny)
+- `countdown_origin_rejected_before_elapsed`, `countdown_origin_rejected_while_paused`
+- `countdown_allow_records_decided_by_countdown`
 
 ### T4 · ARC-25 · State machine và persona
 
@@ -589,13 +609,15 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - Kết nối: kiểm token → gửi `Snapshot` → vòng lặp `select!` giữa `broadcast::Receiver` và tin nhắn client.
 - Ping mỗi 30 giây; client không trả lời 2 lần → đóng.
 - Thông điệp client không hợp lệ → gửi `Feed` báo lỗi, không đóng kết nối.
-- `TeamPause` / `TeamResume`: đặt `TeamState.paused`, broadcast `TeamUpdated`. Phần hub của "Tạm dừng cả đội" làm ở
+- `TeamPause` / `TeamResume`: đặt `TeamState.paused`, broadcast `TeamUpdated`. `TeamPause` xóa `countdown_ms` của mọi
+  yêu cầu đang chờ (§3.4); `TeamResume` không khôi phục. Phần hub của "Tạm dừng cả đội" làm ở
   task này (làn `hub`); T14 chỉ làm nút và hiển thị (làn `ui`).
 - `GET /approvals/{request_id}/input` (§3.3): trả `tool_input` đầy đủ từ `pending`; không còn chờ → `404`.
 
 **Test bắt buộc**
 - `ws_rejects_without_token`, `ws_sends_snapshot_first`
 - `ws_team_pause_sets_paused_and_broadcasts`, `ws_team_resume_clears_paused`
+- `team_pause_clears_countdown_of_pending`, `team_resume_does_not_restore_countdown`
 - `approval_input_returns_full_tool_input`, `approval_input_unknown_returns_404`, `approval_input_requires_token`
 - `ws_decide_resolves_pending_request` (kết hợp với T3)
 - `ws_lagged_client_gets_fresh_snapshot`
@@ -695,11 +717,13 @@ ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte,
   - Deny → `approved_in_row = 0`, `last_incident_at = now`; nếu đang có grant cho (subject, pattern) → hạ một mức (6→5, 5→4 tức là thu hồi), ghi `trust_log`, broadcast `Feed`.
 - Khi `approved_in_row >= streak_threshold` và `now - first_at <= streak_window_days` và không có incident trong cửa sổ → gửi `Suggestion` (một lần cho mỗi cặp cho tới khi được trả lời).
 - `SuggestionAnswer{accept: true}` → tạo grant mức 6, hạn `grant_days`; `accept: false` → không đề xuất lại trong 7 ngày.
-- `Policy::decide`: grant còn hạn mức 6 và risk ≤ Medium → `AutoAllow{reason: "trust:<id>"}`; mức 5 → trả `AskUser{countdown: Some(10s)}` (UI hiển thị đếm ngược, hết giờ UI gửi Decide Allow). Nếu không có UI nào đang mở thì không ai gửi Allow → hết giờ hub trả `{}` (an toàn).
+- `Policy::decide`: grant còn hạn mức 6 và risk ≤ Medium → `AutoAllow{reason: "trust:<id>"}`; mức 5 → trả `AskUser{countdown: Some(10s)}` (hub đặt `countdown_ms` theo §3.4; UI hiển thị đếm ngược, hết giờ UI gửi
+`Decide{Allow, origin: Countdown}`; đội tạm dừng thì không có đếm ngược). Nếu không có UI nào đang mở thì không ai gửi Allow → hết giờ hub trả `{}` (an toàn).
 - Hoàn tác (revert) chưa đo được tự động trong v0: để API `trust.report_incident(subject, pattern)` cho bước sau.
 
 **Test:** `suggests_after_threshold_within_window`, `no_suggestion_if_incident_in_window`, `accept_creates_grant_level_6`,
-`deny_under_grant_demotes`, `grant_expires`, `critical_ignores_grant` (dùng lại bảng của T8).
+`deny_under_grant_demotes`, `grant_expires`, `critical_ignores_grant` (dùng lại bảng của T8),
+`level5_no_countdown_while_paused`, `level5_no_countdown_when_not_reversible`.
 
 ### T11 · ARC-32 · Component nhân vật
 
@@ -757,11 +781,15 @@ nhóm Critical không có nút duyệt gộp; `hidden_chars` hiện nhãn cảnh
   dừng Claude Code từ ngoài một cách an toàn) — chỉ: (a) mọi `AutoAllow` bị tắt khi paused, (b) UI hiển thị trạng thái
   "đã tạm dừng". Ghi rõ giới hạn này trong UI tooltip và `docs/ARCHITECTURE.md`.
 - "Giờ tập trung" → `FocusSet{on}`: UI ẩn badge/âm báo cho yêu cầu risk Low/Medium; High/Critical vẫn báo.
-- Đếm ngược phủ quyết: hiển thị khi `ApprovalView.reversible` và hub gửi `countdown` (T10 mức 5). Hết giờ: UI gửi
-  `Decide Allow`. Nút "Dừng lại" gửi Deny, "Chạy ngay" gửi Allow. Không bao giờ hiển thị cho Critical/High.
+- Đếm ngược phủ quyết: hiển thị khi `ApprovalView.countdown_ms` có giá trị (hub chỉ gửi cho yêu cầu reversible, T10
+  mức 5). Hết giờ: UI gửi `Decide{Allow, origin: Countdown}`. Nút "Dừng lại" gửi Deny, "Chạy ngay" gửi Allow, cả hai
+  `origin: User`. Không bao giờ hiển thị cho Critical/High.
+- Nhận `TeamUpdated{paused: true}`: reducer xóa `countdown_ms` của mọi yêu cầu trong store và dừng mọi đồng hồ ngay
+  (hub vẫn chặn ở phía mình, §3.4). Tiếp tục (resume) không khởi động lại đếm ngược cho yêu cầu cũ.
 
 **Test:** nút tạm dừng gửi `TeamPause`/`TeamResume` và hiển thị theo `TeamView.paused` (phía hub đã test ở T3, T5);
-focus lọc thông báo theo risk; countdown chỉ xuất hiện khi reversible.
+focus lọc thông báo theo risk; countdown chỉ xuất hiện khi có `countdown_ms`; hết giờ gửi `origin: Countdown`, nút
+bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và resume không chạy lại.
 
 ### T15 · ARC-36 · Replay
 

@@ -40,8 +40,10 @@ Hub là daemon riêng. Đóng app thì hub vẫn chạy và vẫn giữ hàng đ
    3. Có **batch rule** đang mở cho `group_key` ("cho phép `Bash:npm test` 1 giờ") và risk ≤ Medium → tự allow.
    4. Còn lại → vào hàng đợi.
 
-   Đội đang **tạm dừng** (`team.paused`): mọi kết quả tự allow ở bước 2–3 bị đổi thành hỏi người. Tạm dừng không
-   tự từ chối và ở v0 không dừng được agent thật (xem T14).
+   Đội đang **tạm dừng** (`team.paused`): mọi kết quả tự allow ở bước 2–3 bị đổi thành hỏi người, và **không có đếm
+   ngược** (bấm tạm dừng thì hủy luôn đếm ngược của yêu cầu đang chờ; tiếp tục không khôi phục). Hub chặn
+   `decide` có `origin: countdown` khi tạm dừng, nên khi tạm dừng không có allow nào mà người không bấm. Tạm dừng
+   không tự từ chối và ở v0 không dừng được agent thật (xem T14).
    Tự allow chỉ được trả sau khi bản ghi `approvals` đã ghi xong; ghi lỗi thì đổi thành hỏi người.
 4. Vào hàng đợi: tạo `oneshot` channel, broadcast thông điệp WebSocket `approval_requested`.
 5. Người quyết qua UI → hub gửi vào channel → trả JSON decision cho Claude Code.
@@ -102,7 +104,7 @@ trường nào có nhiều giá trị thì liệt kê các giá trị hợp lệ
   "type": "session.started | prompt.submitted | tool.pre | tool.post | tool.failed | approval.requested | approval.resolved | subagent.started | subagent.stopped | notification | turn.stopped | turn.failed | session.ended | unknown",
   "activity": "typing | reading | running | thinking | waiting | idle",
   "tool": { "name": "Bash", "summary": "npm test", "risk": "low | medium | high | critical" },
-  "approval": { "request_id": "req_01J...", "deadline_ms": 110000, "decided_by": "user | policy | timeout | cancelled", "decision": "allow | deny" },
+  "approval": { "request_id": "req_01J...", "deadline_ms": 110000, "decided_by": "user | countdown | policy | timeout | cancelled", "decision": "allow | deny" },
   "metrics": { "context_pct": 0.62 }
 }
 ```
@@ -142,7 +144,7 @@ Server → client: `snapshot {agents, queue, team}`, `agent_updated {agent}`, `a
 `approval_requested {approval}`, `approval_resolved {request_id, decision, decided_by}`, `team_updated {team}`,
 `feed {text, ts}`, `suggestion {suggestion}` (T10).
 
-Client → server: `decide {request_id, decision, message?}`, `decide_group {group_key, decision}` (T9),
+Client → server: `decide {request_id, decision, message?, origin: user | countdown}`, `decide_group {group_key, decision}` (T9),
 `batch_open {group_key, minutes}` (T9), `batch_close {group_key}` (T9), `team_pause`, `team_resume`,
 `focus_set {on}` (T14), `suggestion_answer {id, accept}` (T10), `return_to_terminal {request_id}` (nếu Q1 cần).
 
