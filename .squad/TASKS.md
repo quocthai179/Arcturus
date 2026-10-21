@@ -12,7 +12,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 
 | ID · YouTrack | Làn | Task | Phụ thuộc | Ước lượng | Trạng thái |
 |---|---|---|---|---|---|
-| T0 · ARC-21 | main | Scaffold: Cargo workspace (`hub-core`, `hub`, `replay`), Tauri 2 trong `crates/app`, `ui/` Vite+React+TS, CI chạy fmt/clippy/test | — | 2 | todo |
+| T0 · ARC-21 | main | Scaffold: Cargo workspace (`hub-core`, `hub`, `replay`), Tauri 2 trong `crates/app`, `ui/` Vite+React+TS, CI chạy fmt/clippy/test | — | 2 | review |
 | T1 · ARC-22 | main | Hook lab: hub "ghi băng" tối giản nhận mọi hook và lưu JSON thô; ghi fixture từ 3–4 phiên thật; trả lời Q1–Q4 trong HOOK_FINDINGS.md | T0 | 2 | todo |
 | T2 · ARC-23 | main | Chốt `schema.rs` (Event v1) + chuẩn hóa từ JSON hook, test với toàn bộ fixture | T1 | 1 | todo |
 
@@ -69,3 +69,4 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 <!-- YYYY-MM-DD · làn · xong gì · vướng gì -->
 - 2026-10-21 · main · Đồng bộ tài liệu (nhánh `docs-sync-contracts`, chưa có ticket ARC): xóa `PLAN.md` trùng ở gốc; ARCHITECTURE.md khớp PLAN.md §3 (Event, SQLite, tên thông điệp WS, thứ tự policy, glob persona); T3 tạm dừng tắt AutoAllow trước khi trả allow; `danger_spans` theo chỉ số ký tự Unicode (§3.4, T8, T12); README/WORKFLOW bỏ cách nói "chép bộ quy trình". · Vướng: chưa có ticket ARC cho việc này.
 - 2026-10-21 · main · Chốt 7 câu hỏi thiết kế (người duyệt): bỏ `raw_ref`; tự allow cần ack ghi store; pause ở T5; cắt nội dung Edit/Write + `GET /approvals/{id}/input`; nhãn ký tự ẩn; `match_cwd` trên Windows; tạm dừng tắt đếm ngược, `Decide.origin`, `DecidedBy::Countdown`. · Vướng: không.
+- 2026-10-21 · main · T0/ARC-21 scaffold (nhánh `arc-21-scaffold`): workspace Cargo (hub-core, hub, replay) + 4 test; `ui/` React 19, Vite 8, TS 7 strict, Vitest 5 + 1 test; Tauri 2.12 trong `crates/app` (workspace Cargo riêng, mở cửa sổ `ui/` qua Vite); CI GitHub Actions; `.gitattributes` ép LF. Mọi lệnh trong CLAUDE.md chạy được trên Windows. · Vướng: CI chưa chạy (chưa push); app không build trên CI (thiếu webkit trên Ubuntu); `hub`/`replay` mới là khung (T1, T15); chưa đo ngân sách vì hub chưa có server.

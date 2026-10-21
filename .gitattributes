@@ -1,0 +1,11 @@
+# Mọi file text dùng LF trong working tree, kể cả trên Windows (core.autocrlf=true).
+# Script shell bị CRLF sẽ hỏng khi chạy trong bash ở worktree mới.
+* text=auto eol=lf
+*.ps1 text eol=crlf
+*.cmd text eol=crlf
+*.bat text eol=crlf
+
+*.png binary
+*.ico binary
+*.icns binary
+*.woff2 binary

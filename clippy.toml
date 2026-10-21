@@ -1,0 +1,3 @@
+# unwrap()/expect() bị cấm trong code chạy thật (CLAUDE.md), được phép trong test.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true

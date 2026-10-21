@@ -1,0 +1,12 @@
+[package]
+name = "hub-core"
+description = "Thư viện thuần của Arcturus: schema sự kiện, state machine, policy, lưu trữ"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

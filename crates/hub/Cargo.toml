@@ -1,0 +1,13 @@
+[package]
+name = "hub"
+description = "Daemon Arcturus: nhận hook Claude Code, giữ yêu cầu duyệt, WebSocket cho UI"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+hub-core = { path = "../hub-core" }
+
+[lints]
+workspace = true

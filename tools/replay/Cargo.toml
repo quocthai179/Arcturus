@@ -1,0 +1,12 @@
+[package]
+name = "replay"
+description = "Phát lại fixture hook vào hub Arcturus để test không cần Claude Code thật"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+publish.workspace = true
+
+[dependencies]
+
+[lints]
+workspace = true

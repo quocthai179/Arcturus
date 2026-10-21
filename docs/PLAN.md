@@ -18,7 +18,7 @@ Quy tắc bất biến và định nghĩa "xong" nằm ở `CLAUDE.md` và áp d
 
 ```
 arcturus/
-├── Cargo.toml                    # [workspace] members = crates/*, tools/replay ; resolver = "2"
+├── Cargo.toml                    # [workspace] members = hub-core, hub, tools/replay ; exclude crates/app ; resolver = "2"
 ├── crates/
 │   ├── hub-core/                 # thư viện thuần, không I/O mạng
 │   │   └── src/

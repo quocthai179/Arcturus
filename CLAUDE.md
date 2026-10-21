@@ -39,7 +39,8 @@ cargo run -p hub                      # chạy hub ở 127.0.0.1:7878
 cargo run -p replay -- fixtures/hooks # phát lại sự kiện
 pnpm -C ui install && pnpm -C ui dev  # UI dev server
 pnpm -C ui test
-pnpm -C crates/app tauri dev          # app desktop
+pnpm -C crates/app install && pnpm -C crates/app tauri dev   # app desktop (workspace Cargo riêng)
+cargo clippy --manifest-path crates/app/src-tauri/Cargo.toml --all-targets -- -D warnings
 ```
 
 Nếu repo chưa có các lệnh trên: task T0 trong `.squad/TASKS.md` là scaffold. Làm T0 trước.

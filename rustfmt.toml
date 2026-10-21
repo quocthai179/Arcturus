@@ -1,0 +1,2 @@
+# Mặc định của rustfmt; file này giữ chỗ để mọi làn dùng chung một cấu hình.
+edition = "2021"

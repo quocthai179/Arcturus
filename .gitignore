@@ -5,10 +5,12 @@
 # Rust / Tauri
 target/
 crates/app/src-tauri/target/
+crates/app/src-tauri/gen/
 
 # Node
 node_modules/
 ui/dist/
+*.tsbuildinfo
 
 # Dữ liệu cục bộ của hub
 *.db

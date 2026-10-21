@@ -1,0 +1,23 @@
+[package]
+name = "arcturus-app"
+description = "Ứng dụng desktop Arcturus (Tauri 2): tray, popup Lite, văn phòng 2D. Là client của hub."
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+# Workspace riêng: không nằm trong workspace gốc để CI Rust không cần thư viện webview.
+[workspace]
+
+[dependencies]
+tauri = { version = "2.12.5", features = [] }
+
+[build-dependencies]
+tauri-build = { version = "2.7.4", features = [] }
+
+[lints.rust]
+unsafe_code = "forbid"
+
+[lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"

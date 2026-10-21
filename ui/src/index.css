@@ -1,0 +1,23 @@
+/* Token màu từ docs/PLAN.md phụ lục B. */
+:root {
+  --bg: #111318;
+  --surface: #1a1d24;
+  --text: #e8eaf0;
+  --muted: #a3a9b8;
+  color-scheme: dark;
+  font-family: system-ui, sans-serif;
+}
+
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+}
+
+.app {
+  padding: 16px;
+}
+
+.app p {
+  color: var(--muted);
+}

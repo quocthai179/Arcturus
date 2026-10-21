@@ -1,0 +1,19 @@
+[workspace]
+# crates/app (Tauri) có workspace riêng trong crates/app/src-tauri: giữ `cargo test --workspace` nhẹ và chạy được
+# trên CI không có thư viện webview.
+members = ["crates/hub-core", "crates/hub", "tools/replay"]
+exclude = ["crates/app"]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+publish = false
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+unwrap_used = "deny"
+expect_used = "deny"
