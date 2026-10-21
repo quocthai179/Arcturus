@@ -1,0 +1,225 @@
+{
+  "hooks": {
+    "PermissionRequest": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/permission",
+            "timeout": 120,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "UserPromptSubmit": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStart": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "SubagentStop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "StopFailure": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 2,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ],
+    "PreCompact": [
+      {
+        "hooks": [
+          {
+            "type": "http",
+            "url": "http://127.0.0.1:7879/hooks/event",
+            "timeout": 3,
+            "headers": {
+              "Authorization": "Bearer $ARCTURUS_TOKEN"
+            },
+            "allowedEnvVars": [
+              "ARCTURUS_TOKEN"
+            ]
+          }
+        ]
+      }
+    ]
+  }
+}

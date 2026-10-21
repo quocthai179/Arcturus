@@ -1,0 +1,31 @@
+{
+  "cwd": "D:\\code\\Arcturus\\lab",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PermissionRequest",
+  "permission_mode": "default",
+  "permission_suggestions": [
+    {
+      "destination": "session",
+      "directories": [
+        "D:\\code\\Arcturus\\lab"
+      ],
+      "type": "addDirectories"
+    },
+    {
+      "destination": "session",
+      "mode": "acceptEdits",
+      "type": "setMode"
+    }
+  ],
+  "prompt_id": "b4a6de8d-5149-40dc-ab93-d5e775b65230",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus-lab\\cd99a479-bb9f-4c58-8793-d22374df884e\\scratchpad",
+  "session_id": "cd99a479-bb9f-4c58-8793-d22374df884e",
+  "tool_input": {
+    "command": "touch q1-marker2.txt",
+    "description": "Create empty marker file"
+  },
+  "tool_name": "Bash",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\D--code-Arcturus-lab\\cd99a479-bb9f-4c58-8793-d22374df884e.jsonl"
+}

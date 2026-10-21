@@ -1,0 +1,10 @@
+{
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "Use the Agent tool to launch one general-purpose subagent. Tell the subagent to: read notes.txt with the Read tool, then run the bash command: echo from-subagent. After the subagent finishes, reply DONE.",
+  "prompt_id": "a0551dbf-10eb-4f9c-a6e0-d93465230caa",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\2f94bab2-268b-4fee-8c16-85d2f027d1ec\\scratchpad",
+  "session_id": "2f94bab2-268b-4fee-8c16-85d2f027d1ec",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\2f94bab2-268b-4fee-8c16-85d2f027d1ec.jsonl"
+}

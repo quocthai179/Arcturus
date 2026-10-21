@@ -1,0 +1,16 @@
+{
+  "background_tasks": [],
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "Stop",
+  "last_assistant_message": "I didn't run it, so `marker-p.txt` wasn't created. The `touch marker-p.txt` command needs your approval: Claude Code asks before any shell command creates, changes or removes files in the working directory. This session is non-interactive, so there was no way to give that approval.\n\nTo get the file, either:\n- run the command in an interactive session and approve the prompt, or\n- add a permission rule that allows it, such as `Bash(touch:*)` in `.claude/settings.json`.",
+  "permission_mode": "default",
+  "prompt_id": "03a32603-6991-4263-a2df-547c6f6719fb",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8e15576d-ed85-4f20-9e5e-bb5c3e406586\\scratchpad",
+  "session_crons": [],
+  "session_id": "8e15576d-ed85-4f20-9e5e-bb5c3e406586",
+  "stop_hook_active": false,
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8e15576d-ed85-4f20-9e5e-bb5c3e406586.jsonl"
+}

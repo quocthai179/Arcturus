@@ -1,0 +1,10 @@
+{
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "Do these steps exactly, using tools, then reply DONE: 1) Write a file notes.txt containing alpha. 2) Read notes.txt. 3) Edit notes.txt replacing alpha with beta. 4) Run the bash command: echo hook-lab. 5) Run the bash command: ls. 6) Use the Glob tool with pattern *.txt. 7) Use the Grep tool for beta.",
+  "prompt_id": "c73b34ab-41f0-44dd-88ba-a1576e74773b",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8545f558-0446-4a03-8fdc-9be959a11dc4\\scratchpad",
+  "session_id": "8545f558-0446-4a03-8fdc-9be959a11dc4",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8545f558-0446-4a03-8fdc-9be959a11dc4.jsonl"
+}

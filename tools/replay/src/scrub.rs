@@ -46,12 +46,20 @@ impl Scrubber {
             if !h.is_empty() {
                 let back = h.replace('/', "\\");
                 let fwd = h.replace('\\', "/");
+                // Claude Code đặt tên thư mục dự án bằng cách thay mọi ký tự không phải chữ/số trong
+                // đường dẫn bằng `-` (ví dụ `C--Users-PC-code`): dạng này cũng lộ tên người dùng.
+                let slug: String = h
+                    .chars()
+                    .map(|c| if c.is_ascii_alphanumeric() { c } else { '-' })
+                    .collect();
                 let windows = has_drive_letter(h);
                 if windows {
                     homes.push((back, "C:\\Users\\user"));
                     homes.push((fwd, "C:/Users/user"));
+                    homes.push((slug, "C--Users-user"));
                 } else {
                     homes.push((fwd, "/home/user"));
+                    homes.push((slug, "-home-user"));
                 }
             }
         }
@@ -178,6 +186,25 @@ mod tests {
             "C:/Users/user/.claude/projects/p/abc.jsonl"
         );
         assert_eq!(v["tool_input"]["command"], "cat C:\\Users\\user\\notes.txt");
+    }
+
+    #[test]
+    fn home_slug_in_project_dir_replaced() {
+        let v = scrubbed(
+            Some("C:\\Users\\PC"),
+            &[],
+            json!({ "transcript_path": "C:\\Users\\PC\\.claude\\projects\\C--Users-PC-AppData-x\\s.jsonl" }),
+        );
+        assert_eq!(
+            v["transcript_path"],
+            "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-x\\s.jsonl"
+        );
+        let v = scrubbed(
+            Some("/home/thai"),
+            &[],
+            json!({ "p": "/home/thai/.claude/projects/-home-thai-x/s.jsonl" }),
+        );
+        assert_eq!(v["p"], "/home/user/.claude/projects/-home-user-x/s.jsonl");
     }
 
     #[test]

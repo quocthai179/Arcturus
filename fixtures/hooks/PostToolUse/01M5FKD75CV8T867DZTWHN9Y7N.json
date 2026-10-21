@@ -1,0 +1,27 @@
+{
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "duration_ms": 26,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "c73b34ab-41f0-44dd-88ba-a1576e74773b",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8545f558-0446-4a03-8fdc-9be959a11dc4\\scratchpad",
+  "session_id": "8545f558-0446-4a03-8fdc-9be959a11dc4",
+  "tool_input": {
+    "content": "alpha",
+    "file_path": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox\\notes.txt"
+  },
+  "tool_name": "Write",
+  "tool_response": {
+    "content": "alpha",
+    "filePath": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox\\notes.txt",
+    "originalFile": null,
+    "structuredPatch": [],
+    "type": "create",
+    "userModified": false
+  },
+  "tool_use_id": "toolu_017T5twnpTd4NQKK89yqMUVJ",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8545f558-0446-4a03-8fdc-9be959a11dc4.jsonl"
+}

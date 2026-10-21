@@ -1,0 +1,10 @@
+{
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "Use the Agent tool to launch one general-purpose subagent. Tell the subagent to run exactly the bash command: touch sub-marker.txt — and to report whether it succeeded. Do not run it yourself. Then reply DONE.",
+  "prompt_id": "ca364c0e-e8fb-45a8-afd3-1755588e2696",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\9c54cd61-5d7c-462e-a393-5dd3147e8957\\scratchpad",
+  "session_id": "9c54cd61-5d7c-462e-a393-5dd3147e8957",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\9c54cd61-5d7c-462e-a393-5dd3147e8957.jsonl"
+}

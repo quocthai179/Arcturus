@@ -13,7 +13,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | ID · YouTrack | Làn | Task | Phụ thuộc | Ước lượng | Trạng thái |
 |---|---|---|---|---|---|
 | T0 · ARC-21 | main | Scaffold: Cargo workspace (`hub-core`, `hub`, `replay`), Tauri 2 trong `crates/app`, `ui/` Vite+React+TS, CI chạy fmt/clippy/test | — | 2 | review |
-| T1 · ARC-22 | main | Hook lab: hub "ghi băng" tối giản nhận mọi hook và lưu JSON thô; ghi fixture từ 3–4 phiên thật; trả lời Q1–Q4 trong HOOK_FINDINGS.md | T0 | 2 | todo |
+| T1 · ARC-22 | main | Hook lab: hub "ghi băng" tối giản nhận mọi hook và lưu JSON thô; ghi fixture từ 3–4 phiên thật; trả lời Q1–Q4 trong HOOK_FINDINGS.md | T0 | 2 | doing |
 | T2 · ARC-23 | main | Chốt `schema.rs` (Event v1) + chuẩn hóa từ JSON hook, test với toàn bộ fixture | T1 | 1 | todo |
 
 **Tiêu chí chấp nhận**
@@ -46,6 +46,18 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - T8: danger list có test cho từng mẫu (kể cả biến thể như `rm -fr`, `git push -f`, có khoảng trắng/ký tự ẩn); không mẫu nào trong danh sách có thể bị tự allow.
 - T12: popup mở ≤300 ms; đóng popup thì webview bị hủy (RSS app giảm về mức Lite).
 - T13: tab ẩn thì không còn frame nào được vẽ (kiểm bằng performance profiler).
+
+**Ghi chú từ T1** (bằng chứng ở `docs/HOOK_FINDINGS.md`)
+- T2: tên trường subagent là `agent_id` + `agent_type` (Q4); `PermissionRequest` không có `tool_use_id` (Q3).
+- T3: terminal hiện hộp thoại **song song** với hub (Q1), nên người dùng có thể trả lời ở terminal trước. Cần cách dọn
+  yêu cầu đã được trả lời ở nơi khác (ví dụ sự kiện kế tiếp của cùng `session_id` + `agent_id` thì hủy pending) và thử
+  Q1b (Claude Code có đóng kết nối HTTP không).
+- T4: hook http cho `SessionStart` không bắn (F1): tạo agent từ sự kiện đầu tiên của một `session_id` lạ, không chờ
+  SessionStart.
+- T12: Q1 = không treo → không cần nút "Trả về terminal" theo điều kiện ở PLAN T12; thẻ duyệt nên ghi rõ "cũng đang hỏi
+  trong terminal".
+- T18: `hooks/arcturus-dogfood.json` phải đổi `SessionStart` sang hook `type: "command"` gọi `curl` (F1); hook http
+  hiện tại sẽ lặng lẽ không gửi gì. Chế độ `auto` không sinh `PermissionRequest` (F2).
 
 ## Giai đoạn C — dogfood và mốc v0 (tuần 6)
 

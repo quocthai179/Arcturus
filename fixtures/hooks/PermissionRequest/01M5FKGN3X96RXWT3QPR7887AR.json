@@ -1,0 +1,31 @@
+{
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PermissionRequest",
+  "permission_mode": "default",
+  "permission_suggestions": [
+    {
+      "destination": "session",
+      "directories": [
+        "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox"
+      ],
+      "type": "addDirectories"
+    },
+    {
+      "destination": "session",
+      "mode": "acceptEdits",
+      "type": "setMode"
+    }
+  ],
+  "prompt_id": "03a32603-6991-4263-a2df-547c6f6719fb",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8e15576d-ed85-4f20-9e5e-bb5c3e406586\\scratchpad",
+  "session_id": "8e15576d-ed85-4f20-9e5e-bb5c3e406586",
+  "tool_input": {
+    "command": "touch marker-p.txt",
+    "description": "Create empty marker file"
+  },
+  "tool_name": "Bash",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8e15576d-ed85-4f20-9e5e-bb5c3e406586.jsonl"
+}

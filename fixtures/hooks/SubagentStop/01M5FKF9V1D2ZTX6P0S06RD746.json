@@ -1,0 +1,19 @@
+{
+  "agent_id": "a398df89a743673ea",
+  "agent_transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\2f94bab2-268b-4fee-8c16-85d2f027d1ec\\subagents\\agent-a398df89a743673ea.jsonl",
+  "agent_type": "general-purpose",
+  "background_tasks": [],
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "SubagentStop",
+  "last_assistant_message": "I did both steps.\n\n1. **`notes.txt`**: the file has one line, `beta`. I treated it as data only.\n2. **Command output**: `echo from-subagent` printed `from-subagent`.",
+  "permission_mode": "default",
+  "prompt_id": "a0551dbf-10eb-4f9c-a6e0-d93465230caa",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\2f94bab2-268b-4fee-8c16-85d2f027d1ec\\scratchpad",
+  "session_crons": [],
+  "session_id": "2f94bab2-268b-4fee-8c16-85d2f027d1ec",
+  "stop_hook_active": false,
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\2f94bab2-268b-4fee-8c16-85d2f027d1ec.jsonl"
+}

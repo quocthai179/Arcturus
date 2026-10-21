@@ -32,8 +32,8 @@ enum Command {
         /// Thư mục home cần thay (mặc định USERPROFILE hoặc HOME).
         #[arg(long)]
         home: Option<String>,
-        /// Biến môi trường chứa bí mật cần xóa theo giá trị (lặp được).
-        #[arg(long = "secret-env", default_value = "ARCTURUS_TOKEN")]
+        /// Biến môi trường chứa giá trị cần xóa (lặp được). Mặc định: token hub và tên máy.
+        #[arg(long = "secret-env", default_values_t = ["ARCTURUS_TOKEN".to_owned(), "COMPUTERNAME".to_owned(), "HOSTNAME".to_owned()])]
         secret_env: Vec<String>,
     },
 }
@@ -151,6 +151,57 @@ mod tests {
         ));
         std::fs::create_dir_all(&d).unwrap();
         d
+    }
+
+    /// Kiểm bộ fixture đã commit: tên thư mục khớp `hook_event_name`, đủ số lượng, home đã được scrub.
+    #[test]
+    fn committed_fixtures_are_consistent_and_scrubbed() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../fixtures/hooks");
+        let files = json_files(&root).unwrap();
+        assert!(files.len() >= 30, "T1 cần ≥30 fixture, có {}", files.len());
+        for rel in &files {
+            let text = std::fs::read_to_string(root.join(rel)).unwrap();
+            let v: serde_json::Value = serde_json::from_str(&text).unwrap();
+            let dir = rel
+                .components()
+                .next()
+                .unwrap()
+                .as_os_str()
+                .to_string_lossy();
+            assert_eq!(v["hook_event_name"], *dir, "{rel:?}");
+            let mut strings = Vec::new();
+            collect_strings(&v, &mut strings);
+            for s in strings {
+                for pat in ["\\Users\\", "/Users/", "C--Users-", "/home/"] {
+                    for (i, _) in s.match_indices(pat) {
+                        assert!(
+                            s[i + pat.len()..].starts_with("user"),
+                            "{rel:?}: đường dẫn home chưa scrub: {s}"
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    fn collect_strings<'a>(v: &'a serde_json::Value, out: &mut Vec<&'a str>) {
+        match v {
+            serde_json::Value::String(s) => out.push(s),
+            serde_json::Value::Array(a) => a.iter().for_each(|x| collect_strings(x, out)),
+            serde_json::Value::Object(m) => m.values().for_each(|x| collect_strings(x, out)),
+            _ => {}
+        }
+    }
+
+    #[test]
+    fn scrub_redacts_token_and_hostname_by_default() {
+        let cli = Cli::try_parse_from(["replay", "scrub", "in", "out"]).unwrap();
+        let Some(Command::Scrub { secret_env, .. }) = cli.command else {
+            panic!("phải là lệnh scrub");
+        };
+        for var in ["ARCTURUS_TOKEN", "COMPUTERNAME", "HOSTNAME"] {
+            assert!(secret_env.iter().any(|v| v == var), "thiếu {var}");
+        }
     }
 
     #[test]

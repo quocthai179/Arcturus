@@ -1,0 +1,84 @@
+{
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "duration_ms": 5557,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "ca364c0e-e8fb-45a8-afd3-1755588e2696",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\9c54cd61-5d7c-462e-a393-5dd3147e8957\\scratchpad",
+  "session_id": "9c54cd61-5d7c-462e-a393-5dd3147e8957",
+  "tool_input": {
+    "description": "Touch marker file",
+    "prompt": "Run exactly this bash command using the Bash tool, in the current working directory (C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox): touch sub-marker.txt\n\nDo not run anything else. Report whether it succeeded (exit status and any output/error).",
+    "run_in_background": false,
+    "subagent_type": "general-purpose"
+  },
+  "tool_name": "Agent",
+  "tool_response": {
+    "agentId": "ad7e4b71226dc3e83",
+    "agentType": "general-purpose",
+    "canContinueAgent": true,
+    "content": [
+      {
+        "text": "The command did not run. `touch sub-marker.txt` was blocked before it started, so there is no exit status and no output.\n\nThe harness returned this error: \"touch in '...\\lab-sandbox\\sub-marker.txt' needs approval. The path is inside the working directories for this session ... and Claude Code asks before a shell command creates, changes or removes files there.\"\n\nThis session is non-interactive, so the approval prompt couldn't be shown. `sub-marker.txt` was not created. I didn't retry or try any other way to create it.",
+        "type": "text"
+      }
+    ],
+    "harnessNoteCount": 0,
+    "harnessSectionHash": "d80e74a12cd55d14",
+    "harnessTailCount": 0,
+    "prompt": "Run exactly this bash command using the Bash tool, in the current working directory (C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox): touch sub-marker.txt\n\nDo not run anything else. Report whether it succeeded (exit status and any output/error).",
+    "resolvedModel": "claude-opus-5-5",
+    "status": "completed",
+    "toolStats": {
+      "bashCount": 1,
+      "editFileCount": 0,
+      "linesAdded": 0,
+      "linesRemoved": 0,
+      "otherToolCount": 0,
+      "readCount": 0,
+      "searchCount": 0
+    },
+    "totalDurationMs": 5555,
+    "totalTokens": 42436,
+    "totalToolUseCount": 1,
+    "usage": {
+      "cache_creation": {
+        "ephemeral_1h_input_tokens": 0,
+        "ephemeral_5m_input_tokens": 3058
+      },
+      "cache_creation_input_tokens": 3058,
+      "cache_read_input_tokens": 39191,
+      "fallback_credit": null,
+      "inference_geo": "global",
+      "input_tokens": 2,
+      "iterations": [
+        {
+          "cache_creation": {
+            "ephemeral_1h_input_tokens": 0,
+            "ephemeral_5m_input_tokens": 3058
+          },
+          "cache_creation_input_tokens": 3058,
+          "cache_read_input_tokens": 39191,
+          "input_tokens": 2,
+          "output_tokens": 185,
+          "type": "message"
+        }
+      ],
+      "output_tokens": 185,
+      "output_tokens_details": {
+        "thinking_tokens": 16
+      },
+      "server_tool_use": {
+        "web_fetch_requests": 0,
+        "web_search_requests": 0
+      },
+      "service_tier": "standard",
+      "speed": "standard"
+    }
+  },
+  "tool_use_id": "toolu_01DHsSpb4DRgHXVaAZBuVqdh",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\9c54cd61-5d7c-462e-a393-5dd3147e8957.jsonl"
+}

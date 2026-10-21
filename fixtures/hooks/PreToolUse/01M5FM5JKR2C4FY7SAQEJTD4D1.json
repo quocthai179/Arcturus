@@ -1,0 +1,18 @@
+{
+  "cwd": "D:\\code\\Arcturus\\lab",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "auto",
+  "prompt_id": "7a064d64-59f6-4af8-bc82-6a05e82bf5bb",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus-lab\\3017fd99-5cb8-45a5-afd1-0a01af51ba19\\scratchpad",
+  "session_id": "3017fd99-5cb8-45a5-afd1-0a01af51ba19",
+  "tool_input": {
+    "command": "touch q1-marker.txt",
+    "description": "Create empty marker file"
+  },
+  "tool_name": "Bash",
+  "tool_use_id": "toolu_01A8F2Bm2cVcGjW1wwcLU8gM",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\D--code-Arcturus-lab\\3017fd99-5cb8-45a5-afd1-0a01af51ba19.jsonl"
+}

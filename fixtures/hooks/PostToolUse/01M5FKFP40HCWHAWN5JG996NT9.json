@@ -1,0 +1,26 @@
+{
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "duration_ms": 1146,
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PostToolUse",
+  "permission_mode": "default",
+  "prompt_id": "01e35a23-8219-46eb-a4f8-93c7e97f9fe7",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\6258cddb-6f7c-4daa-a576-7c8fa9820a0e\\scratchpad",
+  "session_id": "6258cddb-6f7c-4daa-a576-7c8fa9820a0e",
+  "tool_input": {
+    "command": "hostname",
+    "description": "Print the machine hostname"
+  },
+  "tool_name": "Bash",
+  "tool_response": {
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false,
+    "stderr": "",
+    "stdout": "<redacted>"
+  },
+  "tool_use_id": "toolu_01UM3kTfComvfFiePHcu8XNW",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\6258cddb-6f7c-4daa-a576-7c8fa9820a0e.jsonl"
+}

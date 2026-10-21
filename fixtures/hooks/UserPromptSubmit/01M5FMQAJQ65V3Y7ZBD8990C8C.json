@@ -1,0 +1,10 @@
+{
+  "cwd": "D:\\code\\Arcturus\\lab",
+  "hook_event_name": "UserPromptSubmit",
+  "permission_mode": "default",
+  "prompt": "Run exactly this bash command once: touch q1-marker2.txt",
+  "prompt_id": "b4a6de8d-5149-40dc-ab93-d5e775b65230",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus-lab\\cd99a479-bb9f-4c58-8793-d22374df884e\\scratchpad",
+  "session_id": "cd99a479-bb9f-4c58-8793-d22374df884e",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\D--code-Arcturus-lab\\cd99a479-bb9f-4c58-8793-d22374df884e.jsonl"
+}

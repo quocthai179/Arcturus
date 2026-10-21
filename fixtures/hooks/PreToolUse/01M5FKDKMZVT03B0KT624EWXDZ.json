@@ -1,0 +1,17 @@
+{
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
+  "effort": {
+    "level": "medium"
+  },
+  "hook_event_name": "PreToolUse",
+  "permission_mode": "default",
+  "prompt_id": "c73b34ab-41f0-44dd-88ba-a1576e74773b",
+  "scratchpad_dir": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8545f558-0446-4a03-8fdc-9be959a11dc4\\scratchpad",
+  "session_id": "8545f558-0446-4a03-8fdc-9be959a11dc4",
+  "tool_input": {
+    "pattern": "beta"
+  },
+  "tool_name": "Grep",
+  "tool_use_id": "toolu_01QtwXQcuWKNK8ryXijVKwva",
+  "transcript_path": "C:\\Users\\user\\.claude\\projects\\C--Users-user-AppData-Local-Temp-claude-D--code-Arcturus-562daadd-3e0d-4a7c-87c2-bfaa725338a8-scratchpad-lab-sandbox\\8545f558-0446-4a03-8fdc-9be959a11dc4.jsonl"
+}
