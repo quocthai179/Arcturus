@@ -304,7 +304,7 @@ pub struct ApprovalView {
     pub request_id: RequestId, pub agent_id: AgentId, pub agent_name: String,
     pub tool: String, pub command_original: String,   // tool_input gốc dạng chuỗi, KHÔNG rút gọn
     pub command_normalized: String,                    // sau normalize
-    pub danger_spans: Vec<(usize, usize)>,             // vị trí cần tô sáng trong command_normalized
+    pub danger_spans: Vec<(usize, usize)>,             // [start, end) theo chỉ số ký tự Unicode trong command_normalized
     pub risk: Risk, pub reversible: bool,
     pub group_key: String, pub created_at: OffsetDateTime, pub deadline_at: OffsetDateTime,
 }
@@ -315,6 +315,13 @@ pub struct Palette { pub hair: String, pub outfit: String, pub acc: String }
 
 Quy tắc: client mới kết nối luôn nhận `Snapshot` trước. Mọi thay đổi sau đó là delta. Client không bao giờ phải
 tự suy luận trạng thái.
+
+**Đơn vị của `danger_spans`**: khoảng nửa mở `[start, end)` tính bằng chỉ số **ký tự Unicode** (scalar value,
+tức code point) trong `command_normalized`; không phải byte UTF-8, không phải UTF-16 code unit.
+- Hub: `regex::Match` trả offset byte → đổi bằng `text[..byte].chars().count()` trước khi gửi.
+- UI: cắt bằng `Array.from(command_normalized).slice(start, end)`, không dùng `String.prototype.slice`.
+- Lý do: lệnh có thể chứa đường dẫn tiếng Việt, emoji hoặc ký tự ngoài BMP; byte và UTF-16 lệch nhau ở các ký tự này
+  và làm tô sáng sai chỗ.
 
 ### 3.5 SQLite (`hub-core/src/store.rs`)
 
@@ -511,10 +518,11 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 3. state.apply(ev)  -> agent chuyển waiting/approval ; broadcast
 4. ctx = ApprovalCtx { agent, tool, tool_input, cwd }
 5. outcome = policy.decide(&ctx)                    // T3: Policy giả luôn trả AskUser{risk: Medium}
+6. nếu team.paused và outcome là AutoAllow: đổi thành AskUser{risk đã tính}
+   // tạm dừng tắt mọi AutoAllow (T14) và phải chạy TRƯỚC khi trả allow; tạm dừng không tự từ chối
    - AutoAllow{reason}  -> ghi approvals(status=allowed, decided_by=policy) -> trả allow
-   - AskUser{risk,…}    -> tiếp bước 6
+   - AskUser{risk,…}    -> tiếp bước 7
    (Policy KHÔNG có nhánh AutoDeny trong v0.)
-6. nếu team.paused: vẫn xếp hàng (tạm dừng không tự từ chối)
 7. tạo RequestId, ApprovalView, (tx, rx) = oneshot; pending.insert; store approvals(pending); broadcast ApprovalRequested
 8. match timeout(cfg.approval_timeout, rx):
      Ok(Ok(Decided{Allow,..})) -> trả allow
@@ -623,14 +631,16 @@ Medium    git push (không force), migration, ghi file trong workspace, lệnh k
 Low       chỉ đọc trong workspace, chạy test/lint/build (npm test, pnpm test, cargo test, cargo clippy, pytest, go test)
 ```
 `reversible = true` chỉ khi Low hoặc là migration có lệnh rollback được khai trong config (v0: chỉ Low).
-`danger_spans`: vị trí khớp trong `Normalized.text` để UI tô sáng.
+`danger_spans`: vị trí khớp trong `Normalized.text` để UI tô sáng, theo đơn vị ký tự Unicode (§3.4).
 
 **Bất biến:** `Policy::decide` với risk Critical **luôn** trả `AskUser`. Viết test thuộc tính (property-style, lặp
 qua toàn bộ bảng mẫu × mọi trust grant giả và batch rule giả).
 
 **Test bắt buộc:** mỗi luật ≥3 ca khớp và ≥2 ca không khớp (ví dụ `rm -r dir` không phải critical, `git push origin main` là medium);
 `zero_width_inside_rm_still_detected`; `bidi_override_flagged`; `quoted_semicolon_not_split`;
-`critical_never_auto_allowed_with_any_grant_or_batch`.
+`critical_never_auto_allowed_with_any_grant_or_batch`;
+`danger_spans_are_char_indices_with_non_ascii` (ví dụ `echo "thư mục" && rm -rf đầu-ra`: ký tự ngoài ASCII nằm **trước** chỗ khớp, nên span theo byte và theo
+ký tự khác nhau; test khẳng định span theo ký tự).
 
 ### T9 · ARC-30 · Gom nhóm và batch rule
 
@@ -685,12 +695,12 @@ interface CharacterProps { mood: Mood; width?: number; hair?: string; outfit?: s
 - Token cho webview: app đọc `ARCTURUS_TOKEN` và truyền qua `invoke` (không nhúng vào URL công khai).
 
 **UI (`views/LitePopup.tsx`)**
-- Danh sách `ApprovalCard`: nhân vật 40px, tên, nguồn/máy, `command_original` trong khối mono có tô sáng `danger_spans`, nhãn rủi ro (chữ + màu; không dùng màu đơn thuần), thời gian chờ.
+- Danh sách `ApprovalCard`: nhân vật 40px, tên, nguồn/máy, `command_normalized` (đầy đủ, không rút gọn; quy tắc bất biến 3) trong khối mono có tô sáng `danger_spans` (đơn vị ký tự Unicode, §3.4), nhãn rủi ro (chữ + màu; không dùng màu đơn thuần), thời gian chờ.
 - Nhóm cùng `group_key` có ≥2 yêu cầu → hiện "Duyệt cả N" (ẩn với Critical).
 - Phím: ↑/↓ chọn, Enter đồng ý, Esc từ chối (trong popup, không toàn cục).
 - Nếu Q1 = terminal bị treo: thêm nút "Trả về terminal" gửi `ReturnToTerminal` (hub trả `{}` ngay).
 
-**Test:** reducer áp snapshot/delta đúng; `ApprovalCard` hiển thị lệnh gốc và tô sáng; phím tắt gửi đúng `ClientMsg`;
+**Test:** reducer áp snapshot/delta đúng; `ApprovalCard` hiển thị `command_normalized` và tô sáng đúng vị trí, kể cả lệnh có ký tự ngoài ASCII/ngoài BMP; phím tắt gửi đúng `ClientMsg`;
 nhóm Critical không có nút duyệt gộp. Đo tay: popup mở ≤300 ms, RSS app sau khi đóng ≤60 MB (ghi vào BUDGET.md).
 
 ### T13 · ARC-34 · Văn phòng 2D

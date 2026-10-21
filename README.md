@@ -1,15 +1,18 @@
-# Arcturus — bộ quy trình Claude Code
+# Arcturus — buồng lái trưởng nhóm cho đội AI agent
 
-Chép toàn bộ thư mục này vào gốc repo mới, commit, rồi làm theo `docs/WORKFLOW.md`.
+Hub nhẹ chạy trên máy bạn, gom sự kiện từ nhiều phiên Claude Code để bạn thấy ai đang làm gì, ai đang giơ tay xin
+duyệt, rồi duyệt/từ chối từ một chỗ. Mỗi agent là một nhân vật 2D. Chi tiết: `CLAUDE.md`, `docs/ARCHITECTURE.md`.
 
-## Có gì trong bộ này
+**Trạng thái:** v0 đang ở giai đoạn kế hoạch, chưa có code. Việc đầu tiên là task T0 (scaffold) trong `.squad/TASKS.md`.
+
+## Tài liệu và cấu hình
 
 | File | Dành cho | Vai trò |
 |---|---|---|
 | `CLAUDE.md` | Claude | Bối cảnh dự án, 7 quy tắc bất biến, vùng sở hữu từng làn, định nghĩa "xong" |
 | `docs/WORKFLOW.md` | Bạn | Quy trình 3 giai đoạn, nhịp một ngày, câu lệnh mẫu |
 | `docs/PLAN.md` | Claude | Kế hoạch triển khai: cấu trúc module, kiểu dữ liệu, endpoint, schema DB, thuật toán policy, test bắt buộc cho từng task T0–T21, SVG nhân vật |
-| `docs/ARCHITECTURE.md` | Cả hai | Thành phần, luồng duyệt, schema sự kiện, bảng SQLite |
+| `docs/ARCHITECTURE.md` | Cả hai | Thành phần, luồng duyệt, schema sự kiện, bảng SQLite (tóm tắt; đặc tả ở `docs/PLAN.md` §3) |
 | `docs/BUDGET.md` | Cả hai | Ngân sách RAM/CPU, kịch bản đo, lịch sử đo |
 | `docs/HOOK_FINDINGS.md` | Cả hai | 10 câu hỏi về hook cần kiểm chứng trước khi build |
 | `.squad/TASKS.md` | Cả hai | 22 task v0 chia theo làn, có phụ thuộc và tiêu chí chấp nhận |
@@ -29,11 +32,11 @@ Agent dùng chung như `code-reviewer`, `security-auditor`, `qa-engineer` lấy 
 ## Bắt đầu nhanh
 
 ```bash
-mkdir arcturus && cd arcturus && git init
-# chép bộ này vào đây
+git clone <url-repo-arcturus> arcturus && cd arcturus
 cp arcturus.example.toml arcturus.toml
 chmod +x scripts/start-lanes.sh
-git add . && git commit -m "chore: claude code workflow"
 claude
 > /next-task T0
 ```
+
+Quy trình đầy đủ: `docs/WORKFLOW.md`.

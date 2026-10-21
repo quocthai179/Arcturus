@@ -67,3 +67,4 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 ## Nhật ký
 
 <!-- YYYY-MM-DD · làn · xong gì · vướng gì -->
+- 2026-10-21 · main · Đồng bộ tài liệu (nhánh `docs-sync-contracts`, chưa có ticket ARC): xóa `PLAN.md` trùng ở gốc; ARCHITECTURE.md khớp PLAN.md §3 (Event, SQLite, tên thông điệp WS, thứ tự policy, glob persona); T3 tạm dừng tắt AutoAllow trước khi trả allow; `danger_spans` theo chỉ số ký tự Unicode (§3.4, T8, T12); README/WORKFLOW bỏ cách nói "chép bộ quy trình". · Vướng: chưa có ticket ARC cho việc này.

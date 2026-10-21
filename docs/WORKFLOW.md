@@ -5,9 +5,8 @@ Tài liệu cho người (bạn, trưởng nhóm). Claude đọc CLAUDE.md; bạ
 ## 0. Chuẩn bị một lần
 
 ```bash
-mkdir arcturus && cd arcturus && git init
-# chép toàn bộ bộ quy trình này vào gốc repo
-git add . && git commit -m "chore: claude code workflow"
+git clone <url-repo-arcturus> arcturus && cd arcturus
+cp arcturus.example.toml arcturus.toml   # gán persona cho từng làn (đã gitignore)
 claude            # chạy một lần để chấp nhận workspace trust
 ```
 
