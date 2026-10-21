@@ -1,0 +1,26 @@
+---
+source: crates/hub-core/tests/hook_fixtures.rs
+expression: ev
+---
+{
+  "v": 1,
+  "id": "[evt_id]",
+  "ts": "2026-10-21T09:15:02Z",
+  "host": "laptop",
+  "source": "claude-code",
+  "session_id": "8545f558-0446-4a03-8fdc-9be959a11dc4",
+  "agent": {
+    "id": "agt_8545f558-0446-4a03-8fdc-9be959a11dc4",
+    "parent_id": null,
+    "kind": "session"
+  },
+  "type": "tool.pre",
+  "activity": "typing",
+  "tool": {
+    "name": "Write",
+    "summary": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox\\notes.txt",
+    "risk": null
+  },
+  "approval": null,
+  "metrics": null
+}

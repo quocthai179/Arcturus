@@ -14,7 +14,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 |---|---|---|---|---|---|
 | T0 · ARC-21 | main | Scaffold: Cargo workspace (`hub-core`, `hub`, `replay`), Tauri 2 trong `crates/app`, `ui/` Vite+React+TS, CI chạy fmt/clippy/test | — | 2 | review |
 | T1 · ARC-22 | main | Hook lab: hub "ghi băng" tối giản nhận mọi hook và lưu JSON thô; ghi fixture từ 3–4 phiên thật; trả lời Q1–Q4 trong HOOK_FINDINGS.md | T0 | 2 | review |
-| T2 · ARC-23 | main | Chốt `schema.rs` (Event v1) + chuẩn hóa từ JSON hook, test với toàn bộ fixture | T1 | 1 | todo |
+| T2 · ARC-23 | main | Chốt `schema.rs` (Event v1) + chuẩn hóa từ JSON hook, test với toàn bộ fixture | T1 | 1 | review |
 
 **Tiêu chí chấp nhận**
 - T0: `cargo test --workspace`, `pnpm -C ui test`, `pnpm -C crates/app tauri dev` đều chạy được; CI xanh.
@@ -87,3 +87,4 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - 2026-10-21 · main · Chốt 7 câu hỏi thiết kế (người duyệt): bỏ `raw_ref`; tự allow cần ack ghi store; pause ở T5; cắt nội dung Edit/Write + `GET /approvals/{id}/input`; nhãn ký tự ẩn; `match_cwd` trên Windows; tạm dừng tắt đếm ngược, `Decide.origin`, `DecidedBy::Countdown`. · Vướng: không.
 - 2026-10-21 · main · T0/ARC-21 scaffold (nhánh `arc-21-scaffold`): workspace Cargo (hub-core, hub, replay) + 4 test; `ui/` React 19, Vite 8, TS 7 strict, Vitest 5 + 1 test; Tauri 2.12 trong `crates/app` (workspace Cargo riêng, mở cửa sổ `ui/` qua Vite); CI GitHub Actions; `.gitattributes` ép LF. Mọi lệnh trong CLAUDE.md chạy được trên Windows. · Vướng: CI chưa chạy (chưa push); app không build trên CI (thiếu webkit trên Ubuntu); `hub`/`replay` mới là khung (T1, T15); chưa đo ngân sách vì hub chưa có server.
 - 2026-10-22 · main · T1/ARC-22 hook lab (nhánh `arc-22-hook-lab`, tách từ `arc-21-scaffold`): `hub --record`, `replay scrub`; 64 fixture thật đã scrub; Q1–Q4 có kết quả (Q1 không treo, Q4 có `agent_id`); phát hiện F1 hook http không bắn cho SessionStart; security audit: không có mức cao, đã sửa finding 1–6; budget: hub idle 8,3 MB, CPU 0%. 43 test xanh. · Vướng: Q1b (trả lời ở terminal khi hub đang giữ) chưa thử; p99 ingest 18 ms đo bằng curl chưa đại diện; cần duyệt đề xuất sửa CLAUDE.md "Kiến thức đã kiểm chứng".
+- 2026-10-22 · main · T2/ARC-23 schema Event v1 (nhánh `arc-23-schema`): `hub-core/src/schema.rs` theo PLAN §3.1 (không `raw_ref`, có `DecidedBy::Countdown`), `hook.rs` (HookInput chịu lỗi, `to_event`, `tool_summary`, `activity_for_tool`); 64/64 fixture parse thành Event, 11 snapshot insta; PLAN §3.1/§3.2 cập nhật 4 chỗ lệch đã duyệt (agent_id/agent_type, approval do T3 điền, summary ≤200 ký tự, mọi sự kiện có agent_id là agent con). 62 test xanh. · Vướng: không. Chưa đo ngân sách (hub chưa dùng hub-core lúc chạy).

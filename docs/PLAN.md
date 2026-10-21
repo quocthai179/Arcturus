@@ -124,7 +124,7 @@ pub struct Event {
     pub kind: EventKind,
     pub activity: Option<Activity>,
     pub tool: Option<ToolInfo>,
-    pub approval: Option<ApprovalInfo>,
+    pub approval: Option<ApprovalInfo>, // hub điền khi tạo yêu cầu duyệt (T3); hook::to_event luôn để None
     pub metrics: Option<Metrics>,
     // Không có raw_ref: JSON hook gốc nằm ở cột events.raw_json, tra theo `id` (§3.5).
 }
@@ -174,7 +174,7 @@ pub enum Risk { Low, Medium, High, Critical }
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ToolInfo {
     pub name: String,               // "Bash", "Edit", "Read", …
-    pub summary: String,            // lệnh/đường dẫn đã chuẩn hóa, ≤200 ký tự cho UI
+    pub summary: String,            // lệnh/đường dẫn rút gọn, ≤200 ký tự Unicode (cắt kèm "…") cho UI; không dùng để duyệt
     pub risk: Option<Risk>,         // chỉ policy được điền
 }
 
@@ -213,7 +213,8 @@ impl HookInput {
     pub fn cwd(&self) -> Option<&str>;         // "cwd"
     pub fn tool_name(&self) -> Option<&str>;   // "tool_name"
     pub fn tool_input(&self) -> Option<&serde_json::Value>; // "tool_input"
-    pub fn agent_id(&self) -> Option<&str>;    // trường subagent (tên trường chốt ở Q4)
+    pub fn agent_id(&self) -> Option<&str>;    // "agent_id": có ở MỌI sự kiện của subagent (Q4, T1)
+    pub fn agent_type(&self) -> Option<&str>;  // "agent_type", ví dụ "general-purpose" (Q4)
 }
 
 pub fn to_event(input: &HookInput, host: &str, now: OffsetDateTime) -> Event;
@@ -221,7 +222,11 @@ pub fn tool_summary(tool_name: &str, tool_input: &serde_json::Value) -> String;
 ```
 
 - Thiếu `session_id`: dùng `"unknown"`, vẫn tạo Event (ghi `tracing::warn`).
-- `tool_summary`: Bash → `command`; Edit/Write/Read → `file_path`; Grep/Glob → `pattern`; khác → tên tool.
+- `tool_summary`: Bash → `command`; Edit/Write/Read/MultiEdit → `file_path`; NotebookEdit → `notebook_path`;
+  Grep/Glob → `pattern`; khác hoặc thiếu trường → tên tool. Cắt còn ≤200 ký tự Unicode.
+- `agent`: có `agent_id` → `AgentRef{id: "agt_<session>_<agent_id>", parent_id: "agt_<session>", kind: subagent}`;
+  không có → `AgentRef{id: "agt_<session>", parent_id: None, kind: session}`.
+- `approval` luôn `None`, `metrics` luôn `None` (hook chưa gửi dữ liệu context), `tool.risk` luôn `None`.
 - Ánh xạ `hook_event_name` → `EventKind`:
 
 | hook_event_name | EventKind | activity |

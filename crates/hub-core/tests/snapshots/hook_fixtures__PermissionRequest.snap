@@ -1,0 +1,26 @@
+---
+source: crates/hub-core/tests/hook_fixtures.rs
+expression: ev
+---
+{
+  "v": 1,
+  "id": "[evt_id]",
+  "ts": "2026-10-21T09:15:02Z",
+  "host": "laptop",
+  "source": "claude-code",
+  "session_id": "8e15576d-ed85-4f20-9e5e-bb5c3e406586",
+  "agent": {
+    "id": "agt_8e15576d-ed85-4f20-9e5e-bb5c3e406586",
+    "parent_id": null,
+    "kind": "session"
+  },
+  "type": "approval.requested",
+  "activity": "waiting",
+  "tool": {
+    "name": "Bash",
+    "summary": "touch marker-p.txt",
+    "risk": null
+  },
+  "approval": null,
+  "metrics": null
+}

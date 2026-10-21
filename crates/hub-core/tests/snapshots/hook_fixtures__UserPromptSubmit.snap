@@ -1,0 +1,22 @@
+---
+source: crates/hub-core/tests/hook_fixtures.rs
+expression: ev
+---
+{
+  "v": 1,
+  "id": "[evt_id]",
+  "ts": "2026-10-21T09:15:02Z",
+  "host": "laptop",
+  "source": "claude-code",
+  "session_id": "aca4fc68-18bf-4320-97f5-6167e8414b1d",
+  "agent": {
+    "id": "agt_aca4fc68-18bf-4320-97f5-6167e8414b1d",
+    "parent_id": null,
+    "kind": "session"
+  },
+  "type": "prompt.submitted",
+  "activity": "thinking",
+  "tool": null,
+  "approval": null,
+  "metrics": null
+}
