@@ -8,10 +8,14 @@
 //!   `⟨U+XXXX×N⟩`). `Suspicion::HiddenChars` dựa trên mọi chuỗi trong `tool_input` gốc, không chỉ phần hiển thị.
 //!   T8 thay bằng normalize đầy đủ theo thuộc tính Unicode (subshell, eval, encoded, `danger_spans`, `risk`).
 
-use hub_core::protocol::{ApprovalView, Suspicion};
+use hub_core::protocol::{ApprovalView, HandoffView, Suspicion};
 use serde_json::{Map, Value};
+use time::OffsetDateTime;
 
 use crate::approvals::PendingApproval;
+
+/// Số ký tự xem trước ở đầu và ở cuối thẻ "duyệt trong terminal".
+pub const PREVIEW_CHARS: usize = 300;
 
 /// Tối đa ký tự Unicode cho mỗi trường nội dung trong thẻ duyệt.
 pub const CONTENT_MAX_CHARS: usize = 2000;
@@ -48,6 +52,65 @@ pub fn approval_view(p: &PendingApproval, agent_name: &str) -> ApprovalView {
         countdown_ms: p
             .countdown
             .map(|c| u64::try_from(c.as_millis()).unwrap_or(u64::MAX)),
+    }
+}
+
+/// Nội dung thẻ sẽ hiện đầy đủ (không cắt) cho tool này, để đo ngưỡng "quá dài". `None` với Edit/Write/MultiEdit/
+/// NotebookEdit: nội dung của chúng được cắt kèm `truncated` và bản đầy đủ (quyết định L1 ở T5b).
+pub fn untruncated_text(tool: &str, tool_input: &Value) -> Option<String> {
+    if TRUNCATED_TOOLS.contains(&tool) {
+        None
+    } else {
+        Some(command_text(tool, tool_input).0)
+    }
+}
+
+/// Quá `max_bytes` byte UTF-8 hoặc quá `max_lines` dòng.
+pub fn is_too_long(text: &str, max_bytes: usize, max_lines: usize) -> bool {
+    text.len() > max_bytes || text.lines().count() > max_lines
+}
+
+/// Thẻ báo cho lệnh trả về terminal. Cờ tính trên `text` đầy đủ và `tool_input` gốc; xem trước đã hiện ký tự ẩn.
+pub fn handoff_view(
+    handoff_id: &str,
+    p: &PendingApproval,
+    agent_name: &str,
+    text: &str,
+    now: OffsetDateTime,
+) -> HandoffView {
+    let total = text.chars().count();
+    let (head, tail) = if total <= 2 * PREVIEW_CHARS {
+        (text.to_owned(), String::new())
+    } else {
+        (
+            text.chars().take(PREVIEW_CHARS).collect(),
+            text.chars().skip(total - PREVIEW_CHARS).collect(),
+        )
+    };
+    let hidden = text.chars().any(is_hidden) || value_has_hidden(&p.tool_input);
+    let who = if agent_name.is_empty() {
+        "agent"
+    } else {
+        agent_name
+    };
+    HandoffView {
+        handoff_id: handoff_id.to_owned(),
+        agent_id: p.agent_id.clone(),
+        agent_name: agent_name.to_owned(),
+        tool: p.tool.clone(),
+        bytes: text.len(),
+        lines: text.lines().count(),
+        preview_head: escape_hidden(&head).0,
+        preview_tail: escape_hidden(&tail).0,
+        suspicions: if hidden {
+            vec![Suspicion::HiddenChars]
+        } else {
+            Vec::new()
+        },
+        message: format!(
+            "Lệnh quá dài để duyệt ở đây — hãy mở terminal của {who} để xem đủ và quyết định."
+        ),
+        created_at: now,
     }
 }
 
@@ -387,6 +450,65 @@ mod tests {
         assert_eq!(v.suspicions, vec![Suspicion::HiddenChars]);
         let v = approval_view(&pending("Read", json!({ "file_path": "/a" })), "K");
         assert!(v.suspicions.is_empty());
+    }
+
+    #[test]
+    fn too_long_threshold_boundaries() {
+        let at_bytes = "a".repeat(4096);
+        assert!(!is_too_long(&at_bytes, 4096, 50));
+        assert!(is_too_long(&format!("{at_bytes}a"), 4096, 50));
+        // Byte UTF-8, không phải ký tự: 2.048 ký tự "é" = 4.096 byte (đạt), thêm một là vượt.
+        let accents = "é".repeat(2048);
+        assert_eq!(accents.len(), 4096);
+        assert!(!is_too_long(&accents, 4096, 50));
+        assert!(is_too_long(&format!("{accents}é"), 4096, 50));
+        let fifty = vec!["x"; 50].join("\n");
+        assert!(!is_too_long(&fifty, 4096, 50));
+        assert!(
+            !is_too_long(&format!("{fifty}\n"), 4096, 50),
+            "xuống dòng cuối không thêm dòng"
+        );
+        assert!(is_too_long(&format!("{fifty}\nx"), 4096, 50));
+    }
+
+    #[test]
+    fn untruncated_text_excludes_edit_tools() {
+        assert_eq!(
+            untruncated_text("Bash", &json!({ "command": "ls" })).as_deref(),
+            Some("ls")
+        );
+        assert!(untruncated_text("mcp__x", &json!({ "a": 1 })).is_some());
+        for t in ["Edit", "Write", "MultiEdit", "NotebookEdit"] {
+            assert_eq!(untruncated_text(t, &json!({ "content": "x" })), None, "{t}");
+        }
+    }
+
+    #[test]
+    fn handoff_preview_and_flags_on_full_text() {
+        // Ký tự ẩn nằm giữa, ngoài phần xem trước: vẫn phải gắn cờ.
+        let cmd = format!("{}\u{202E}{}", "a".repeat(5000), "b".repeat(5000));
+        let p = pending("Bash", json!({ "command": cmd }));
+        let h = handoff_view(
+            "hof_1",
+            &p,
+            "Khoa",
+            &cmd,
+            datetime!(2026-10-22 09:00:00 UTC),
+        );
+        assert_eq!(h.preview_head, "a".repeat(PREVIEW_CHARS));
+        assert_eq!(h.preview_tail, "b".repeat(PREVIEW_CHARS));
+        assert_eq!(h.suspicions, vec![Suspicion::HiddenChars]);
+        assert_eq!(h.bytes, cmd.len());
+        assert_eq!(h.lines, 1);
+        assert!(h.message.contains("terminal của Khoa"));
+
+        // Lệnh ngắn hơn 2 phần xem trước (vượt ngưỡng do số dòng): hiện hết ở `preview_head`, ký tự ẩn đã escape.
+        let short = format!("{}\u{200B}", "l\n".repeat(60));
+        let h = handoff_view("hof_2", &p, "", &short, datetime!(2026-10-22 09:00:00 UTC));
+        assert!(h.preview_head.ends_with("⟨U+200B⟩"));
+        assert_eq!(h.preview_tail, "");
+        assert_eq!(h.lines, 61);
+        assert!(h.message.contains("terminal của agent"));
     }
 
     #[test]

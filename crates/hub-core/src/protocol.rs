@@ -33,6 +33,36 @@ pub enum ServerMsg {
     TeamUpdated {
         team: TeamView,
     },
+    /// Lệnh quá dài để duyệt trên thẻ: hub đã trả `{}`, người quyết định trong terminal. Thẻ chỉ để báo, không có nút
+    /// duyệt (quy tắc bất biến 3, T5b).
+    ApprovalHandedOff {
+        handoff: HandoffView,
+    },
+    /// Thẻ báo "duyệt trong terminal" hết hiệu lực (agent đã sang bước khác hoặc phiên kết thúc).
+    HandoffCleared {
+        handoff_id: String,
+    },
+}
+
+/// Thẻ báo cho lệnh trả về terminal. Không phải thẻ duyệt: UI không được hiện nút Allow/Deny cho nó.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct HandoffView {
+    /// `"hof_<ulid>"`; không bao giờ là `request_id` của yêu cầu đang chờ.
+    pub handoff_id: String,
+    pub agent_id: AgentId,
+    pub agent_name: String,
+    pub tool: String,
+    /// Kích thước của lệnh đầy đủ (byte UTF-8) và số dòng.
+    pub bytes: usize,
+    pub lines: usize,
+    /// Đầu và cuối lệnh (khoảng 300 ký tự mỗi phần), đã hiện ký tự ẩn như `command_normalized`.
+    pub preview_head: String,
+    pub preview_tail: String,
+    /// Tính trên lệnh **đầy đủ**, không chỉ phần xem trước.
+    pub suspicions: Vec<Suspicion>,
+    pub message: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
 }
 
 /// Thẻ duyệt (§3.4). `command_normalized` là cơ sở duyệt (quy tắc bất biến 3), không phải tóm tắt.
@@ -222,6 +252,40 @@ mod tests {
         assert_eq!(
             serde_json::to_value(DecideOrigin::Countdown).unwrap(),
             json!("countdown")
+        );
+    }
+
+    #[test]
+    fn handoff_messages_wire_format() {
+        let m = ServerMsg::ApprovalHandedOff {
+            handoff: HandoffView {
+                handoff_id: "hof_1".to_owned(),
+                agent_id: "agt_s1".to_owned(),
+                agent_name: "Khoa".to_owned(),
+                tool: "Bash".to_owned(),
+                bytes: 5000,
+                lines: 80,
+                preview_head: "head".to_owned(),
+                preview_tail: "tail".to_owned(),
+                suspicions: vec![Suspicion::HiddenChars],
+                message: "m".to_owned(),
+                created_at: datetime!(2026-10-22 09:00:00 UTC),
+            },
+        };
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["t"], "approval_handed_off");
+        assert_eq!(v["handoff"]["bytes"], 5000);
+        assert!(
+            v["handoff"].get("request_id").is_none(),
+            "không có id để Decide"
+        );
+        assert_eq!(serde_json::from_value::<ServerMsg>(v).unwrap(), m);
+        assert_eq!(
+            serde_json::to_value(ServerMsg::HandoffCleared {
+                handoff_id: "hof_1".to_owned()
+            })
+            .unwrap(),
+            json!({"t": "handoff_cleared", "handoff_id": "hof_1"})
         );
     }
 }

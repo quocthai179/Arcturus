@@ -9,8 +9,11 @@ use serde::Deserialize;
 use crate::persona::{PersonaBook, PersonaSpec};
 use crate::protocol::Palette;
 
-/// Hook `PermissionRequest` hết giờ ở 120 s; hub phải trả trước đó (khớp `--approval-timeout` của T3).
+/// Hook `PermissionRequest` hết giờ ở 120 s; hub phải trả trước đó.
 pub const MAX_APPROVAL_TIMEOUT_SECS: u64 = 115;
+
+/// Ngưỡng "lệnh quá dài để duyệt trên thẻ" không vượt quá giới hạn body của hook (1 MB).
+pub const MAX_HANDOFF_THRESHOLD: usize = 1024 * 1024;
 
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(deny_unknown_fields, default)]
@@ -29,6 +32,10 @@ pub struct HubConfig {
     pub approval_timeout_secs: u64,
     pub reconcile_interval_secs: u64,
     pub event_ttl_days: u32,
+    /// Lệnh dài hơn chừng này byte UTF-8 (hoặc nhiều dòng hơn `handoff_max_lines`) không duyệt trên thẻ mà trả về
+    /// terminal (quy tắc bất biến 3, T5b).
+    pub handoff_max_bytes: usize,
+    pub handoff_max_lines: usize,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -52,6 +59,8 @@ impl Default for HubConfig {
             approval_timeout_secs: 110,
             reconcile_interval_secs: 30,
             event_ttl_days: 30,
+            handoff_max_bytes: 4096,
+            handoff_max_lines: 50,
         }
     }
 }
@@ -154,6 +163,17 @@ impl Config {
                     self.hub.approval_timeout_secs
                 ),
             ));
+        }
+        for (field, value) in [
+            ("hub.handoff_max_bytes", self.hub.handoff_max_bytes),
+            ("hub.handoff_max_lines", self.hub.handoff_max_lines),
+        ] {
+            if !(1..=MAX_HANDOFF_THRESHOLD).contains(&value) {
+                return Err(invalid(
+                    field,
+                    format!("{value} ngoài khoảng 1–{MAX_HANDOFF_THRESHOLD}"),
+                ));
+            }
         }
         for (field, value) in [
             (
@@ -272,6 +292,31 @@ mod tests {
                 assert!(message.contains("main_roster_mx"), "{message}");
             }
             other => panic!("cần lỗi Parse, có {other:?}"),
+        }
+    }
+
+    #[test]
+    fn handoff_thresholds_validated() {
+        let cfg = Config::default();
+        assert_eq!(
+            (cfg.hub.handoff_max_bytes, cfg.hub.handoff_max_lines),
+            (4096, 50)
+        );
+        let cfg = parse("[hub]\nhandoff_max_bytes = 100\nhandoff_max_lines = 3\n").unwrap();
+        assert_eq!(
+            (cfg.hub.handoff_max_bytes, cfg.hub.handoff_max_lines),
+            (100, 3)
+        );
+        for (key, v) in [
+            ("handoff_max_bytes", 0),
+            ("handoff_max_lines", 0),
+            ("handoff_max_bytes", MAX_HANDOFF_THRESHOLD + 1),
+        ] {
+            let err = parse(&format!("[hub]\n{key} = {v}\n")).unwrap_err();
+            assert!(
+                matches!(&err, ConfigError::Invalid { field, .. } if field == &format!("hub.{key}")),
+                "{key}={v}: {err}"
+            );
         }
     }
 

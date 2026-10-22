@@ -8,21 +8,22 @@
 //! đi qua kênh broadcast `ServerMsg` chung của hub (T5): thẻ duyệt là `ApprovalView` đã cắt nội dung, `tool_input`
 //! đầy đủ chỉ nằm trong hàng đợi (lấy qua [`Approvals::tool_input`]). Trạng thái agent do `crate::hub` cập nhật.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::fmt;
 use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use hub_core::hook::HookInput;
+use hub_core::persona::fnv1a;
 pub use hub_core::protocol::DecideOrigin;
-use hub_core::protocol::{ApprovalView, ServerMsg};
+use hub_core::protocol::{ApprovalView, HandoffView, ServerMsg};
 use hub_core::schema::{AgentId, DecidedBy, Decision, Event, EventKind, RequestId, Risk};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, oneshot};
 use tokio::time::Instant;
 
-use crate::view::approval_view;
+use crate::view::{approval_view, handoff_view, is_too_long, untruncated_text};
 
 /// Hub tự trả `{}` sau chừng này, trước timeout 120 s của hook (`hooks/arcturus-dogfood.json`).
 pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(110);
@@ -33,6 +34,13 @@ pub const DEFAULT_STORE_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 /// Giới hạn yêu cầu đang giữ: toàn hub và mỗi phiên (audit T3, finding 2).
 pub const DEFAULT_MAX_PENDING: usize = 64;
 pub const DEFAULT_MAX_PENDING_PER_SESSION: usize = 16;
+
+/// Ngưỡng mặc định "quá dài để duyệt trên thẻ" (khớp `Config::default()`).
+pub const DEFAULT_HANDOFF_MAX_BYTES: usize = 4096;
+pub const DEFAULT_HANDOFF_MAX_LINES: usize = 50;
+
+/// Tối đa thẻ "duyệt trong terminal" giữ cùng lúc.
+pub const MAX_HANDOFFS: usize = 64;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Policy tạm (T8 thay bằng `hub-core/src/policy/`)
@@ -87,6 +95,8 @@ pub enum ApprovalStatus {
     Denied,
     TimedOut,
     Cancelled,
+    /// Lệnh quá dài: trả về terminal, hub không quyết định (T5b, L2).
+    HandedOff,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -172,6 +182,10 @@ pub enum PermissionOutcome {
     NotPermissionRequest,
     /// Hàng đợi đầy ([`ApprovalsConfig::max_pending`]): không giữ, để terminal hỏi.
     Overloaded,
+    /// Lệnh quá dài để duyệt trên thẻ: không giữ, người duyệt trong terminal (quy tắc bất biến 3).
+    HandedOff {
+        handoff_id: String,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -189,6 +203,8 @@ pub enum DecideResult {
     Resolved,
     Expired,
     Held(HeldReason),
+    /// Id là thẻ "duyệt trong terminal": hub không bao giờ quyết định cho nó.
+    HandedOff,
 }
 
 /// JSON trả cho Claude Code. Đây là chỗ duy nhất sinh `allow`; mọi nhánh khác là `{}`.
@@ -213,8 +229,14 @@ pub fn response_for(outcome: &PermissionOutcome) -> Value {
         PermissionOutcome::Cancelled
         | PermissionOutcome::TimedOut
         | PermissionOutcome::NotPermissionRequest
-        | PermissionOutcome::Overloaded => json!({}),
+        | PermissionOutcome::Overloaded
+        | PermissionOutcome::HandedOff { .. } => json!({}),
     }
+}
+
+/// Hash ổn định của `tool_input` (serde_json sắp khóa object theo thứ tự, nên cùng nội dung cho cùng chuỗi).
+fn input_hash(tool_input: &Value) -> u64 {
+    fnv1a(&tool_input.to_string())
 }
 
 fn new_request_id() -> RequestId {
@@ -241,6 +263,9 @@ pub struct ApprovalsConfig {
     /// Tối đa yêu cầu đang giữ (giữ RAM trong ngân sách, quy tắc bất biến 6). Vượt thì trả `{}` ngay.
     pub max_pending: usize,
     pub max_pending_per_session: usize,
+    /// Ngưỡng trả về terminal (`[hub] handoff_max_bytes`, `handoff_max_lines`).
+    pub handoff_max_bytes: usize,
+    pub handoff_max_lines: usize,
 }
 
 impl Default for ApprovalsConfig {
@@ -250,8 +275,19 @@ impl Default for ApprovalsConfig {
             store_ack_timeout: DEFAULT_STORE_ACK_TIMEOUT,
             max_pending: DEFAULT_MAX_PENDING,
             max_pending_per_session: DEFAULT_MAX_PENDING_PER_SESSION,
+            handoff_max_bytes: DEFAULT_HANDOFF_MAX_BYTES,
+            handoff_max_lines: DEFAULT_HANDOFF_MAX_LINES,
         }
     }
+}
+
+/// Thẻ "duyệt trong terminal" đang hiện. Không giữ `tool_input` (có thể tới 1 MB), chỉ giữ hash để khớp `PostToolUse`.
+struct Handoff {
+    view: HandoffView,
+    session_id: String,
+    agent_id: AgentId,
+    tool: String,
+    input_hash: u64,
 }
 
 struct Entry {
@@ -265,6 +301,8 @@ struct Entry {
 #[derive(Default)]
 struct Inner {
     entries: HashMap<RequestId, Entry>,
+    /// Cũ trước; tối đa [`MAX_HANDOFFS`], đầy thì bỏ thẻ cũ nhất.
+    handoffs: VecDeque<Handoff>,
     paused: bool,
     closed: bool,
 }
@@ -377,6 +415,18 @@ impl Approvals {
             .unwrap_or(Value::Null);
         drop(raw);
 
+        // Lệnh quá dài để duyệt trên thẻ: trả về terminal TRƯỚC khi hỏi policy (không bao giờ tự duyệt, không đếm
+        // ngược, không cắt rồi cho duyệt; quy tắc bất biến 3).
+        if let Some(text) = untruncated_text(&tool, &tool_input) {
+            if is_too_long(
+                &text,
+                self.cfg.handoff_max_bytes,
+                self.cfg.handoff_max_lines,
+            ) {
+                return self.hand_off(ev, tool, tool_input, cwd, &text, agent_name);
+            }
+        }
+
         let outcome = self.policy.decide(&ApprovalCtx {
             agent_id: &ev.agent.id,
             tool: &tool,
@@ -487,6 +537,81 @@ impl Approvals {
         outcome
     }
 
+    /// Trả lệnh quá dài về terminal: không giữ yêu cầu, ghi `handed_off`, broadcast thẻ báo (không có nút duyệt).
+    fn hand_off(
+        &self,
+        ev: &Event,
+        tool: String,
+        tool_input: Value,
+        cwd: String,
+        text: &str,
+        agent_name: &str,
+    ) -> PermissionOutcome {
+        let handoff_id = format!("hof_{}", ulid::Ulid::generate());
+        let info = PendingApproval {
+            request_id: handoff_id.clone(),
+            session_id: ev.session_id.clone(),
+            agent_id: ev.agent.id.clone(),
+            tool,
+            tool_input,
+            cwd,
+            risk: Risk::Medium,
+            created_at: ev.ts,
+            deadline_at: ev.ts,
+            countdown: None,
+        };
+        // Dựng thẻ và hash ngoài khóa; `tool_input` được nhả ngay sau đó.
+        let view = handoff_view(&handoff_id, &info, agent_name, text, ev.ts);
+        let input_hash = input_hash(&info.tool_input);
+        let rec = self.record_of(&info, ApprovalStatus::HandedOff, None);
+        tracing::info!(
+            handoff_id = %handoff_id,
+            session = ?info.session_id,
+            tool = ?info.tool,
+            bytes = view.bytes,
+            lines = view.lines,
+            "lệnh quá dài để duyệt trên thẻ, trả {{}} để duyệt trong terminal"
+        );
+        let PendingApproval {
+            session_id,
+            agent_id,
+            tool,
+            ..
+        } = info;
+        let mut inner = self.lock();
+        if inner.closed {
+            return PermissionOutcome::Cancelled;
+        }
+        drop(self.store.record(rec));
+        while inner.handoffs.len() >= MAX_HANDOFFS {
+            if let Some(old) = inner.handoffs.pop_front() {
+                let _ = self.tx.send(ServerMsg::HandoffCleared {
+                    handoff_id: old.view.handoff_id,
+                });
+            }
+        }
+        let _ = self.tx.send(ServerMsg::ApprovalHandedOff {
+            handoff: view.clone(),
+        });
+        inner.handoffs.push_back(Handoff {
+            view,
+            session_id,
+            agent_id,
+            tool,
+            input_hash,
+        });
+        PermissionOutcome::HandedOff { handoff_id }
+    }
+
+    /// Thẻ "duyệt trong terminal" đang hiện, cũ trước (cho `Snapshot`).
+    pub fn handoffs(&self) -> Vec<HandoffView> {
+        self.lock()
+            .handoffs
+            .iter()
+            .map(|h| h.view.clone())
+            .collect()
+    }
+
     /// Ghi bản ghi `allowed/policy` và chờ xác nhận. `false` khi lỗi, kênh đóng, quá giờ, hoặc đội vừa tạm dừng;
     /// khi đó ghi thêm `cancelled` cho cùng id (bản `allowed` có thể vẫn được commit muộn; T6 giữ thứ tự ghi).
     async fn auto_allow_recorded(&self, request_id: &str, ev: &Event, tool: &str) -> bool {
@@ -552,6 +677,17 @@ impl Approvals {
         let entry = {
             let mut inner = self.lock();
             let Some(e) = inner.entries.get(request_id) else {
+                if inner
+                    .handoffs
+                    .iter()
+                    .any(|h| h.view.handoff_id == request_id)
+                {
+                    tracing::warn!(
+                        request_id,
+                        "Decide cho thẻ duyệt-trong-terminal: bỏ qua, hub không quyết định lệnh này"
+                    );
+                    return DecideResult::HandedOff;
+                }
                 return DecideResult::Expired;
             };
             if origin == DecideOrigin::Countdown {
@@ -619,29 +755,57 @@ impl Approvals {
     ///   `PostToolUse`/`PostToolUseFailure` của đúng tool và `tool_input` đó, hoặc `Stop`, `StopFailure`,
     ///   `UserPromptSubmit`, `SubagentStop`. `Notification` (tới sau `PermissionRequest`) và sự kiện của tool khác
     ///   chạy song song không hủy.
+    ///
+    /// Cùng luật đó xóa thẻ "duyệt trong terminal" (`HandoffCleared`); số trả về gồm cả thẻ bị xóa.
     pub fn on_event(&self, ev: &Event, input: &HookInput) -> usize {
         match ev.kind {
             EventKind::SessionEnded => {
                 self.cancel_where(|p| p.session_id == ev.session_id, "phiên kết thúc")
+                    + self.clear_handoffs_where(|h| h.session_id == ev.session_id)
             }
             EventKind::ToolPost | EventKind::ToolFailed => {
                 let (Some(tool), Some(tool_input)) = (input.tool_name(), input.tool_input()) else {
                     return 0;
                 };
+                let hash = input_hash(tool_input);
                 self.cancel_where(
                     |p| p.agent_id == ev.agent.id && p.tool == tool && &p.tool_input == tool_input,
                     "tool đã chạy xong: yêu cầu được trả lời ở nơi khác",
-                )
+                ) + self.clear_handoffs_where(|h| {
+                    h.agent_id == ev.agent.id && h.tool == tool && h.input_hash == hash
+                })
             }
             EventKind::TurnStopped
             | EventKind::TurnFailed
             | EventKind::PromptSubmitted
-            | EventKind::SubagentStopped => self.cancel_where(
-                |p| p.agent_id == ev.agent.id,
-                "agent đã sang bước khác: yêu cầu được trả lời ở nơi khác",
-            ),
+            | EventKind::SubagentStopped => {
+                self.cancel_where(
+                    |p| p.agent_id == ev.agent.id,
+                    "agent đã sang bước khác: yêu cầu được trả lời ở nơi khác",
+                ) + self.clear_handoffs_where(|h| h.agent_id == ev.agent.id)
+            }
             _ => 0,
         }
+    }
+
+    fn clear_handoffs_where(&self, pred: impl Fn(&Handoff) -> bool) -> usize {
+        let mut inner = self.lock();
+        let before = inner.handoffs.len();
+        let mut cleared = Vec::new();
+        inner.handoffs.retain(|h| {
+            if pred(h) {
+                cleared.push(h.view.handoff_id.clone());
+                false
+            } else {
+                true
+            }
+        });
+        // Gửi dưới khóa, như `ApprovalHandedOff`: thẻ không thể "sống lại" sau khi đã xóa.
+        for handoff_id in cleared {
+            tracing::info!(%handoff_id, "xóa thẻ duyệt-trong-terminal");
+            let _ = self.tx.send(ServerMsg::HandoffCleared { handoff_id });
+        }
+        before - inner.handoffs.len()
     }
 
     /// Tắt hub: trả `{}` cho mọi yêu cầu đang chờ, từ chối yêu cầu mới. Trả số yêu cầu bị hủy.

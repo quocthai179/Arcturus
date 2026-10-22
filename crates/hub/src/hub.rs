@@ -50,6 +50,8 @@ impl Hub {
     pub fn start(cfg: Config, personas: PersonaBook, host: String) -> (Arc<Hub>, HubTasks) {
         let approvals_cfg = ApprovalsConfig {
             timeout: Duration::from_secs(cfg.hub.approval_timeout_secs),
+            handoff_max_bytes: cfg.hub.handoff_max_bytes,
+            handoff_max_lines: cfg.hub.handoff_max_lines,
             ..ApprovalsConfig::default()
         };
         Self::start_with(
@@ -128,13 +130,16 @@ impl Hub {
         self.update_wake();
 
         let outcome = self.approvals.request(input, &ev, &name).await;
-        if matches!(
-            outcome,
-            PermissionOutcome::Decided(_) | PermissionOutcome::AutoAllowed
-        ) {
-            let msgs = self.lock_state().approval_finished(&ev.agent.id);
-            self.publish(msgs);
-        }
+        let msgs = match outcome {
+            PermissionOutcome::Decided(_) | PermissionOutcome::AutoAllowed => {
+                self.lock_state().approval_finished(&ev.agent.id)
+            }
+            PermissionOutcome::HandedOff { .. } => {
+                self.lock_state().approval_in_terminal(&ev.agent.id)
+            }
+            _ => Vec::new(),
+        };
+        self.publish(msgs);
         outcome
     }
 
