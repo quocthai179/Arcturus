@@ -268,11 +268,13 @@ Bind mặc định `127.0.0.1:7878` (cấu hình được nhưng **từ chối**
 - `--ui-token-stdout` (T5d · ARC-44, F6 biện pháp B1): hub in token UI **đúng một dòng** ra stdout rồi flush, **không ghi
   file**; log chuyển sang stderr. Dành cho app khởi động hub làm tiến trình con và đọc token qua pipe (T12), để agent không
   đọc được token từ đĩa. Xung đột với `--record`, `--ui-token-file`. Mặc định vẫn ghi file tới khi T12 xong.
-- Sàn thời gian duyệt (T5d · ARC-44, F6 biện pháp B4): `decide{allow, origin: user}` tới sớm hơn `min_review_ms` (mặc
-  định 1.000 ms) kể từ lúc thẻ được phát thì bị **giữ lại** (`HeldReason::TooFast`, `feed` "Duyệt quá nhanh: xem lại
-  thẻ rồi bấm lại"), yêu cầu vẫn chờ. Không áp cho `deny` và đếm ngược (đếm ngược tự nó là thời gian chờ có người nhìn
-  thấy). `0` là tắt. Giới hạn đã chấp nhận khi duyệt: script đọc được token chỉ cần chờ là vượt qua; người duyệt nhanh
-  tay sẽ phải bấm lại.
+- Sàn thời gian duyệt (T5d · ARC-44, F6 biện pháp B4): mọi `decide{allow}` (cả `origin: user` lẫn `countdown`) tới sớm
+  hơn `min_review_ms` (mặc định 1.000 ms) kể từ lúc thẻ được **phát** (broadcast `approval_requested`) thì bị **giữ lại**
+  (`HeldReason::TooFast`, `feed` "Duyệt quá nhanh: xem lại thẻ rồi bấm lại"), yêu cầu vẫn chờ. Không áp cho `deny`.
+  `0` là tắt. Đếm ngược cũng phải qua sàn vì `origin: countdown` do client khai, hub không biết có ai nhìn thấy thẻ (audit
+  ARC-44 finding 4). Mọi điều kiện nhận quyết định nằm trong `approvals::allow_gate`; duyệt gộp/batch (T9) phải gọi nó cho
+  từng yêu cầu. Giới hạn đã chấp nhận khi duyệt: script đọc được token chỉ cần chờ là vượt qua; người duyệt nhanh tay sẽ
+  phải bấm lại; thẻ tới UI muộn qua `Snapshot` (popup mở sau) không được sàn bảo vệ, nên UI cũng tính sàn từ lúc hiện thẻ.
 - `/ws`, `/approvals/*`: `Host` phải là `127.0.0.1:<cổng>`, `localhost:<cổng>` hoặc `[::1]:<cổng>` (chặn DNS rebinding);
   `Origin`, nếu có, phải thuộc webview Tauri hoặc Vite dev (`ws::ALLOWED_ORIGINS`). Sai → `403`.
 - So sánh token bằng so sánh thời gian hằng (constant-time).
@@ -906,6 +908,9 @@ interface CharacterProps { mood: Mood; width?: number; hair?: string; outfit?: s
 - Token cho webview: app **khởi động hub** làm tiến trình con với `--ui-token-stdout`, đọc token UI từ dòng đầu stdout
   (không có file token trên đĩa, F6 biện pháp B1), rồi truyền qua `invoke` (không nhúng vào URL công khai). Không dùng
   `ARCTURUS_TOKEN` (token của hook) cho UI. Nếu hub đã chạy sẵn do người dùng tự khởi động: đọc file token như T5b.
+  App phải **liên tục đọc (hoặc chuyển hướng) stderr** của hub: pipe đầy thì log chặn luồng của hub (audit ARC-44
+  finding 5). Đọc stdout bằng pipe thật; thiếu stdout thì hub vẫn báo ghi thành công mà không ai nhận token.
+- UI làm mờ nút Allow trong `min_review_ms` kể từ lúc **hiện** thẻ (kể cả thẻ tới qua `Snapshot`).
 
 **UI (`views/LitePopup.tsx`)**
 - Danh sách `ApprovalCard`: nhân vật 40px, tên, nguồn/máy, `command_normalized` (đầy đủ, không rút gọn; quy tắc bất biến 3) trong khối mono có tô sáng `danger_spans` (đơn vị ký tự Unicode, §3.4), nhãn rủi ro (chữ + màu; không dùng màu đơn thuần), thời gian chờ.

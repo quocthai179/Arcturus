@@ -45,8 +45,8 @@ pub const MAX_TOOL_NAME_BYTES: usize = 256;
 pub const MAX_ID_BYTES: usize = 256;
 pub const MAX_CWD_BYTES: usize = 32 * 1024;
 
-/// Sàn thời gian duyệt (T5d · ARC-44, F6 biện pháp B4): `allow` do người bấm tới sớm hơn chừng này kể từ lúc thẻ hiện
-/// bị giữ lại. Khớp `Config::default()`.
+/// Sàn thời gian duyệt (T5d · ARC-44, F6 biện pháp B4): `allow` tới sớm hơn chừng này kể từ lúc thẻ được phát
+/// (broadcast) bị giữ lại. Khớp `Config::default()`.
 pub const DEFAULT_MIN_REVIEW: Duration = Duration::from_millis(1000);
 
 /// Ngưỡng mặc định "quá dài để duyệt trên thẻ" (khớp `Config::default()`).
@@ -211,7 +211,7 @@ pub enum HeldReason {
     CountdownCannotDeny,
     /// Allow thẻ đã cắt nội dung khi chưa mở bản đầy đủ.
     NotReviewed,
-    /// Allow do người bấm tới sớm hơn [`ApprovalsConfig::min_review`] kể từ lúc thẻ hiện.
+    /// Allow (của người hay đếm ngược) tới sớm hơn [`ApprovalsConfig::min_review`] kể từ lúc thẻ được phát.
     TooFast,
 }
 
@@ -283,7 +283,7 @@ pub struct ApprovalsConfig {
     pub max_pending_per_session: usize,
     /// Trần tổng byte `tool_input` đang giữ (ước lượng bằng [`held_size`]). Vượt thì trả `{}` ngay.
     pub held_input_max_bytes: usize,
-    /// Sàn thời gian duyệt cho `allow` do người bấm (`Duration::ZERO` là tắt). Không áp cho deny và đếm ngược.
+    /// Sàn thời gian duyệt cho mọi `allow`, tính từ lúc thẻ được phát (`Duration::ZERO` là tắt). Không áp cho deny.
     pub min_review: Duration,
     /// Ngưỡng trả về terminal (`[hub] handoff_max_bytes`, `handoff_max_lines`).
     pub handoff_max_bytes: usize,
@@ -952,46 +952,13 @@ impl Approvals {
                 }
                 return DecideResult::Expired;
             };
-            if origin == DecideOrigin::Countdown {
-                let held = if decision != Decision::Allow {
-                    Some(HeldReason::CountdownCannotDeny)
-                } else if inner.paused {
-                    Some(HeldReason::Paused)
-                } else {
-                    match e.info.countdown {
-                        None => Some(HeldReason::NoCountdown),
-                        Some(c) if e.started.elapsed() < c => Some(HeldReason::NotElapsed),
-                        Some(_) => None,
-                    }
-                };
-                if let Some(reason) = held {
-                    tracing::info!(
-                        request_id,
-                        ?reason,
-                        "giữ nguyên yêu cầu: đếm ngược không hợp lệ"
-                    );
-                    return DecideResult::Held(reason);
-                }
-            }
-            // Sàn thời gian duyệt (F6, B4): script đọc được token UI không duyệt được thẻ ngay khi nó vừa hiện, người
-            // dùng không lỡ tay duyệt thẻ vừa bật lên. Chỉ allow của người; deny luôn được nhận.
-            if decision == Decision::Allow
-                && origin == DecideOrigin::User
-                && e.started.elapsed() < self.cfg.min_review
-            {
+            if let Some(reason) = allow_gate(&self.cfg, inner.paused, e, decision, origin) {
                 tracing::info!(
                     request_id,
-                    "giữ nguyên yêu cầu: allow tới sớm hơn sàn thời gian duyệt"
+                    ?reason,
+                    "giữ nguyên yêu cầu: chưa đủ điều kiện để nhận quyết định"
                 );
-                return DecideResult::Held(HeldReason::TooFast);
-            }
-            // Thẻ đã cắt nội dung: chỉ cho allow sau khi bản đầy đủ đã được mở (audit T5b finding 3, bất biến 3).
-            if decision == Decision::Allow && e.view.truncated && !e.reviewed {
-                tracing::info!(
-                    request_id,
-                    "giữ nguyên yêu cầu: allow thẻ đã cắt khi chưa mở bản đầy đủ"
-                );
-                return DecideResult::Held(HeldReason::NotReviewed);
+                return DecideResult::Held(reason);
             }
             match inner.remove_entry(request_id) {
                 Some(e) => e,
@@ -1174,6 +1141,43 @@ impl Approvals {
         // Mutex bị poison chỉ khi một thread panic lúc đang giữ; dữ liệu vẫn nhất quán vì mọi thao tác là đơn bước.
         self.inner.lock().unwrap_or_else(|e| e.into_inner())
     }
+}
+
+/// Mọi điều kiện để một quyết định cho yêu cầu `e` được nhận (audit ARC-44 finding 8). Đường duyệt gộp hay batch (T9)
+/// PHẢI gọi hàm này cho từng yêu cầu. `None`: được nhận; `Some`: giữ nguyên yêu cầu (không bao giờ tính là từ chối).
+fn allow_gate(
+    cfg: &ApprovalsConfig,
+    paused: bool,
+    e: &Entry,
+    decision: Decision,
+    origin: DecideOrigin,
+) -> Option<HeldReason> {
+    if origin == DecideOrigin::Countdown {
+        if decision != Decision::Allow {
+            return Some(HeldReason::CountdownCannotDeny);
+        }
+        if paused {
+            return Some(HeldReason::Paused);
+        }
+        match e.info.countdown {
+            None => return Some(HeldReason::NoCountdown),
+            Some(c) if e.started.elapsed() < c => return Some(HeldReason::NotElapsed),
+            Some(_) => {}
+        }
+    }
+    if decision != Decision::Allow {
+        return None;
+    }
+    // Sàn thời gian duyệt (F6, B4) áp cho MỌI allow, kể cả đếm ngược (audit ARC-44 finding 4): `origin: countdown` do
+    // client khai, hub không biết có ai nhìn thấy thẻ. Deny luôn được nhận.
+    if e.started.elapsed() < cfg.min_review {
+        return Some(HeldReason::TooFast);
+    }
+    // Thẻ đã cắt nội dung: chỉ cho allow sau khi bản đầy đủ đã được mở (audit T5b finding 3, bất biến 3).
+    if e.view.truncated && !e.reviewed {
+        return Some(HeldReason::NotReviewed);
+    }
+    None
 }
 
 /// Hủy yêu cầu nếu future của handler bị drop giữa chừng (client đóng kết nối, Q1b).

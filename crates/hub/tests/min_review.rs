@@ -1,5 +1,5 @@
-//! Sàn thời gian duyệt (T5d · ARC-44, biện pháp B4 cho F6): `allow` do người bấm tới sớm hơn `min_review` kể từ lúc
-//! thẻ hiện bị giữ lại (không tính là từ chối). Mục tiêu: script đọc được token UI không tự duyệt ngay lập tức được, và
+//! Sàn thời gian duyệt (T5d · ARC-44, biện pháp B4 cho F6): mọi `allow` (của người hay đếm ngược) tới sớm hơn
+//! `min_review` kể từ lúc thẻ được phát bị giữ lại (không tính là từ chối). Mục tiêu: script đọc được token UI không tự duyệt ngay lập tức được, và
 //! người dùng không lỡ tay duyệt thẻ vừa bật lên.
 //!
 //! Dùng thời gian thật (thẻ đo bằng `std::time::Instant`), với sàn ngắn để test nhanh.
@@ -156,16 +156,21 @@ async fn min_review_zero_disables_floor() {
 }
 
 #[tokio::test]
-async fn countdown_allow_is_not_subject_to_floor() {
-    // Đếm ngược tự nó đã là thời gian chờ có người nhìn thấy (T10 mức 5); sàn chỉ áp cho allow do người bấm.
-    let (a, mut rx) = approvals(
-        Duration::from_secs(60),
-        Box::new(Countdown(Duration::from_millis(100))),
-    );
+async fn countdown_allow_also_respects_floor() {
+    // `origin: countdown` do client khai (audit ARC-44 finding 4): đếm ngược 100 ms nhưng sàn 300 ms, allow lúc 150 ms
+    // vẫn bị giữ; sau sàn mới được nhận.
+    let (a, mut rx) = approvals(FLOOR, Box::new(Countdown(Duration::from_millis(100))));
     let h = spawn_request(&a, bash_body("s1"));
     let id = next_requested(&mut rx).await;
 
     tokio::time::sleep(Duration::from_millis(150)).await;
+    assert!(matches!(
+        a.decide(&id, Decision::Allow, DecideOrigin::Countdown, None),
+        DecideResult::Held(HeldReason::TooFast)
+    ));
+    assert!(a.pending(&id).is_some());
+
+    tokio::time::sleep(FLOOR).await;
     assert!(matches!(
         a.decide(&id, Decision::Allow, DecideOrigin::Countdown, None),
         DecideResult::Resolved

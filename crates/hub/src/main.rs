@@ -102,6 +102,16 @@ async fn main() -> anyhow::Result<()> {
         let personas = cfg
             .persona_book()
             .context("persona trong cấu hình không hợp lệ")?;
+        // Cấu hình nằm trong thư mục làm việc, agent ghi được workspace thì sửa được (audit ARC-44 finding 7).
+        if cfg.hub.min_review_ms == 0 {
+            tracing::warn!("min_review_ms = 0: tắt sàn thời gian duyệt (F6)");
+        }
+        if cfg.hub.held_input_max_bytes > 32 * 1024 * 1024 {
+            tracing::warn!(
+                held_input_max_bytes = cfg.hub.held_input_max_bytes,
+                "trần byte đang giữ > 32 MiB: hub có thể vượt ngân sách 40 MB (quy tắc bất biến 6)"
+            );
+        }
         let timeout_s = cfg.hub.approval_timeout_secs;
         let n_personas = cfg.personas.len();
         // Token UI riêng (D1): sinh mới, ghi vào file chỉ người dùng đọc được; không bao giờ log giá trị.

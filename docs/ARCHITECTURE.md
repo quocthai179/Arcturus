@@ -168,9 +168,10 @@ tài khoản người dùng (lệnh đã allow sẵn trong settings, hoặc ngư
 - Bash tool thừa hưởng biến môi trường của tiến trình `claude`, nên đọc được `ARCTURUS_TOKEN` (token của hook). Vì vậy
   UI dùng token riêng (D1).
 - File token UI (`<data_dir>/arcturus/ui-token`) cũng đọc được bởi agent như vậy. Giảm rủi ro (T5d · ARC-44):
-  `--ui-token-stdout` để app (T12) nhận token qua pipe, không có file trên đĩa (B1); luật danger `arcturus_ui_token` ở
-  T8 đưa mọi lệnh chạm token hay WebSocket của hub về Critical (B2); sàn thời gian duyệt `min_review_ms` chặn tự duyệt
-  ngay khi thẻ vừa hiện (B4).
+  `--ui-token-stdout` để app (T12) nhận token qua pipe, không có file trên đĩa (B1, đã có; mặc định hub vẫn ghi file
+  tới khi T12 dùng chế độ này); luật danger `arcturus_ui_token` đưa mọi lệnh chạm token hay WebSocket của hub về
+  Critical (B2, **dự kiến ở T8, chưa có**); sàn thời gian duyệt `min_review_ms` chặn tự duyệt ngay khi thẻ vừa được
+  phát, áp cho mọi allow kể cả đếm ngược (B4, đã có).
 - Còn lại: agent đọc được bộ nhớ của tiến trình app/hub cùng tài khoản, hoặc chờ quá sàn thời gian rồi gửi `decide`,
   vẫn có thể tự duyệt. Lớp bảo vệ thật là deny rule trong settings của Claude Code (hook allow không vượt được deny) và
   việc người dùng không allow sẵn lệnh chạy mã tùy ý.
