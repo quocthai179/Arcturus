@@ -47,6 +47,15 @@ impl T {
     }
 
     async fn start_with(policy: Box<dyn Policy>, wcfg: WsConfig) -> T {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        Self::start_on(listener, policy, wcfg).await
+    }
+
+    async fn start_on(
+        listener: tokio::net::TcpListener,
+        policy: Box<dyn Policy>,
+        wcfg: WsConfig,
+    ) -> T {
         let (core, tasks) = Hub::start_with(
             Config::default(),
             PersonaBook::default(),
@@ -55,7 +64,6 @@ impl T {
             policy,
             Box::new(NoStore),
         );
-        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (ui, ws_handle) = ws::router(core.clone(), UI.to_owned(), addr.port(), wcfg);
         let app = hooks::router(core.clone(), HOOK.to_owned()).merge(ui);
@@ -696,9 +704,19 @@ async fn ws_closes_client_that_misses_pings() {
     t.stop().await;
 }
 
+/// Bộ đệm socket nhỏ, cố định cho test client treo: tắt auto-tuning của kernel (Linux loopback tự nâng tới ~4 MB gửi +
+/// ~6 MB nhận), để "client không đọc" làm lệnh ghi của hub bị chặn như nhau trên mọi hệ điều hành.
+const SMALL_SOCKET_BUFFER: u32 = 8 * 1024;
+
 #[tokio::test]
 async fn ws_disconnects_stalled_client() {
-    let t = T::start_with(
+    // Socket nghe với SO_SNDBUF nhỏ: socket được accept thừa hưởng giá trị này.
+    let sock = tokio::net::TcpSocket::new_v4().unwrap();
+    sock.set_send_buffer_size(SMALL_SOCKET_BUFFER).unwrap();
+    sock.bind("127.0.0.1:0".parse().unwrap()).unwrap();
+    let listener = sock.listen(64).unwrap();
+    let t = T::start_on(
+        listener,
         Box::new(AlwaysAsk),
         WsConfig {
             write_timeout: Duration::from_millis(200),
@@ -707,14 +725,50 @@ async fn ws_disconnects_stalled_client() {
         },
     )
     .await;
-    let (_stalled, _) = t.connect().await;
-    assert_eq!(t.ws.clients(), 1);
-    // Mỗi cập nhật mang cwd 4 KB; client không đọc → bộ đệm TCP đầy → ghi quá giờ → bị ngắt.
+
+    // Client treo: SO_RCVBUF nhỏ, không bao giờ đọc sau Snapshot.
+    let client_sock = tokio::net::TcpSocket::new_v4().unwrap();
+    client_sock
+        .set_recv_buffer_size(SMALL_SOCKET_BUFFER)
+        .unwrap();
+    let stream = client_sock.connect(t.addr).await.unwrap();
+    let mut req = format!("ws://{}/ws", t.addr).into_client_request().unwrap();
+    req.headers_mut().insert(
+        "authorization",
+        HeaderValue::from_str(&format!("Bearer {UI}")).unwrap(),
+    );
+    let (_stalled, _) = tokio_tungstenite::client_async(req, stream).await.unwrap();
+
+    // Client đối chứng: đọc liên tục, phải còn kết nối và phải nhận đủ dữ liệu (chứng minh đợt dồn thật sự lớn).
+    let (mut reader, _) = t.connect().await;
+    let reading = tokio::spawn(async move {
+        let mut bytes = 0usize;
+        while let Ok(Some(Ok(m))) =
+            tokio::time::timeout(Duration::from_millis(500), reader.next()).await
+        {
+            if let Message::Text(s) = m {
+                bytes += s.len();
+            }
+        }
+        (bytes, reader)
+    });
+    tokio::time::timeout(WAIT, async {
+        while t.ws.clients() < 2 {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+
+    // Mỗi sự kiện đổi trạng thái nhìn thấy được của agent: vòng chẵn UserPromptSubmit (working), vòng lẻ Stop (done).
+    // (Bản cũ dùng `i % 2` với `i % 100` phiên: mỗi phiên luôn nhận cùng một loại sự kiện, nên cả đợt chỉ sinh 100
+    // cập nhật ~0,4 MB, lọt hết vào bộ đệm loopback của Linux và client treo không bao giờ bị phát hiện.)
     let cwd = format!("D:/{}", "d".repeat(4000));
     let core = t.core.clone();
     tokio::task::spawn_blocking(move || {
-        for i in 0..6000 {
-            let name = if i % 2 == 0 {
+        // ~6,6 MB cập nhật: gấp hàng trăm lần bộ đệm 8 KB cố định ở hai đầu.
+        for i in 0..1500 {
+            let name = if (i / 100) % 2 == 0 {
                 "UserPromptSubmit"
             } else {
                 "Stop"
@@ -726,13 +780,26 @@ async fn ws_disconnects_stalled_client() {
     })
     .await
     .unwrap();
+
     tokio::time::timeout(Duration::from_secs(10), async {
-        while t.ws.clients() > 0 {
+        while t.ws.clients() > 1 {
             tokio::time::sleep(Duration::from_millis(20)).await;
         }
     })
     .await
     .expect("client treo phải bị ngắt");
+    let (bytes, mut reader) = reading.await.unwrap();
+    assert!(
+        bytes > 1024 * 1024,
+        "đợt dồn phải lớn hơn nhiều so với bộ đệm socket: client đọc nhận {bytes} byte"
+    );
+    assert_eq!(t.ws.clients(), 1, "client đang đọc không bị ngắt");
+    send(&mut reader, json!({ "t": "team_pause" })).await;
+    loop {
+        if next_of(&mut reader, &["team_updated"]).await["team"]["paused"] == true {
+            break;
+        }
+    }
     t.stop().await;
 }
 
