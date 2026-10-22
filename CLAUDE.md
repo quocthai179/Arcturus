@@ -124,5 +124,8 @@ messaging) hoặc ghi vào mục "Blocked" trong `.squad/TASKS.md`.
   - Hook `type: "http"` **không chạy cho `SessionStart`**: muốn nhận sự kiện này phải dùng hook `type: "command"`
     gọi `curl` (stdin là JSON hook). Hub không được giả định luôn có SessionStart.
   - Chế độ auto và lệnh chỉ đọc (ví dụ `hostname`) không hỏi người nên không sinh `PermissionRequest`.
-- CHƯA kiểm chứng: trả lời ở terminal trong lúc hub đang giữ request thì Claude Code có đóng kết nối HTTP không
-  (Q1b, làm ở T3/T17); non-2xx, lỗi kết nối và hết giờ trên máy thật (T17); agent teams (Q9).
+- Đã kiểm chứng ở T3 (v2.1.308, Q1b): người dùng trả lời ở terminal trong lúc hub đang giữ request thì Claude Code
+  **không đóng** kết nối HTTP; lệnh chạy ngay, câu trả lời muộn của hub không còn tác dụng. Hub phải tự dọn yêu cầu đó:
+  hủy (trả `{}`) khi thấy `PostToolUse`/`PostToolUseFailure` cùng agent và cùng `tool_name` + `tool_input`, hoặc
+  `Stop`/`StopFailure`/`UserPromptSubmit`/`SubagentStop` của cùng agent (chi tiết: `docs/HOOK_FINDINGS.md` Q1b).
+- CHƯA kiểm chứng: non-2xx, lỗi kết nối và hết giờ trên máy thật (T17); agent teams (Q9).
