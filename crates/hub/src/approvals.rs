@@ -318,6 +318,8 @@ struct Inner {
     entries: HashMap<RequestId, Entry>,
     /// Tổng [`Entry::held_bytes`] của mọi entry đang giữ.
     held_bytes: usize,
+    /// Byte đã đặt chỗ cho body `/hooks/permission` đang nhận ([`Approvals::reserve_body`]).
+    inflight_bytes: usize,
     /// Cũ trước; tối đa [`MAX_HANDOFFS`], đầy thì bỏ thẻ cũ nhất.
     handoffs: VecDeque<Handoff>,
     paused: bool,
@@ -342,6 +344,19 @@ impl Inner {
     fn drain_entries(&mut self) -> Vec<Entry> {
         self.held_bytes = 0;
         self.entries.drain().map(|(_, e)| e).collect()
+    }
+}
+
+/// Chỗ đặt cho một body `/hooks/permission` đang nhận và parse: trả lại khi drop.
+pub struct BodyReservation<'a> {
+    approvals: &'a Approvals,
+    bytes: usize,
+}
+
+impl Drop for BodyReservation<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.approvals.lock();
+        inner.inflight_bytes = inner.inflight_bytes.saturating_sub(self.bytes);
     }
 }
 
@@ -421,6 +436,27 @@ impl Approvals {
     /// Tổng byte `tool_input` đang giữ (ước lượng, xem [`held_size`]).
     pub fn held_bytes(&self) -> usize {
         self.lock().held_bytes
+    }
+
+    /// Đặt chỗ `declared` byte (thường là `Content-Length`) cho một body `/hooks/permission` TRƯỚC khi đọc nó, trong
+    /// cùng ngân sách [`ApprovalsConfig::held_input_max_bytes`] với các yêu cầu đang giữ. `None`: không còn chỗ, handler
+    /// trả `{}` ngay mà không đọc body (nhiều body ~1 MB về cùng lúc từng đẩy RSS lên ~50 MB, đo ở T5c).
+    pub fn reserve_body(&self, declared: usize) -> Option<BodyReservation<'_>> {
+        let mut inner = self.lock();
+        let used = inner.held_bytes.saturating_add(inner.inflight_bytes);
+        if used.saturating_add(declared) > self.cfg.held_input_max_bytes {
+            return None;
+        }
+        inner.inflight_bytes += declared;
+        Some(BodyReservation {
+            approvals: self,
+            bytes: declared,
+        })
+    }
+
+    /// Tổng byte đang đặt chỗ cho body đang nhận.
+    pub fn inflight_body_bytes(&self) -> usize {
+        self.lock().inflight_bytes
     }
 
     pub fn pending(&self, request_id: &str) -> Option<PendingApproval> {

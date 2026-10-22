@@ -291,3 +291,143 @@ async fn many_large_writes_stay_under_cap() {
     assert_eq!(overloaded + queued, 64);
     assert_eq!(a.held_bytes(), 0);
 }
+
+// ============================================================================================================
+// Kiểm trước khi đọc body (đỉnh tạm thời khi nhiều body ~1 MB về cùng lúc, đo ở 5e33352: 46–50 MB)
+// ============================================================================================================
+
+mod http {
+    use super::*;
+    use hub::hub::Hub;
+    use hub::{hooks, server};
+    use hub_core::config::Config;
+    use hub_core::persona::PersonaBook;
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    const TOKEN: &str = "test-token-0123456789abcdef-arcturus-t5c";
+
+    async fn start(
+        cap: usize,
+    ) -> (
+        std::net::SocketAddr,
+        Arc<Hub>,
+        broadcast::Receiver<ServerMsg>,
+    ) {
+        let (core, _tasks) = Hub::start_with(
+            Config::default(),
+            PersonaBook::default(),
+            "test-host".to_owned(),
+            cfg(cap),
+            Box::new(AlwaysAsk),
+            Box::new(NoStore),
+        );
+        let rx = core.subscribe();
+        let app = hooks::router(core.clone(), TOKEN.to_owned());
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            let _ = server::serve_until(listener, app, std::future::pending::<()>()).await;
+        });
+        (addr, core, rx)
+    }
+
+    /// Gửi header với `Content-Length: declared` và chỉ `sent` byte đầu của body; trả dòng trạng thái + body phản hồi
+    /// (nếu hub trả lời trước khi nhận đủ body).
+    async fn partial_post(addr: std::net::SocketAddr, body: &str, sent: usize) -> String {
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let head = format!(
+            "POST /hooks/permission HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {TOKEN}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        s.write_all(head.as_bytes()).await.unwrap();
+        s.write_all(&body.as_bytes()[..sent]).await.unwrap();
+        let mut buf = vec![0u8; 4096];
+        let n = tokio::time::timeout(WAIT, s.read(&mut buf))
+            .await
+            .expect("hub phải trả lời trước khi nhận đủ body")
+            .unwrap();
+        String::from_utf8_lossy(&buf[..n]).into_owned()
+    }
+
+    #[tokio::test]
+    async fn over_budget_body_rejected_before_reading() {
+        let (addr, core, mut rx) = start(64 * 1024).await;
+        // Một Write ~40 KB được giữ.
+        let first = write_body("s1", 1, 40_000).to_string();
+        let client = reqwest::Client::new();
+        let req = client
+            .post(format!("http://{addr}/hooks/permission"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(first);
+        let held = tokio::spawn(async move { req.send().await.unwrap().text().await.unwrap() });
+        next_requested(&mut rx).await;
+        assert!(core.approvals.held_bytes() >= 40_000);
+
+        // Body thứ hai khai 40 KB: không còn chỗ trong 64 KB → `{}` ngay khi mới gửi 1 KB.
+        let second = write_body("s2", 2, 40_000).to_string();
+        let res = partial_post(addr, &second, 1024).await;
+        assert!(res.starts_with("HTTP/1.1 200"), "{res}");
+        assert!(
+            res.trim_end().ends_with("{}"),
+            "phải là {{}}, không allow: {res}"
+        );
+        assert_eq!(core.approvals.snapshot().len(), 1);
+        assert_eq!(
+            core.approvals.inflight_body_bytes(),
+            0,
+            "chỗ đặt phải được trả lại"
+        );
+
+        assert_eq!(core.shutdown(), 1);
+        assert_eq!(
+            tokio::time::timeout(WAIT, held).await.unwrap().unwrap(),
+            "{}"
+        );
+        assert_eq!(core.approvals.held_bytes(), 0);
+    }
+
+    #[tokio::test]
+    async fn reservation_released_after_parse_and_on_bad_json() {
+        let (addr, core, mut rx) = start(DEFAULT_HELD_INPUT_MAX_BYTES).await;
+        let client = reqwest::Client::new();
+        let url = format!("http://{addr}/hooks/permission");
+
+        let res = client
+            .post(&url)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body("{hỏng")
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status().as_u16(), 400);
+        assert_eq!(core.approvals.inflight_body_bytes(), 0);
+
+        let req = client
+            .post(&url)
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(bash_body("s1", "echo hi").to_string());
+        let h = tokio::spawn(async move { req.send().await.unwrap().text().await.unwrap() });
+        next_requested(&mut rx).await;
+        assert_eq!(
+            core.approvals.inflight_body_bytes(),
+            0,
+            "body đã parse: chỉ còn tính trong held"
+        );
+        core.shutdown();
+        assert_eq!(tokio::time::timeout(WAIT, h).await.unwrap().unwrap(), "{}");
+    }
+
+    #[test]
+    fn reserve_body_respects_cap() {
+        let (a, _rx) = approvals_with(cfg(100_000));
+        let r1 = a.reserve_body(60_000).expect("còn chỗ");
+        assert!(a.reserve_body(50_000).is_none(), "60 + 50 KB > 100 KB");
+        let r2 = a.reserve_body(40_000).expect("60 + 40 KB = 100 KB");
+        assert_eq!(a.inflight_body_bytes(), 100_000);
+        drop(r1);
+        assert_eq!(a.inflight_body_bytes(), 40_000);
+        drop(r2);
+        assert_eq!(a.inflight_body_bytes(), 0);
+    }
+}

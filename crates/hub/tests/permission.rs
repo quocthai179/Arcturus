@@ -994,15 +994,27 @@ async fn malformed_json_returns_400() {
 
 #[tokio::test]
 async fn oversized_body_is_rejected() {
+    // Hub trả 413 ngay khi thấy `Content-Length` > 1 MiB, KHÔNG đọc body (T5c): gửi header và 1 KB đầu rồi đọc phản hồi.
+    use tokio::io::AsyncReadExt;
     let hub = TestHub::start().await;
     let big = permission_body("s1", None, &"x".repeat(1024 * 1024 + 1)).to_string();
-    let res = hub
-        .post_raw("/hooks/permission", Some(TOKEN), big)
-        .send()
+    let mut s = tokio::net::TcpStream::connect(hub.addr).await.unwrap();
+    let head = format!(
+        "POST /hooks/permission HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {TOKEN}\r\n\
+         Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+        big.len()
+    );
+    s.write_all(head.as_bytes()).await.unwrap();
+    s.write_all(&big.as_bytes()[..1024]).await.unwrap();
+    let mut buf = [0u8; 64];
+    let n = tokio::time::timeout(WAIT, s.read(&mut buf))
         .await
+        .expect("hub phải từ chối trước khi nhận đủ body")
         .unwrap();
-    assert_eq!(res.status().as_u16(), 413);
+    let status = String::from_utf8_lossy(&buf[..n]);
+    assert!(status.starts_with("HTTP/1.1 413"), "{status}");
     assert!(hub.core.approvals.snapshot().is_empty());
+    assert_eq!(hub.core.approvals.inflight_body_bytes(), 0);
     hub.stop().await;
 }
 

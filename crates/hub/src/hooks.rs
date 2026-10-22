@@ -4,14 +4,14 @@
 use std::sync::Arc;
 
 use axum::body::Bytes;
-use axum::extract::{DefaultBodyLimit, State};
-use axum::http::StatusCode;
+use axum::extract::{DefaultBodyLimit, Request, State};
+use axum::http::{header, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{middleware, Json, Router};
 use hub_core::hook::HookInput;
 
-use crate::approvals::response_for;
+use crate::approvals::{response_for, PermissionOutcome};
 use crate::auth;
 use crate::hub::Hub;
 use crate::record::MAX_BODY_BYTES;
@@ -30,15 +30,50 @@ pub fn router(hub: Arc<Hub>, token: String) -> Router {
         .merge(hooks)
 }
 
-async fn hook_permission(State(hub): State<Arc<Hub>>, body: Bytes) -> Response {
+async fn hook_permission(State(hub): State<Arc<Hub>>, req: Request) -> Response {
+    // Đặt chỗ trong ngân sách byte của hàng đợi TRƯỚC khi đọc body (T5c · ARC-43): hết chỗ thì `{}` ngay, Claude Code hỏi
+    // trong terminal. Không có `Content-Length` (chunked) thì tính mức tối đa.
+    let declared = match req
+        .headers()
+        .get(header::CONTENT_LENGTH)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.parse::<usize>().ok())
+    {
+        Some(n) if n > MAX_BODY_BYTES => return StatusCode::PAYLOAD_TOO_LARGE.into_response(),
+        Some(n) => n,
+        None => MAX_BODY_BYTES,
+    };
+    let Some(reservation) = hub.approvals.reserve_body(declared) else {
+        tracing::warn!(
+            declared,
+            "hàng đợi duyệt đầy bộ nhớ, trả {{}} trước khi đọc body để Claude Code hỏi trong terminal"
+        );
+        return overloaded();
+    };
+    let body = match axum::body::to_bytes(req.into_body(), MAX_BODY_BYTES).await {
+        Ok(body) => body,
+        Err(err) => {
+            tracing::warn!(%err, "không đọc được body (quá lớn hoặc client ngắt)");
+            return StatusCode::PAYLOAD_TOO_LARGE.into_response();
+        }
+    };
     let input = match HookInput::from_slice(&body) {
         Ok(input) => input,
         Err(err) => return bad_json(err),
     };
-    // Không giữ body thô suốt thời gian chờ duyệt.
+    // Không giữ body thô suốt thời gian chờ duyệt; từ đây `tool_input` được tính trong `held_bytes` khi vào hàng đợi.
     drop(body);
+    drop(reservation);
     let outcome = hub.permission(input).await;
     (StatusCode::OK, Json(response_for(&outcome))).into_response()
+}
+
+fn overloaded() -> Response {
+    (
+        StatusCode::OK,
+        Json(response_for(&PermissionOutcome::Overloaded)),
+    )
+        .into_response()
 }
 
 async fn hook_event(State(hub): State<Arc<Hub>>, body: Bytes) -> Response {
