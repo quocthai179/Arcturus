@@ -9,10 +9,12 @@ expression: ev
   "host": "laptop",
   "source": "claude-code",
   "session_id": "2f94bab2-268b-4fee-8c16-85d2f027d1ec",
+  "cwd": "C:\\Users\\user\\AppData\\Local\\Temp\\claude\\D--code-Arcturus\\562daadd-3e0d-4a7c-87c2-bfaa725338a8\\scratchpad\\lab-sandbox",
   "agent": {
     "id": "agt_2f94bab2-268b-4fee-8c16-85d2f027d1ec_a398df89a743673ea",
     "parent_id": "agt_2f94bab2-268b-4fee-8c16-85d2f027d1ec",
-    "kind": "subagent"
+    "kind": "subagent",
+    "agent_type": "general-purpose"
   },
   "type": "subagent.started",
   "activity": null,

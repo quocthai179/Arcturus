@@ -21,6 +21,10 @@ pub struct Event {
     pub host: String,
     pub source: Source,
     pub session_id: String,
+    /// Thư mục làm việc của phiên (`cwd` của hook), để gán persona và hiển thị (T4). Thêm sau v1 nhưng không phá
+    /// tương thích: JSON cũ thiếu trường này đọc thành `None`.
+    #[serde(default)]
+    pub cwd: Option<String>,
     pub agent: AgentRef,
     #[serde(rename = "type")]
     pub kind: EventKind,
@@ -43,6 +47,10 @@ pub struct AgentRef {
     pub id: AgentId,
     pub parent_id: Option<AgentId>,
     pub kind: AgentKind,
+    /// `agent_type` của subagent (ví dụ `"general-purpose"`, Q4), làm vai trò nhân vật (T4). Thêm sau v1, không phá
+    /// tương thích: thiếu thì `None`.
+    #[serde(default)]
+    pub agent_type: Option<String>,
 }
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
@@ -229,10 +237,12 @@ mod tests {
             host: "laptop".to_owned(),
             source: Source::ClaudeCode,
             session_id: "abc123".to_owned(),
+            cwd: Some("D:\\code\\Arcturus".to_owned()),
             agent: AgentRef {
                 id: "agt_abc123".to_owned(),
                 parent_id: None,
                 kind: AgentKind::Session,
+                agent_type: None,
             },
             kind: EventKind::ApprovalRequested,
             activity: Some(Activity::Waiting),
@@ -255,7 +265,13 @@ mod tests {
         assert_eq!(v["ts"], "2026-10-21T09:15:02.123Z");
         assert_eq!(v["type"], "approval.requested");
         assert!(v.get("raw_ref").is_none());
-        let back: Event = serde_json::from_value(v).unwrap();
+        let back: Event = serde_json::from_value(v.clone()).unwrap();
         assert_eq!(back, ev);
+
+        // Sự kiện ghi trước khi có `cwd` (T2) vẫn đọc được.
+        let mut old = v;
+        old.as_object_mut().unwrap().remove("cwd");
+        let back: Event = serde_json::from_value(old).unwrap();
+        assert_eq!(back.cwd, None);
     }
 }
