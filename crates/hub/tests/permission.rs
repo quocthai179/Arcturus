@@ -313,7 +313,7 @@ fn spawn_request(approvals: &Arc<Approvals>, body: Value) -> JoinHandle<Permissi
     tokio::spawn(async move {
         let input = HookInput::new(body);
         let ev = hook::to_event(&input, "test-host", OffsetDateTime::now_utc());
-        a.request(&input, &ev).await
+        a.request(input, &ev).await
     })
 }
 
@@ -984,4 +984,136 @@ async fn non_permission_event_on_permission_endpoint_returns_empty_object() {
     assert_eq!(join(hub.permission(body)).await, (200, json!({})));
     assert!(hub.approvals.snapshot().is_empty());
     hub.stop().await;
+}
+
+// ============================================================================================================
+// Audit T3: giới hạn hàng đợi, id riêng cho lượt AutoAllow, tạm dừng trong lúc chờ ack
+// ============================================================================================================
+
+type HeldAcks = Arc<Mutex<Vec<oneshot::Sender<Result<(), StoreError>>>>>;
+
+/// Store giữ ack cho tới khi test tự trả lời.
+struct ManualStore {
+    records: Arc<Mutex<Vec<ApprovalRecord>>>,
+    held: HeldAcks,
+}
+
+impl ApprovalStore for ManualStore {
+    fn record(&self, rec: ApprovalRecord) -> StoreAck {
+        self.records.lock().unwrap().push(rec);
+        let (tx, rx) = oneshot::channel();
+        self.held.lock().unwrap().push(tx);
+        rx
+    }
+}
+
+#[tokio::test]
+async fn pause_during_store_ack_falls_back_to_ask_user() {
+    let records = Arc::new(Mutex::new(Vec::new()));
+    let held = Arc::new(Mutex::new(Vec::new()));
+    let approvals = Arc::new(Approvals::new(
+        ApprovalsConfig::default(),
+        Box::new(auto_allow()),
+        Box::new(ManualStore {
+            records: records.clone(),
+            held: held.clone(),
+        }),
+    ));
+    let mut notices = approvals.subscribe();
+    let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
+
+    // Chờ hub gửi bản ghi `allowed/policy` và đang đợi ack.
+    tokio::time::timeout(WAIT, async {
+        while held.lock().unwrap().is_empty() {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    })
+    .await
+    .unwrap();
+    approvals.set_paused(true);
+    let ack = held.lock().unwrap().remove(0);
+    ack.send(Ok(())).unwrap();
+
+    let p = next_requested(&mut notices).await;
+    assert!(!h.is_finished(), "tạm dừng: không được tự allow");
+    let recs = records.lock().unwrap().clone();
+    let auto_id = recs[0].request_id.clone();
+    assert_eq!(
+        (recs[0].status, recs[0].decided_by),
+        (ApprovalStatus::Allowed, Some(DecidedBy::Policy))
+    );
+    assert_eq!(
+        last_status(&records, &auto_id),
+        Some((ApprovalStatus::Cancelled, Some(DecidedBy::Cancelled)))
+    );
+    assert_ne!(p.request_id, auto_id, "yêu cầu hỏi người có id riêng");
+
+    approvals.decide(&p.request_id, Decision::Deny, DecideOrigin::User, None);
+    assert!(matches!(
+        h.await.unwrap(),
+        PermissionOutcome::Decided(d) if d.decision == Decision::Deny
+    ));
+}
+
+#[tokio::test]
+async fn auto_allow_fallback_uses_new_request_id() {
+    let (store, records) = TestStore::new(Ack::Err);
+    let approvals = Arc::new(Approvals::new(
+        ApprovalsConfig::default(),
+        Box::new(auto_allow()),
+        Box::new(store),
+    ));
+    let mut notices = approvals.subscribe();
+    let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
+    let p = next_requested(&mut notices).await;
+    let auto_id = records.lock().unwrap()[0].request_id.clone();
+    assert_ne!(p.request_id, auto_id);
+    assert_eq!(
+        last_status(&records, &auto_id),
+        Some((ApprovalStatus::Cancelled, Some(DecidedBy::Cancelled)))
+    );
+    approvals.decide(&p.request_id, Decision::Allow, DecideOrigin::User, None);
+    assert_eq!(
+        last_status(&records, &p.request_id),
+        Some((ApprovalStatus::Allowed, Some(DecidedBy::User)))
+    );
+    assert!(matches!(h.await.unwrap(), PermissionOutcome::Decided(_)));
+}
+
+#[tokio::test]
+async fn full_queue_returns_empty_object_immediately() {
+    let mut hub = TestHub::start_with(
+        ApprovalsConfig {
+            max_pending: 3,
+            max_pending_per_session: 2,
+            ..ApprovalsConfig::default()
+        },
+        Box::new(AlwaysAsk),
+        Box::new(NoStore),
+    )
+    .await;
+    let a1 = hub.permission(permission_body("s1", None, "echo 1"));
+    hub.next_requested().await;
+    let a2 = hub.permission(permission_body("s1", None, "echo 2"));
+    hub.next_requested().await;
+    // Phiên s1 đã đủ 2: yêu cầu thứ 3 của s1 bị trả `{}` ngay.
+    assert_eq!(
+        join(hub.permission(permission_body("s1", None, "echo 3"))).await,
+        (200, json!({}))
+    );
+    let b1 = hub.permission(permission_body("s2", None, "echo 1"));
+    hub.next_requested().await;
+    // Toàn hub đã đủ 3.
+    assert_eq!(
+        join(hub.permission(permission_body("s3", None, "echo 1"))).await,
+        (200, json!({}))
+    );
+    assert_eq!(hub.approvals.snapshot().len(), 3);
+
+    let approvals = hub.approvals.clone();
+    hub.stop().await;
+    for h in [a1, a2, b1] {
+        assert_eq!(join(h).await, (200, json!({})));
+    }
+    assert!(approvals.snapshot().is_empty());
 }

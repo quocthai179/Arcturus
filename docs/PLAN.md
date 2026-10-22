@@ -604,6 +604,10 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
   (`set_paused`), T5 nối với `TeamPause`/`TeamResume`.
 - Hàng đợi pending dùng `std::sync::Mutex` (không giữ qua `.await`) để guard hủy trong `Drop` khóa được.
 - `--approval-timeout` (1–115 s, mặc định 110) thay cho `approval_timeout_secs` tới khi có `config.rs` (T4).
+- Theo security audit T3: giới hạn 64 yêu cầu đang giữ toàn hub, 16 mỗi phiên (vượt → `{}` ngay); lượt AutoAllow có
+  `request_id` riêng, rơi về hỏi người thì ghi `cancelled` cho id đó và tạo id mới; log chuỗi từ agent bằng Debug.
+- Chấp nhận ở v0: ai có token đều gửi được `SessionEnd`/`Stop` giả để xóa thẻ duyệt của phiên khác. Kết quả chỉ là `{}`
+  (hộp thoại terminal vẫn còn, Q1/Q2), không bao giờ là allow/deny.
 
 ### T4 · ARC-25 · State machine và persona
 

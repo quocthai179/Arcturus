@@ -69,8 +69,10 @@ async fn hook_permission(State(st): State<Arc<HubState>>, body: Bytes) -> Respon
         Ok(input) => input,
         Err(err) => return bad_json(err),
     };
+    // Không giữ body thô suốt thời gian chờ duyệt.
+    drop(body);
     let ev = hook::to_event(&input, &st.host, OffsetDateTime::now_utc());
-    let outcome = st.approvals.request(&input, &ev).await;
+    let outcome = st.approvals.request(input, &ev).await;
     (StatusCode::OK, Json(response_for(&outcome))).into_response()
 }
 

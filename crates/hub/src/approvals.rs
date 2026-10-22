@@ -25,6 +25,10 @@ pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(110);
 /// AutoAllow chờ store xác nhận đã ghi tối đa chừng này (PLAN T3 bước 6).
 pub const DEFAULT_STORE_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 
+/// Giới hạn yêu cầu đang giữ: toàn hub và mỗi phiên (audit T3, finding 2).
+pub const DEFAULT_MAX_PENDING: usize = 64;
+pub const DEFAULT_MAX_PENDING_PER_SESSION: usize = 16;
+
 /// Sức chứa kênh thông báo cho UI (`docs/PLAN.md` §4).
 pub const NOTICE_CAPACITY: usize = 256;
 
@@ -174,6 +178,8 @@ pub enum PermissionOutcome {
     TimedOut,
     /// Body không phải `PermissionRequest` (hook cấu hình sai): không quyết định.
     NotPermissionRequest,
+    /// Hàng đợi đầy ([`ApprovalsConfig::max_pending`]): không giữ, để terminal hỏi.
+    Overloaded,
 }
 
 /// Ai gửi lệnh `Decide` (§3.4).
@@ -221,8 +227,13 @@ pub fn response_for(outcome: &PermissionOutcome) -> Value {
         }
         PermissionOutcome::Cancelled
         | PermissionOutcome::TimedOut
-        | PermissionOutcome::NotPermissionRequest => json!({}),
+        | PermissionOutcome::NotPermissionRequest
+        | PermissionOutcome::Overloaded => json!({}),
     }
+}
+
+fn new_request_id() -> RequestId {
+    format!("req_{}", ulid::Ulid::generate())
 }
 
 fn decision_json(decision: Value) -> Value {
@@ -242,6 +253,9 @@ fn decision_json(decision: Value) -> Value {
 pub struct ApprovalsConfig {
     pub timeout: Duration,
     pub store_ack_timeout: Duration,
+    /// Tối đa yêu cầu đang giữ (giữ RAM trong ngân sách, quy tắc bất biến 6). Vượt thì trả `{}` ngay.
+    pub max_pending: usize,
+    pub max_pending_per_session: usize,
 }
 
 impl Default for ApprovalsConfig {
@@ -249,6 +263,8 @@ impl Default for ApprovalsConfig {
         ApprovalsConfig {
             timeout: DEFAULT_APPROVAL_TIMEOUT,
             store_ack_timeout: DEFAULT_STORE_ACK_TIMEOUT,
+            max_pending: DEFAULT_MAX_PENDING,
+            max_pending_per_session: DEFAULT_MAX_PENDING_PER_SESSION,
         }
     }
 }
@@ -324,19 +340,24 @@ impl Approvals {
         }
     }
 
-    /// Xử lý một `PermissionRequest`. `ev` là `hook::to_event(input)`.
-    pub async fn request(&self, input: &HookInput, ev: &Event) -> PermissionOutcome {
+    /// Xử lý một `PermissionRequest`. `ev` là `hook::to_event(input)`. Nhận `input` theo giá trị để nhả JSON thô
+    /// trước khi chờ (tới 110 s): chỉ giữ lại các trường cần dùng.
+    pub async fn request(&self, input: HookInput, ev: &Event) -> PermissionOutcome {
         if ev.kind != EventKind::ApprovalRequested {
             tracing::warn!(
-                event = input.event_name(),
+                event = ?input.event_name(),
                 "/hooks/permission nhận sự kiện không phải PermissionRequest, không quyết định"
             );
             return PermissionOutcome::NotPermissionRequest;
         }
         let tool = input.tool_name().unwrap_or("").to_owned();
-        let tool_input = input.tool_input().cloned().unwrap_or(Value::Null);
         let cwd = input.cwd().unwrap_or("").to_owned();
-        let request_id: RequestId = format!("req_{}", ulid::Ulid::generate());
+        let mut raw = input.raw;
+        let tool_input = raw
+            .get_mut("tool_input")
+            .map(Value::take)
+            .unwrap_or(Value::Null);
+        drop(raw);
 
         let outcome = self.policy.decide(&ApprovalCtx {
             agent_id: &ev.agent.id,
@@ -346,10 +367,13 @@ impl Approvals {
         });
         let (risk, countdown) = match outcome {
             PolicyOutcome::AutoAllow { reason, risk } => {
+                // Lượt AutoAllow có id riêng: nếu rơi về hỏi người, bản ghi `allowed/policy` (có thể commit muộn)
+                // không trùng id với yêu cầu người sẽ quyết định.
+                let auto_id = new_request_id();
                 if self.is_paused() {
-                    tracing::info!(%request_id, "đội tạm dừng: AutoAllow chuyển thành hỏi người");
-                } else if self.auto_allow_recorded(&request_id, ev, &tool).await {
-                    tracing::info!(%request_id, tool, %reason, "policy tự duyệt");
+                    tracing::info!(request_id = %auto_id, "đội tạm dừng: AutoAllow chuyển thành hỏi người");
+                } else if self.auto_allow_recorded(&auto_id, ev, &tool).await {
+                    tracing::info!(request_id = %auto_id, tool = ?tool, reason = ?reason, "policy tự duyệt");
                     return PermissionOutcome::AutoAllowed;
                 }
                 (risk, None)
@@ -357,11 +381,27 @@ impl Approvals {
             PolicyOutcome::AskUser { risk, countdown } => (risk, countdown),
         };
 
+        let request_id = new_request_id();
         let (reply, mut rx) = oneshot::channel();
         let info = {
             let mut inner = self.lock();
             if inner.closed {
                 return PermissionOutcome::Cancelled;
+            }
+            if inner.entries.len() >= self.cfg.max_pending
+                || inner
+                    .entries
+                    .values()
+                    .filter(|e| e.info.session_id == ev.session_id)
+                    .count()
+                    >= self.cfg.max_pending_per_session
+            {
+                tracing::warn!(
+                    session = ?ev.session_id,
+                    pending = inner.entries.len(),
+                    "hàng đợi duyệt đầy, trả {{}} để Claude Code hỏi trong terminal"
+                );
+                return PermissionOutcome::Overloaded;
             }
             let info = PendingApproval {
                 request_id: request_id.clone(),
@@ -386,7 +426,8 @@ impl Approvals {
             info
         };
         self.record(&info, ApprovalStatus::Pending, None);
-        tracing::info!(%request_id, session = %info.session_id, tool = %info.tool, "đang giữ yêu cầu duyệt");
+        // `?`: chuỗi từ agent không tin cậy, Debug escape xuống dòng (chặn giả dòng log).
+        tracing::info!(%request_id, session = ?info.session_id, tool = ?info.tool, "đang giữ yêu cầu duyệt");
         let _ = self.notices.send(ApprovalNotice::Requested(info));
 
         // Future bị drop (client đóng kết nối) thì guard hủy yêu cầu; mọi nhánh dưới tự dọn nên tắt guard.
@@ -417,7 +458,8 @@ impl Approvals {
         outcome
     }
 
-    /// Ghi bản ghi `allowed/policy` và chờ xác nhận. `false` khi lỗi, kênh đóng, quá giờ, hoặc đội vừa tạm dừng.
+    /// Ghi bản ghi `allowed/policy` và chờ xác nhận. `false` khi lỗi, kênh đóng, quá giờ, hoặc đội vừa tạm dừng;
+    /// khi đó ghi thêm `cancelled` cho cùng id (bản `allowed` có thể vẫn được commit muộn; T6 giữ thứ tự ghi).
     async fn auto_allow_recorded(&self, request_id: &str, ev: &Event, tool: &str) -> bool {
         let rec = |status, decided_by| ApprovalRecord {
             request_id: request_id.to_owned(),
@@ -452,16 +494,20 @@ impl Approvals {
                 false
             }
         };
-        if ok && self.is_paused() {
+        let ok = if ok && self.is_paused() {
             tracing::info!(
                 request_id,
                 "đội tạm dừng trong lúc ghi: AutoAllow chuyển thành hỏi người"
             );
+            false
+        } else {
+            ok
+        };
+        if !ok {
             drop(
                 self.store
                     .record(rec(ApprovalStatus::Cancelled, Some(DecidedBy::Cancelled))),
             );
-            return false;
         }
         ok
     }
@@ -720,6 +766,7 @@ mod tests {
             PermissionOutcome::Cancelled,
             PermissionOutcome::TimedOut,
             PermissionOutcome::NotPermissionRequest,
+            PermissionOutcome::Overloaded,
         ] {
             assert_eq!(response_for(&o), json!({}), "{o:?}");
         }
