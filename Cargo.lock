@@ -590,6 +590,7 @@ dependencies = [
  "dirs",
  "futures-util",
  "getrandom 0.4.3",
+ "http-body-util",
  "hub-core",
  "reqwest",
  "serde_json",

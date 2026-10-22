@@ -409,7 +409,6 @@ mod http {
     use hub::{hooks, server};
     use hub_core::config::Config;
     use hub_core::persona::PersonaBook;
-    use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
     const TOKEN: &str = "test-token-0123456789abcdef-arcturus-t5c";
 
@@ -438,27 +437,8 @@ mod http {
         (addr, core, rx)
     }
 
-    /// Gửi header với `Content-Length: declared` và chỉ `sent` byte đầu của body; trả dòng trạng thái + body phản hồi
-    /// (nếu hub trả lời trước khi nhận đủ body).
-    async fn partial_post(addr: std::net::SocketAddr, body: &str, sent: usize) -> String {
-        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let head = format!(
-            "POST /hooks/permission HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {TOKEN}\r\n\
-             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
-            body.len()
-        );
-        s.write_all(head.as_bytes()).await.unwrap();
-        s.write_all(&body.as_bytes()[..sent]).await.unwrap();
-        let mut buf = vec![0u8; 4096];
-        let n = tokio::time::timeout(WAIT, s.read(&mut buf))
-            .await
-            .expect("hub phải trả lời trước khi nhận đủ body")
-            .unwrap();
-        String::from_utf8_lossy(&buf[..n]).into_owned()
-    }
-
     #[tokio::test]
-    async fn over_budget_body_rejected_before_reading() {
+    async fn over_budget_bodies_get_empty_object_not_reset() {
         let (addr, core, mut rx) = start(64 * 1024).await;
         // Một Write ~40 KB được giữ.
         let first = write_body("s1", 1, 40_000).to_string();
@@ -471,14 +451,29 @@ mod http {
         next_requested(&mut rx).await;
         assert!(core.approvals.held_bytes() >= 40_000);
 
-        // Body thứ hai khai 40 KB: không còn chỗ trong 64 KB → `{}` ngay khi mới gửi 1 KB.
-        let second = write_body("s2", 2, 40_000).to_string();
-        let res = partial_post(addr, &second, 1024).await;
-        assert!(res.starts_with("HTTP/1.1 200"), "{res}");
-        assert!(
-            res.trim_end().ends_with("{}"),
-            "phải là {{}}, không allow: {res}"
-        );
+        // Không còn chỗ trong 64 KB: 16 yêu cầu gửi trọn body cùng lúc đều phải NHẬN được `{}` (hub đọc bỏ body theo
+        // khung, không đệm, rồi mới trả lời; trả lời khi body chưa đọc làm Windows reset kết nối, đo ở ac866b2).
+        let rejected: Vec<_> = (0..16)
+            .map(|i| {
+                let req = client
+                    .post(format!("http://{addr}/hooks/permission"))
+                    .header("authorization", format!("Bearer {TOKEN}"))
+                    .body(write_body("s2", 100 + i, 900_000).to_string());
+                tokio::spawn(async move {
+                    let res = req
+                        .send()
+                        .await
+                        .expect("phải nhận được phản hồi, không reset");
+                    (res.status().as_u16(), res.text().await.unwrap())
+                })
+            })
+            .collect();
+        for h in rejected {
+            assert_eq!(
+                tokio::time::timeout(WAIT, h).await.unwrap().unwrap(),
+                (200, "{}".to_owned())
+            );
+        }
         assert_eq!(core.approvals.snapshot().len(), 1);
         assert_eq!(
             core.approvals.inflight_body_bytes(),
@@ -492,6 +487,34 @@ mod http {
             "{}"
         );
         assert_eq!(core.approvals.held_bytes(), 0);
+    }
+
+    /// Client gửi dở body rồi treo trong lúc hub đọc bỏ: hub không treo theo, không giữ gì, không bao giờ allow.
+    #[tokio::test]
+    async fn stalled_rejected_body_does_not_hang_hub() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let (addr, core, _rx) = start(64 * 1024).await;
+        // Trần 64 KB, body khai 100 KB: không đặt được chỗ.
+        let body = write_body("s1", 1, 100_000).to_string();
+        let mut s = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let head = format!(
+            "POST /hooks/permission HTTP/1.1\r\nHost: 127.0.0.1\r\nAuthorization: Bearer {TOKEN}\r\n\
+             Content-Type: application/json\r\nContent-Length: {}\r\n\r\n",
+            body.len()
+        );
+        s.write_all(head.as_bytes()).await.unwrap();
+        s.write_all(&body.as_bytes()[..1024]).await.unwrap();
+        // Hub chờ tối đa `hooks::DRAIN_TIMEOUT` rồi trả lời hoặc đóng kết nối.
+        let mut buf = vec![0u8; 4096];
+        let got = tokio::time::timeout(hooks::DRAIN_TIMEOUT + WAIT, s.read(&mut buf))
+            .await
+            .expect("hub không được treo theo client");
+        if let Ok(n) = got {
+            let text = String::from_utf8_lossy(&buf[..n]);
+            assert!(!text.contains("allow"), "{text}");
+        }
+        assert!(core.approvals.snapshot().is_empty());
+        assert_eq!(core.approvals.inflight_body_bytes(), 0);
     }
 
     #[tokio::test]

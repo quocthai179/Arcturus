@@ -2,6 +2,7 @@
 //! rồi xử lý bất đồng bộ qua `mpsc` (thứ tự sự kiện được giữ nguyên, xem `crate::hub`).
 
 use std::sync::Arc;
+use std::time::Duration;
 
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Request, State};
@@ -46,8 +47,11 @@ async fn hook_permission(State(hub): State<Arc<Hub>>, req: Request) -> Response 
     let Some(mut reservation) = hub.approvals.reserve_body(declared) else {
         tracing::warn!(
             declared,
-            "hàng đợi duyệt đầy bộ nhớ, trả {{}} trước khi đọc body để Claude Code hỏi trong terminal"
+            "hàng đợi duyệt đầy bộ nhớ, đọc bỏ body rồi trả {{}} để Claude Code hỏi trong terminal"
         );
+        // Đọc bỏ (không đệm) để client nhận được `{}`: trả lời khi body chưa đọc làm Windows reset kết nối và client
+        // không nhận được gì (đo ở ac866b2).
+        discard_body(req.into_body()).await;
         return overloaded();
     };
     let body = match axum::body::to_bytes(req.into_body(), MAX_BODY_BYTES).await {
@@ -59,10 +63,12 @@ async fn hook_permission(State(hub): State<Arc<Hub>>, req: Request) -> Response 
     };
     // JSON nhiều nút nhỏ (`[[0],[0],…]`) phình tới ~40 lần khi parse (audit ARC-43 finding 2): ước lượng trước khi parse
     // và nới chỗ đặt; không đủ thì `{}` ngay.
-    if !reservation.grow_to(parse_estimate(&body)) {
+    let estimate = parse_estimate(&body);
+    if !reservation.grow_to(estimate) {
         tracing::warn!(
             bytes = body.len(),
-            "JSON sẽ phình quá ngân sách khi parse, trả {{}} để Claude Code hỏi trong terminal"
+            estimate,
+            "không đủ ngân sách byte để parse body (hàng đợi gần đầy hoặc JSON phình lớn), trả {{}}"
         );
         return overloaded();
     }
@@ -85,6 +91,29 @@ pub fn parse_estimate(body: &[u8]) -> usize {
         .filter(|b| matches!(b, b'[' | b'{' | b',' | b':'))
         .count();
     body.len() + nodes * 2 * std::mem::size_of::<serde_json::Value>()
+}
+
+/// Đọc bỏ tối đa chừng này thời gian trước khi trả lời yêu cầu bị từ chối sớm (client treo thì không giữ handler lâu).
+pub const DRAIN_TIMEOUT: Duration = Duration::from_secs(3);
+
+/// Đọc bỏ body theo từng khung (không đệm), tối đa [`MAX_BODY_BYTES`] và [`DRAIN_TIMEOUT`].
+async fn discard_body(mut body: axum::body::Body) {
+    use http_body_util::BodyExt;
+    let drain = async {
+        let mut seen = 0usize;
+        while let Some(frame) = body.frame().await {
+            let Ok(frame) = frame else { break };
+            if let Some(data) = frame.data_ref() {
+                seen += data.len();
+                if seen > MAX_BODY_BYTES {
+                    break;
+                }
+            }
+        }
+    };
+    if tokio::time::timeout(DRAIN_TIMEOUT, drain).await.is_err() {
+        tracing::warn!("client gửi body quá chậm, ngừng đọc bỏ");
+    }
 }
 
 fn overloaded() -> Response {
