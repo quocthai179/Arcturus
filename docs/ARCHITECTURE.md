@@ -50,7 +50,10 @@ Hub là daemon riêng. Đóng app thì hub vẫn chạy và vẫn giữ hàng đ
 6. Hết 110 giây (timeout hook = 120) → trả `{}`. Claude Code tự hỏi trong terminal. Đánh dấu `decided_by=timeout`.
 7. Mọi quyết định ghi vào bảng `approvals` (ai, lúc nào, qua thiết bị nào, độ trễ).
 
-Sơ đồ trạng thái một yêu cầu: `pending → allowed | denied | timed_out | cancelled(session_ended)`.
+Trước bước 3: lệnh quá dài để duyệt trên thẻ (xem mục WebSocket) không vào policy, không vào hàng đợi; hub trả `{}`
+ngay, ghi `handed_off`.
+
+Sơ đồ trạng thái một yêu cầu: `pending → allowed | denied | timed_out | cancelled(session_ended)`; hoặc `handed_off`.
 
 ## Suy ra trạng thái agent (0 token)
 
@@ -139,17 +142,22 @@ Migration v2 (T9, T10):
 
 Persona không lưu trong SQLite: đọc từ `arcturus.toml` khi hub khởi động.
 
-## WebSocket (chi tiết viết ở docs/PROTOCOL.md khi làm T5)
+## WebSocket (chi tiết: docs/PROTOCOL.md)
 
-Mỗi thông điệp là JSON `{"t": "<loại>", ...}`; kiểu Rust ở `docs/PLAN.md` §3.4.
+Mỗi thông điệp là JSON `{"t": "<loại>", ...}`; kiểu Rust ở `docs/PLAN.md` §3.4. Xác thực bằng **token UI riêng** (hub
+sinh mỗi lần chạy, ghi `<data_dir>/arcturus/ui-token`), không phải token của hook; `Host` loopback, `Origin` Tauri/Vite.
 
-Server → client: `snapshot {agents, queue, team}`, `agent_updated {agent}`, `agent_removed {id}`,
+Server → client: `snapshot {agents, queue, handoffs, team}`, `agent_updated {agent}`, `agent_removed {id}`,
 `approval_requested {approval}`, `approval_resolved {request_id, decision | null, decided_by}`, `team_updated {team}`,
-`feed {text, ts}`, `suggestion {suggestion}` (T10).
+`feed {text, ts}`, `approval_handed_off {handoff}`, `handoff_cleared {handoff_id}`, `suggestion {suggestion}` (T10).
 
 Client → server: `decide {request_id, decision, message?, origin: user | countdown}`, `decide_group {group_key, decision}` (T9),
 `batch_open {group_key, minutes}` (T9), `batch_close {group_key}` (T9), `team_pause`, `team_resume`,
-`focus_set {on}` (T14), `suggestion_answer {id, accept}` (T10), `return_to_terminal {request_id}` (nếu Q1 cần).
+`focus_set {on}` (T14), `suggestion_answer {id, accept}` (T10). Không có `return_to_terminal` (Q1: không cần).
+
+Lệnh quá dài để duyệt trên thẻ (mặc định > 4.096 byte hoặc > 50 dòng, trừ Edit/Write/MultiEdit/NotebookEdit vốn cắt
+nội dung kèm bản đầy đủ): hub trả `{}` ngay để người duyệt trong terminal, chỉ broadcast thẻ báo `approval_handed_off`
+không có nút duyệt (quy tắc bất biến 3).
 
 ## Mở rộng sau v0
 

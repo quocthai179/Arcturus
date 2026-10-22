@@ -255,13 +255,18 @@ Bind mặc định `127.0.0.1:7878` (cấu hình được nhưng **từ chối**
 
 | Phương thức | Đường dẫn | Xác thực | Phản hồi |
 |---|---|---|---|
-| POST | `/hooks/event` | Bearer | `204` ngay; xử lý bất đồng bộ qua `mpsc` |
-| POST | `/hooks/permission` | Bearer | `200` + JSON quyết định, hoặc `200 {}` |
-| GET | `/ws` | Bearer (header) hoặc `?token=` (cho webview) | Nâng cấp WebSocket |
-| GET | `/approvals/{request_id}/input` | Bearer | `200` + `tool_input` đầy đủ của yêu cầu đang chờ (nút "Xem đầy đủ", T12); `404` nếu không còn chờ |
+| POST | `/hooks/event` | Bearer token hook | `204` ngay; xử lý bất đồng bộ qua `mpsc` |
+| POST | `/hooks/permission` | Bearer token hook | `200` + JSON quyết định, hoặc `200 {}` |
+| GET | `/ws` | token UI: Bearer (header) hoặc `?token=` (cho webview) | Nâng cấp WebSocket |
+| GET | `/approvals/{request_id}/input` | token UI: chỉ Bearer (header) | `200` + `tool_input` đầy đủ của yêu cầu đang chờ (nút "Xem đầy đủ", T12), `nosniff`, `no-store`; `404` nếu không còn chờ hoặc là thẻ duyệt-trong-terminal |
 | GET | `/healthz` | không | `200 ok` |
 
-- Token: biến môi trường `ARCTURUS_TOKEN`; không có thì hub **không khởi động** (thông báo cách tạo).
+- Token hook: biến môi trường `ARCTURUS_TOKEN`; không có thì hub **không khởi động** (thông báo cách tạo).
+- Token UI (D1, T5): hub tự sinh 32 byte ngẫu nhiên mỗi lần chạy, ghi `<data_dir>/arcturus/ui-token` (`--ui-token-file`
+  để đổi); app đọc file đó. Không nằm trong biến môi trường của Claude Code (Bash tool thừa hưởng `ARCTURUS_TOKEN`,
+  `docs/HOOK_FINDINGS.md` F6). `/ws`, `/approvals/*` chỉ nhận token UI; `/hooks/*` chỉ nhận token hook. Không log token.
+- `/ws`, `/approvals/*`: `Host` phải là `127.0.0.1:<cổng>`, `localhost:<cổng>` hoặc `[::1]:<cổng>` (chặn DNS rebinding);
+  `Origin`, nếu có, phải thuộc webview Tauri hoặc Vite dev (`ws::ALLOWED_ORIGINS`). Sai → `403`.
 - So sánh token bằng so sánh thời gian hằng (constant-time).
 - `/hooks/permission` sai token: trả `401`. Claude Code coi đó là lỗi không chặn → hỏi trong terminal (an toàn).
 - Body tối đa 1 MB; JSON hỏng → `400` (vẫn là lỗi không chặn với Claude Code).
@@ -282,13 +287,15 @@ JSON, `{"t": "<loại>", ...}`.
 #[derive(Serialize, Deserialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ServerMsg {
-    Snapshot { agents: Vec<AgentView>, queue: Vec<ApprovalView>, team: TeamView },
+    Snapshot { agents: Vec<AgentView>, queue: Vec<ApprovalView>, handoffs: Vec<HandoffView>, team: TeamView },
     AgentUpdated { agent: AgentView },
     AgentRemoved { id: AgentId },
     ApprovalRequested { approval: ApprovalView },
     ApprovalResolved { request_id: RequestId, decision: Option<Decision>, decided_by: DecidedBy }, // None khi timeout/cancelled (D2, T5)
     TeamUpdated { team: TeamView },
     Feed { text: String, ts: OffsetDateTime },
+    ApprovalHandedOff { handoff: HandoffView },       // lệnh quá dài: duyệt trong terminal (T5b)
+    HandoffCleared { handoff_id: String },            // T5b
     Suggestion { suggestion: TrustSuggestionView },   // T10
 }
 
@@ -302,7 +309,16 @@ pub enum ClientMsg {
     TeamPause, TeamResume,                                          // hub: T5; UI: T14
     FocusSet { on: bool },                                          // T14
     SuggestionAnswer { id: String, accept: bool },                  // T10
-    ReturnToTerminal { request_id: RequestId },                     // nếu Q1 cần
+    // Không có ReturnToTerminal: terminal luôn hỏi song song (Q1); lệnh quá dài hub tự trả về terminal (T5b).
+}
+
+pub struct HandoffView {                               // thẻ báo, KHÔNG có nút duyệt
+    pub handoff_id: String,                            // "hof_<ulid>", không bao giờ là request_id đang chờ
+    pub agent_id: AgentId, pub agent_name: String, pub tool: String,
+    pub bytes: usize, pub lines: usize,                // kích thước lệnh đầy đủ
+    pub preview_head: String, pub preview_tail: String, // ~300 ký tự mỗi đầu, ký tự ẩn đã hiện ⟨U+XXXX⟩
+    pub suspicions: Vec<Suspicion>,                    // tính trên lệnh ĐẦY ĐỦ
+    pub message: String, pub created_at: OffsetDateTime,
 }
 
 pub struct AgentView {
@@ -343,11 +359,26 @@ tức code point) trong `command_normalized`; không phải byte UTF-8, không p
   và làm tô sáng sai chỗ.
 
 **Giới hạn nội dung trong `ApprovalView`** (giữ WebSocket và popup trong ngân sách, quy tắc bất biến 6):
-- Bash và mọi trường đường dẫn (`file_path`, `path`, `pattern`) **không bao giờ bị cắt** (quy tắc bất biến 3).
-- Trường nội dung của Edit/Write/MultiEdit/NotebookEdit (`content`, `old_string`, `new_string`, `edits`, `new_source`)
-  bị cắt còn 2.000 ký tự Unicode mỗi trường, kèm dòng `… [đã cắt, tổng N ký tự]`; khi đó `truncated = true`.
+- Bash, tool khác ngoài nhóm dưới đây, và mọi trường đường dẫn (`file_path`, `path`, `pattern`) **không bao giờ bị cắt**
+  (quy tắc bất biến 3).
+- Chỉ với Edit/Write/MultiEdit/NotebookEdit: trường nội dung (`content`, `old_string`, `new_string`, `new_source`; MultiEdit:
+  từng edit, giữ mảng và `replace_all`) bị cắt còn 2.000 ký tự Unicode mỗi trường, kèm dòng `… [đã cắt, tổng N ký tự]`;
+  khi đó `truncated = true` và UI bắt mở bản đầy đủ trước khi Allow (T12).
 - Luật danger cho các tool này chỉ khớp trên đường dẫn (T8), nên `danger_spans` luôn nằm trong phần không bị cắt.
 - Bản đầy đủ lấy theo yêu cầu qua `GET /approvals/{request_id}/input` (§3.3), không gửi qua broadcast.
+
+**Lệnh quá dài: trả về terminal** (quyết định của người duyệt ở T5b; quy tắc bất biến 3: "Hub không bao giờ cắt bớt một
+lệnh mà nó cho người duyệt; lệnh quá dài để xem trên thẻ thì trả về terminal"):
+- Áp dụng cho mọi tool **không** thuộc nhóm cắt được ở trên (Bash, MCP…): nội dung thẻ dài hơn `handoff_max_bytes`
+  (mặc định 4.096 byte UTF-8) hoặc `handoff_max_lines` (mặc định 50 dòng), cấu hình ở `[hub]` (§3.7).
+- Hub kiểm **trước** policy, trả `{}` ngay (Claude Code hỏi trong terminal, hộp thoại hiện đầy đủ lệnh và chờ, Q2),
+  không giữ yêu cầu, không bao giờ allow/deny, không tự duyệt, không đếm ngược. Ghi `approvals.status = handed_off`.
+- Broadcast `ApprovalHandedOff{HandoffView}`: thẻ báo không có nút; xem trước đầu/cuối; cờ tính trên lệnh đầy đủ;
+  "Lệnh quá dài để duyệt ở đây — hãy mở terminal của <agent> để xem đủ và quyết định." Nhân vật: chờ duyệt, chữ
+  "Duyệt trong terminal".
+- `Decide` với `handoff_id` → `Feed` "Yêu cầu này đang được duyệt trong terminal"; `GET /approvals/{id}/input` → `404`.
+- Thẻ bị xóa (`HandoffCleared`) theo đúng luật hủy yêu cầu "đã được trả lời ở nơi khác" của T3 (sự kiện kế tiếp của cùng
+  agent; `PostToolUse` khớp bằng hash `tool_input`) hoặc `SessionEnd`. Tối đa 64 thẻ, đầy thì bỏ thẻ cũ nhất.
 
 **Đếm ngược phủ quyết và tạm dừng** (bất biến: khi đội tạm dừng, không có allow nào mà người không bấm):
 - Hub chỉ đặt `countdown_ms = Some(..)` khi policy trả `AskUser{countdown}` (T10 mức 5), yêu cầu `reversible` và
@@ -378,7 +409,7 @@ CREATE TABLE approvals (
   request_id TEXT PRIMARY KEY, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
   tool TEXT NOT NULL, command_original TEXT NOT NULL, command_normalized TEXT NOT NULL,
   risk TEXT NOT NULL, group_key TEXT NOT NULL,
-  status TEXT NOT NULL CHECK (status IN ('pending','allowed','denied','timed_out','cancelled')),
+  status TEXT NOT NULL CHECK (status IN ('pending','allowed','denied','timed_out','cancelled','handed_off')),
   decided_by TEXT, created_at TEXT NOT NULL, decided_at TEXT, latency_ms INTEGER, channel TEXT
 );
 CREATE INDEX approvals_created ON approvals(created_at);
@@ -442,6 +473,8 @@ bind = "127.0.0.1:7878"
 approval_timeout_secs = 110
 reconcile_interval_secs = 30
 event_ttl_days = 30
+handoff_max_bytes = 4096       # lệnh dài hơn (byte UTF-8) hoặc nhiều dòng hơn: trả về terminal (§3.4, T5b); 1–1048576
+handoff_max_lines = 50
 
 [team]
 main_roster_max = 5
@@ -705,6 +738,19 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
   đa 1 MB) — cần người quyết; T5b: serialize mỗi thông điệp broadcast một lần, giới hạn hàng gửi mỗi client, UI bắt mở
   bản đầy đủ khi `truncated`; T8: bảng Unicode đầy đủ (gồm Cn); cấu hình mặc định nên ở thư mục cấu hình người dùng
   trước khi T8/T10 đưa policy vào file.
+
+**Đã làm ở T5b** (đã duyệt kế hoạch: L1–L5, P1–P3)
+- Lệnh quá dài trả về terminal (§3.4 "Lệnh quá dài"): quyết định của người duyệt cho mục còn mở ở trên; quy tắc bất
+  biến 3 trong `CLAUDE.md` thêm câu "Hub không bao giờ cắt bớt một lệnh mà nó cho người duyệt…". L1: Edit/Write/
+  MultiEdit/NotebookEdit vẫn cắt nội dung (không trả về terminal). L2: `approvals.status = 'handed_off'` (§3.5). L3: kiểu
+  riêng `HandoffView`, id `hof_`. L4: ngưỡng 4.096 byte / 50 dòng, cấu hình 1–1.048.576.
+- `/ws` (`hub/src/ws.rs`): Snapshot trước rồi delta; mỗi `ServerMsg` serialize một lần thành frame dùng chung; client
+  tụt nhận Snapshot mới; client không nhận frame trong 10 s bị ngắt; ping 30 s, lỡ 2 lần thì đóng; frame tối đa 64 KB;
+  `Decide` tối đa 20/s mỗi kết nối, lý do tối đa 500 ký tự, mọi quyết định được log kèm kết nối; Ctrl-C gửi Close.
+  `Feed` trả lời lệnh (hết hạn, bị giữ, duyệt-trong-terminal, chưa hỗ trợ, thông điệp sai) chỉ gửi cho client đó.
+- Token UI riêng (D1) và kiểm `Host`/`Origin` (§3.3). P2: Windows dựa vào quyền mặc định của `%APPDATA%`. P3: cấu hình
+  vẫn đọc từ thư mục hiện tại tới T8.
+- `GET /approvals/{id}/input` (§3.3). `docs/PROTOCOL.md` mô tả đầy đủ giao thức cho làn `ui`.
 
 ### T6 · ARC-27 · Lưu trữ
 
