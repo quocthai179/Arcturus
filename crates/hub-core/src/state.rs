@@ -24,6 +24,13 @@ pub const DONE_HOLD: Duration = Duration::seconds(3);
 /// Độ dài tối đa của lệnh Bash trong `act_text` (ký tự Unicode, kể cả `…`).
 pub const ACT_COMMAND_MAX_CHARS: usize = 60;
 
+/// Tối đa agent giữ trong state (ngân sách RAM, quy tắc bất biến 6; audit T5a finding 3). Đầy thì sự kiện của agent
+/// mới bị bỏ qua (log warn); agent đã có vẫn được cập nhật.
+pub const MAX_AGENTS: usize = 256;
+
+/// Độ dài tối đa của `cwd` giữ trong `AgentView` (ký tự Unicode, kể cả `…`).
+pub const CWD_MAX_CHARS: usize = 4096;
+
 pub const TEXT_IDLE: &str = "Đang rảnh";
 pub const TEXT_THINKING: &str = "Đang suy nghĩ";
 pub const TEXT_DONE: &str = "Xong";
@@ -39,7 +46,8 @@ pub struct AgentRuntime {
 #[derive(Clone, Debug, Default)]
 pub struct TeamState {
     pub agents: BTreeMap<AgentId, AgentRuntime>,
-    pub paused: bool,
+    /// "Giờ tập trung" (T14). Cờ tạm dừng không nằm ở đây: `Approvals` giữ nó để kiểm đếm ngược dưới cùng một khóa
+    /// (quyết định D3 ở T5).
     pub focus: bool,
 }
 
@@ -80,6 +88,20 @@ impl TeamState {
             _ => {}
         }
 
+        let missing = usize::from(!self.agents.contains_key(&ev.agent.id))
+            + ev.agent
+                .parent_id
+                .as_ref()
+                .map_or(0, |p| usize::from(!self.agents.contains_key(p)));
+        if missing > 0 && self.agents.len() + missing > MAX_AGENTS {
+            tracing::warn!(
+                agents = self.agents.len(),
+                session = ?ev.session_id,
+                "đã đủ {MAX_AGENTS} agent, bỏ qua sự kiện của agent mới"
+            );
+            return out;
+        }
+
         if let Some(parent) = &ev.agent.parent_id {
             if !self.agents.contains_key(parent) {
                 let mut rt = self.new_session_runtime(parent, ev, personas);
@@ -112,7 +134,7 @@ impl TeamState {
         rt.view.last_event_at = ev.ts;
         rt.view.host.clone_from(&ev.host);
         if let Some(cwd) = &ev.cwd {
-            rt.view.cwd.clone_from(cwd);
+            rt.view.cwd = truncate(cwd, CWD_MAX_CHARS);
         }
         if is_new || !same_visible(&before, &rt.view) {
             out.push(ServerMsg::AgentUpdated {
@@ -145,6 +167,30 @@ impl TeamState {
     /// Mọi agent, cho `Snapshot` (T5).
     pub fn views(&self) -> Vec<AgentView> {
         self.agents.values().map(|a| a.view.clone()).collect()
+    }
+
+    /// Tên hiển thị của agent (cho thẻ duyệt).
+    pub fn name_of(&self, id: &str) -> Option<&str> {
+        self.agents.get(id).map(|a| a.view.name.as_str())
+    }
+
+    /// Yêu cầu duyệt của `id` đã có quyết định (PLAN T3 bước 9): agent đang chờ duyệt quay về suy nghĩ.
+    /// Agent đã sang trạng thái khác (sự kiện kế tiếp tới trước) thì giữ nguyên.
+    pub fn approval_finished(&mut self, id: &str) -> Vec<ServerMsg> {
+        match self.agents.get_mut(id) {
+            Some(rt) if rt.view.mood == Mood::Approval => {
+                set(
+                    &mut rt.view,
+                    Mood::Working,
+                    Activity::Thinking,
+                    TEXT_THINKING,
+                );
+                vec![ServerMsg::AgentUpdated {
+                    agent: rt.view.clone(),
+                }]
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn name_in_use(&self, name: &str) -> bool {
@@ -207,7 +253,7 @@ impl TeamState {
                 act_text: TEXT_IDLE.to_owned(),
                 host: ev.host.clone(),
                 source: ev.source,
-                cwd: ev.cwd.clone().unwrap_or_default(),
+                cwd: truncate(ev.cwd.as_deref().unwrap_or_default(), CWD_MAX_CHARS),
                 context_pct: None,
                 last_event_at: ev.ts,
             },
@@ -864,6 +910,58 @@ mod tests {
         }
         w.apply(hook("UserPromptSubmit", "abcdef12"));
         assert_eq!(w.view("agt_abcdef12").name, "Agent abcd");
+    }
+
+    #[test]
+    fn agent_count_is_capped() {
+        let mut w = World::new();
+        for i in 0..MAX_AGENTS {
+            w.apply(hook("UserPromptSubmit", &format!("s{i}")));
+        }
+        assert_eq!(w.st.agents.len(), MAX_AGENTS);
+        // Phiên mới bị bỏ qua, không tạo agent, không broadcast.
+        assert!(w.apply(hook("UserPromptSubmit", "moi")).is_empty());
+        assert!(w.apply(sub(hook("SubagentStart", "s0"), "a1")).is_empty());
+        assert_eq!(w.st.agents.len(), MAX_AGENTS);
+        // Agent đã có vẫn được cập nhật; xóa bớt thì lại nhận agent mới.
+        assert_eq!(w.apply(hook("Stop", "s0")).len(), 1);
+        w.apply(hook("SessionEnd", "s1"));
+        assert_eq!(w.apply(hook("UserPromptSubmit", "moi")).len(), 1);
+    }
+
+    #[test]
+    fn long_cwd_is_truncated() {
+        let mut w = World::new();
+        let mut h = hook("UserPromptSubmit", "s1");
+        h["cwd"] = json!(format!("D:/{}", "d".repeat(100_000)));
+        w.apply(h.clone());
+        assert_eq!(w.view("agt_s1").cwd.chars().count(), CWD_MAX_CHARS);
+        w.apply(h);
+        assert_eq!(w.view("agt_s1").cwd.chars().count(), CWD_MAX_CHARS);
+    }
+
+    #[test]
+    fn approval_finished_returns_waiting_agent_to_thinking() {
+        let mut w = World::new();
+        let mut p = pre_tool("s1", "Bash", json!({ "command": "git push" }));
+        p["hook_event_name"] = json!("PermissionRequest");
+        w.apply(p);
+        assert_eq!(w.st.name_of("agt_s1"), Some("Muphrid"));
+        assert_eq!(w.st.approval_finished("agt_s1").len(), 1);
+        assert_state(
+            &w,
+            "agt_s1",
+            Mood::Working,
+            Activity::Thinking,
+            TEXT_THINKING,
+        );
+
+        // Đã sang trạng thái khác, hoặc agent không còn: không làm gì.
+        w.apply(hook("Stop", "s1"));
+        assert!(w.st.approval_finished("agt_s1").is_empty());
+        assert_eq!(w.view("agt_s1").mood, Mood::Done);
+        assert!(w.st.approval_finished("agt_khong_co").is_empty());
+        assert_eq!(w.st.name_of("agt_khong_co"), None);
     }
 
     #[test]

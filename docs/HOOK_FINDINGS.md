@@ -38,6 +38,11 @@ về hub ở `127.0.0.1:7879`.
 - **F5 · Trường chung của gần như mọi sự kiện:** `session_id`, `transcript_path`, `cwd`, `prompt_id`, `hook_event_name`;
   thường có thêm `scratchpad_dir`, `permission_mode`, `effort.level`. Trên Windows `cwd` và đường dẫn dùng `\`, khớp quyết
   định chuẩn hóa `match_cwd` ở `docs/PLAN.md` §3.7.
+- **F6 · Bash tool thừa hưởng biến môi trường của tiến trình `claude`, kể cả `ARCTURUS_TOKEN`** (v2.1.308, T5). Headless
+  trong thư mục sandbox, không hook: `ARCTURUS_TOKEN=<token giả> claude -p "... printenv ARCTURUS_TOKEN" --allowedTools
+  "Bash(printenv ARCTURUS_TOKEN)"` → in đúng token giả. Hệ quả: token của hook đọc được bởi mọi agent (không cần người
+  duyệt nếu lệnh đã allow sẵn). Vì vậy `/ws` và `/approvals/*` dùng token UI riêng, không nằm trong môi trường Claude Code
+  (quyết định D1 ở T5, `docs/PLAN.md` §3.3).
 
 ## Đã biết từ tài liệu (cần xác nhận lại trên máy)
 

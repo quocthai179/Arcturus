@@ -144,7 +144,7 @@ Persona không lưu trong SQLite: đọc từ `arcturus.toml` khi hub khởi đ�
 Mỗi thông điệp là JSON `{"t": "<loại>", ...}`; kiểu Rust ở `docs/PLAN.md` §3.4.
 
 Server → client: `snapshot {agents, queue, team}`, `agent_updated {agent}`, `agent_removed {id}`,
-`approval_requested {approval}`, `approval_resolved {request_id, decision, decided_by}`, `team_updated {team}`,
+`approval_requested {approval}`, `approval_resolved {request_id, decision | null, decided_by}`, `team_updated {team}`,
 `feed {text, ts}`, `suggestion {suggestion}` (T10).
 
 Client → server: `decide {request_id, decision, message?, origin: user | countdown}`, `decide_group {group_key, decision}` (T9),

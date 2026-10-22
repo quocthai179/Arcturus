@@ -13,12 +13,16 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use hub::approvals::{
-    AlwaysAsk, ApprovalCtx, ApprovalNotice, ApprovalRecord, ApprovalStatus, ApprovalStore,
-    Approvals, ApprovalsConfig, DecideOrigin, DecideResult, HeldReason, NoStore, PendingApproval,
+    AlwaysAsk, ApprovalCtx, ApprovalRecord, ApprovalStatus, ApprovalStore, Approvals,
+    ApprovalsConfig, DecideOrigin, DecideResult, HeldReason, NoStore, PendingApproval,
     PermissionOutcome, Policy, PolicyOutcome, StoreAck, StoreError,
 };
+use hub::hub::Hub;
 use hub::{hooks, server};
+use hub_core::config::Config;
 use hub_core::hook::{self, HookInput};
+use hub_core::persona::PersonaBook;
+use hub_core::protocol::ServerMsg;
 use hub_core::schema::{DecidedBy, Decision, Risk};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
@@ -175,8 +179,8 @@ fn behavior(v: &Value) -> Option<&str> {
 
 struct TestHub {
     addr: SocketAddr,
-    approvals: Arc<Approvals>,
-    notices: broadcast::Receiver<ApprovalNotice>,
+    core: Arc<Hub>,
+    notices: broadcast::Receiver<ServerMsg>,
     client: reqwest::Client,
     shutdown: Option<oneshot::Sender<()>>,
     server: JoinHandle<()>,
@@ -197,24 +201,31 @@ impl TestHub {
         policy: Box<dyn Policy>,
         store: Box<dyn ApprovalStore>,
     ) -> Self {
-        let approvals = Arc::new(Approvals::new(cfg, policy, store));
-        let notices = approvals.subscribe();
-        let app = hooks::router(approvals.clone(), "test-host".to_owned(), TOKEN.to_owned());
+        let (core, _tasks) = Hub::start_with(
+            Config::default(),
+            PersonaBook::default(),
+            "test-host".to_owned(),
+            cfg,
+            policy,
+            store,
+        );
+        let notices = core.subscribe();
+        let app = hooks::router(core.clone(), TOKEN.to_owned());
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
         let addr = listener.local_addr().unwrap();
         let (tx, rx) = oneshot::channel::<()>();
-        let a = approvals.clone();
+        let c = core.clone();
         let server = tokio::spawn(async move {
             server::serve_until(listener, app, async move {
                 let _ = rx.await;
-                a.shutdown();
+                c.shutdown();
             })
             .await
             .unwrap();
         });
         TestHub {
             addr,
-            approvals,
+            core,
             notices,
             client: reqwest::Client::new(),
             shutdown: Some(tx),
@@ -263,7 +274,7 @@ impl TestHub {
     }
 
     async fn next_requested(&mut self) -> PendingApproval {
-        next_requested(&mut self.notices).await
+        next_requested(&mut self.notices, &self.core.approvals).await
     }
 
     async fn stop(mut self) {
@@ -277,14 +288,43 @@ impl TestHub {
     }
 }
 
-async fn next_requested(rx: &mut broadcast::Receiver<ApprovalNotice>) -> PendingApproval {
+/// Chờ `ApprovalRequested` kế tiếp, trả chi tiết yêu cầu (gồm `tool_input` đầy đủ) từ hàng đợi.
+async fn next_requested(
+    rx: &mut broadcast::Receiver<ServerMsg>,
+    approvals: &Approvals,
+) -> PendingApproval {
     loop {
         match tokio::time::timeout(WAIT, rx.recv()).await {
-            Ok(Ok(ApprovalNotice::Requested(p))) => return p,
+            Ok(Ok(ServerMsg::ApprovalRequested { approval })) => {
+                return approvals
+                    .pending(&approval.request_id)
+                    .expect("yêu cầu vừa báo phải còn trong hàng đợi");
+            }
             Ok(Ok(_)) => continue,
             other => panic!("không thấy ApprovalRequested: {other:?}"),
         }
     }
+}
+
+/// Chờ `ApprovalResolved` kế tiếp (bỏ qua `AgentUpdated`…).
+async fn next_resolved(
+    rx: &mut broadcast::Receiver<ServerMsg>,
+) -> (String, Option<Decision>, DecidedBy) {
+    loop {
+        match tokio::time::timeout(WAIT, rx.recv()).await {
+            Ok(Ok(ServerMsg::ApprovalResolved {
+                request_id,
+                decision,
+                decided_by,
+            })) => return (request_id, decision, decided_by),
+            Ok(Ok(_)) => continue,
+            other => panic!("không thấy ApprovalResolved: {other:?}"),
+        }
+    }
+}
+
+fn bus() -> broadcast::Sender<ServerMsg> {
+    broadcast::channel(256).0
 }
 
 async fn join<T>(h: JoinHandle<T>) -> T {
@@ -304,6 +344,7 @@ fn direct(policy: Box<dyn Policy>) -> (Arc<Approvals>, Arc<Mutex<Vec<ApprovalRec
         ApprovalsConfig::default(),
         policy,
         Box::new(store),
+        bus(),
     ));
     (approvals, records)
 }
@@ -313,7 +354,7 @@ fn spawn_request(approvals: &Arc<Approvals>, body: Value) -> JoinHandle<Permissi
     tokio::spawn(async move {
         let input = HookInput::new(body);
         let ev = hook::to_event(&input, "test-host", OffsetDateTime::now_utc());
-        a.request(input, &ev).await
+        a.request(input, &ev, "Khoa").await
     })
 }
 
@@ -338,7 +379,8 @@ async fn user_allow_returns_allow_decision() {
     assert_eq!(p.agent_id, "agt_cd99a479-bb9f-4c58-8793-d22374df884e");
 
     assert_eq!(
-        hub.approvals
+        hub.core
+            .approvals
             .decide(&p.request_id, Decision::Allow, DecideOrigin::User, None),
         DecideResult::Resolved
     );
@@ -348,7 +390,7 @@ async fn user_allow_returns_allow_decision() {
         body,
         json!({"hookSpecificOutput":{"hookEventName":"PermissionRequest","decision":{"behavior":"allow"}}})
     );
-    assert!(hub.approvals.snapshot().is_empty());
+    assert!(hub.core.approvals.snapshot().is_empty());
     hub.stop().await;
 }
 
@@ -364,7 +406,7 @@ async fn user_deny_returns_deny_decision() {
     let h = hub.permission(permission_body("s1", None, "git push --force"));
     let p = hub.next_requested().await;
     assert_eq!(
-        hub.approvals.decide(
+        hub.core.approvals.decide(
             &p.request_id,
             Decision::Deny,
             DecideOrigin::User,
@@ -391,18 +433,12 @@ async fn resolved_notice_reports_decision_and_origin() {
     let mut hub = TestHub::start().await;
     let h = hub.permission(permission_body("s1", None, "ls"));
     let p = hub.next_requested().await;
-    hub.approvals
+    hub.core
+        .approvals
         .decide(&p.request_id, Decision::Allow, DecideOrigin::User, None);
     assert_eq!(
-        tokio::time::timeout(WAIT, hub.notices.recv())
-            .await
-            .unwrap()
-            .unwrap(),
-        ApprovalNotice::Resolved {
-            request_id: p.request_id.clone(),
-            decision: Some(Decision::Allow),
-            decided_by: DecidedBy::User,
-        }
+        next_resolved(&mut hub.notices).await,
+        (p.request_id.clone(), Some(Decision::Allow), DecidedBy::User)
     );
     join(h).await;
     hub.stop().await;
@@ -416,12 +452,14 @@ async fn two_sessions_concurrent_requests_routed_correctly() {
     let hb = hub.permission(permission_body("sess-b", None, "echo b"));
     let pb = hub.next_requested().await;
     assert_ne!(pa.request_id, pb.request_id);
-    assert_eq!(hub.approvals.snapshot().len(), 2);
+    assert_eq!(hub.core.approvals.snapshot().len(), 2);
 
     // Quyết định ngược thứ tự đến: mỗi handler nhận đúng quyết định của mình.
-    hub.approvals
+    hub.core
+        .approvals
         .decide(&pb.request_id, Decision::Allow, DecideOrigin::User, None);
-    hub.approvals
+    hub.core
+        .approvals
         .decide(&pa.request_id, Decision::Deny, DecideOrigin::User, None);
     let (_, a) = join(ha).await;
     let (_, b) = join(hb).await;
@@ -440,7 +478,7 @@ async fn timeout_returns_empty_object_never_allow() {
     let (approvals, records) = direct(Box::new(AlwaysAsk));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "rm -rf target"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
     assert_eq!(p.deadline_at - p.created_at, Duration::from_secs(110));
 
     tokio::time::advance(Duration::from_secs(109)).await;
@@ -472,7 +510,7 @@ async fn http_timeout_returns_empty_object() {
     hub.next_requested().await;
     let (status, body) = join(h).await;
     assert_eq!((status, body), (200, json!({})));
-    assert!(hub.approvals.snapshot().is_empty());
+    assert!(hub.core.approvals.snapshot().is_empty());
     hub.stop().await;
 }
 
@@ -498,14 +536,16 @@ async fn session_end_while_pending_returns_empty_object() {
     );
     // Phiên khác không bị ảnh hưởng.
     assert_eq!(
-        hub.approvals
+        hub.core
+            .approvals
             .snapshot()
             .iter()
             .map(|p| p.request_id.clone())
             .collect::<Vec<_>>(),
         vec![p2.request_id.clone()]
     );
-    hub.approvals
+    hub.core
+        .approvals
         .decide(&p2.request_id, Decision::Allow, DecideOrigin::User, None);
     assert_eq!(behavior(&join(other).await.1), Some("allow"));
     hub.stop().await;
@@ -519,11 +559,11 @@ async fn shutdown_returns_empty_object_for_pending() {
     let h2 = hub.permission(permission_body("s2", None, "ls"));
     hub.next_requested().await;
 
-    let approvals = hub.approvals.clone();
+    let core = hub.core.clone();
     hub.stop().await;
     assert_eq!(join(h1).await, (200, json!({})));
     assert_eq!(join(h2).await, (200, json!({})));
-    assert!(approvals.snapshot().is_empty());
+    assert!(core.approvals.snapshot().is_empty());
 }
 
 #[tokio::test]
@@ -554,13 +594,14 @@ async fn decide_on_expired_request_is_noop() {
 
     for decision in [Decision::Allow, Decision::Deny] {
         assert_eq!(
-            hub.approvals
+            hub.core
+                .approvals
                 .decide(&p.request_id, decision, DecideOrigin::User, None),
             DecideResult::Expired
         );
     }
     assert_eq!(
-        hub.approvals.decide(
+        hub.core.approvals.decide(
             "req_khong_ton_tai",
             Decision::Allow,
             DecideOrigin::User,
@@ -574,7 +615,7 @@ async fn decide_on_expired_request_is_noop() {
 #[tokio::test]
 async fn client_disconnect_cancels_pending() {
     let mut hub = TestHub::start().await;
-    let mut resolved = hub.approvals.subscribe();
+    let mut resolved = hub.core.approvals.subscribe();
     let body = permission_body("s1", None, "ls").to_string();
     let mut sock = tokio::net::TcpStream::connect(hub.addr).await.unwrap();
     let req = format!(
@@ -587,23 +628,12 @@ async fn client_disconnect_cancels_pending() {
     let p = hub.next_requested().await;
 
     drop(sock);
-    loop {
-        match tokio::time::timeout(WAIT, resolved.recv()).await {
-            Ok(Ok(ApprovalNotice::Resolved {
-                request_id,
-                decision,
-                decided_by,
-            })) => {
-                assert_eq!(request_id, p.request_id);
-                assert_eq!(decision, None);
-                assert_eq!(decided_by, DecidedBy::Cancelled);
-                break;
-            }
-            Ok(Ok(_)) => continue,
-            other => panic!("yêu cầu không bị hủy khi client đóng kết nối: {other:?}"),
-        }
-    }
-    assert!(hub.approvals.snapshot().is_empty());
+    assert_eq!(
+        next_resolved(&mut resolved).await,
+        (p.request_id.clone(), None, DecidedBy::Cancelled),
+        "yêu cầu phải bị hủy khi client đóng kết nối"
+    );
+    assert!(hub.core.approvals.snapshot().is_empty());
     hub.stop().await;
 }
 
@@ -618,7 +648,7 @@ async fn answered_in_terminal_supersedes_pending() {
     hub.next_requested().await;
     hub.event(post_tool_body("s1", None, "cargo test")).await;
     assert_eq!(join(h).await, (200, json!({})));
-    assert!(hub.approvals.snapshot().is_empty());
+    assert!(hub.core.approvals.snapshot().is_empty());
     hub.stop().await;
 }
 
@@ -644,7 +674,7 @@ async fn stop_or_prompt_of_same_agent_supersedes_pending() {
         let (approvals, _) = direct(Box::new(AlwaysAsk));
         let mut notices = approvals.subscribe();
         let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
-        next_requested(&mut notices).await;
+        next_requested(&mut notices, &approvals).await;
         assert_eq!(
             apply_event(&approvals, event_body(name, "s1", None)),
             1,
@@ -659,7 +689,7 @@ async fn notification_does_not_cancel_pending() {
     let (approvals, _) = direct(Box::new(AlwaysAsk));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
     // Q1: `Notification` `permission_prompt` tới khoảng 6 s sau `PermissionRequest`.
     let mut n = fixture("Notification/01M5FMQM4X9CTXY61KY2MW7M16.json");
     n["session_id"] = json!("s1");
@@ -678,7 +708,7 @@ async fn parallel_tool_event_does_not_cancel_pending() {
     let (approvals, _) = direct(Box::new(AlwaysAsk));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "cargo test"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
 
     // Tool khác của cùng agent, cùng lệnh của agent khác, Stop của subagent khác, phiên khác: đều không hủy.
     assert_eq!(apply_event(&approvals, post_tool_body("s1", None, "ls")), 0);
@@ -705,7 +735,7 @@ async fn subagent_stop_does_not_cancel_parent_pending() {
     let (approvals, _) = direct(Box::new(AlwaysAsk));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
     assert_eq!(
         apply_event(&approvals, event_body("SubagentStop", "s1", Some("sub1"))),
         0
@@ -736,7 +766,7 @@ async fn auto_allow_with_acked_store_returns_allow() {
         (recs[0].status, recs[0].decided_by),
         (ApprovalStatus::Allowed, Some(DecidedBy::Policy))
     );
-    assert!(hub.approvals.snapshot().is_empty());
+    assert!(hub.core.approvals.snapshot().is_empty());
     hub.stop().await;
 }
 
@@ -749,13 +779,14 @@ async fn paused_converts_auto_allow_to_ask_user() {
         Box::new(store),
     )
     .await;
-    hub.approvals.set_paused(true);
+    hub.core.approvals.set_paused(true);
     let h = hub.permission(permission_body("s1", None, "ls"));
     let p = hub.next_requested().await;
     assert_eq!(p.risk, Risk::Low, "giữ risk policy đã tính");
     assert!(!h.is_finished());
     // Tạm dừng không tự từ chối: yêu cầu chờ người.
-    hub.approvals
+    hub.core
+        .approvals
         .decide(&p.request_id, Decision::Deny, DecideOrigin::User, None);
     assert_eq!(behavior(&join(h).await.1), Some("deny"));
     hub.stop().await;
@@ -781,7 +812,8 @@ async fn auto_allow_store_failure_falls_back_to_ask_user() {
         let h = hub.permission(permission_body("s1", None, "ls"));
         let p = hub.next_requested().await;
         assert!(!h.is_finished(), "{why}: không được tự allow");
-        hub.approvals
+        hub.core
+            .approvals
             .decide(&p.request_id, Decision::Deny, DecideOrigin::User, None);
         assert_eq!(behavior(&join(h).await.1), Some("deny"), "{why}");
         hub.stop().await;
@@ -797,7 +829,7 @@ async fn countdown_origin_rejected_without_countdown() {
     let (approvals, _) = direct(Box::new(AlwaysAsk));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
     assert_eq!(p.countdown, None);
     for decision in [Decision::Allow, Decision::Deny] {
         let expected = if decision == Decision::Allow {
@@ -821,7 +853,7 @@ async fn countdown_origin_rejected_before_elapsed() {
     let (approvals, _) = direct(Box::new(countdown(Duration::from_secs(5))));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
     assert_eq!(p.countdown, Some(Duration::from_secs(5)));
 
     tokio::time::advance(Duration::from_secs(4)).await;
@@ -845,7 +877,7 @@ async fn countdown_origin_rejected_while_paused() {
     let (approvals, _) = direct(Box::new(countdown(Duration::from_secs(5))));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
 
     approvals.set_paused(true);
     assert_eq!(
@@ -879,7 +911,10 @@ async fn countdown_origin_rejected_while_paused() {
     // Yêu cầu tới trong lúc tạm dừng không có đếm ngược.
     approvals.set_paused(true);
     let h2 = spawn_request(&approvals, permission_body("s2", None, "ls"));
-    assert_eq!(next_requested(&mut notices).await.countdown, None);
+    assert_eq!(
+        next_requested(&mut notices, &approvals).await.countdown,
+        None
+    );
 
     approvals.shutdown();
     assert_eq!(h.await.unwrap(), PermissionOutcome::Cancelled);
@@ -891,7 +926,7 @@ async fn countdown_allow_records_decided_by_countdown() {
     let (approvals, records) = direct(Box::new(countdown(Duration::from_secs(5))));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
 
     tokio::time::advance(Duration::from_secs(5)).await;
     assert_eq!(
@@ -936,7 +971,7 @@ async fn wrong_token_returns_401() {
             assert_eq!(res.status().as_u16(), 401, "{path} {token:?}");
         }
     }
-    assert!(hub.approvals.snapshot().is_empty());
+    assert!(hub.core.approvals.snapshot().is_empty());
     let health = hub.client.get(hub.url("/healthz")).send().await.unwrap();
     assert_eq!(health.status().as_u16(), 200);
     hub.stop().await;
@@ -953,7 +988,7 @@ async fn malformed_json_returns_400() {
             .unwrap();
         assert_eq!(res.status().as_u16(), 400, "{path}");
     }
-    assert!(hub.approvals.snapshot().is_empty());
+    assert!(hub.core.approvals.snapshot().is_empty());
     hub.stop().await;
 }
 
@@ -967,7 +1002,7 @@ async fn oversized_body_is_rejected() {
         .await
         .unwrap();
     assert_eq!(res.status().as_u16(), 413);
-    assert!(hub.approvals.snapshot().is_empty());
+    assert!(hub.core.approvals.snapshot().is_empty());
     hub.stop().await;
 }
 
@@ -982,7 +1017,7 @@ async fn non_permission_event_on_permission_endpoint_returns_empty_object() {
     let mut body = permission_body("s1", None, "ls");
     body["hook_event_name"] = json!("PreToolUse");
     assert_eq!(join(hub.permission(body)).await, (200, json!({})));
-    assert!(hub.approvals.snapshot().is_empty());
+    assert!(hub.core.approvals.snapshot().is_empty());
     hub.stop().await;
 }
 
@@ -1018,6 +1053,7 @@ async fn pause_during_store_ack_falls_back_to_ask_user() {
             records: records.clone(),
             held: held.clone(),
         }),
+        bus(),
     ));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
@@ -1034,7 +1070,7 @@ async fn pause_during_store_ack_falls_back_to_ask_user() {
     let ack = held.lock().unwrap().remove(0);
     ack.send(Ok(())).unwrap();
 
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
     assert!(!h.is_finished(), "tạm dừng: không được tự allow");
     let recs = records.lock().unwrap().clone();
     let auto_id = recs[0].request_id.clone();
@@ -1062,10 +1098,11 @@ async fn auto_allow_fallback_uses_new_request_id() {
         ApprovalsConfig::default(),
         Box::new(auto_allow()),
         Box::new(store),
+        bus(),
     ));
     let mut notices = approvals.subscribe();
     let h = spawn_request(&approvals, permission_body("s1", None, "ls"));
-    let p = next_requested(&mut notices).await;
+    let p = next_requested(&mut notices, &approvals).await;
     let auto_id = records.lock().unwrap()[0].request_id.clone();
     assert_ne!(p.request_id, auto_id);
     assert_eq!(
@@ -1108,12 +1145,12 @@ async fn full_queue_returns_empty_object_immediately() {
         join(hub.permission(permission_body("s3", None, "echo 1"))).await,
         (200, json!({}))
     );
-    assert_eq!(hub.approvals.snapshot().len(), 3);
+    assert_eq!(hub.core.approvals.snapshot().len(), 3);
 
-    let approvals = hub.approvals.clone();
+    let core = hub.core.clone();
     hub.stop().await;
     for h in [a1, a2, b1] {
         assert_eq!(join(h).await, (200, json!({})));
     }
-    assert!(approvals.snapshot().is_empty());
+    assert!(core.approvals.snapshot().is_empty());
 }
