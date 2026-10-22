@@ -4,13 +4,15 @@ Ghi lại bằng chứng thật (phiên bản Claude Code, lệnh đã chạy, J
 Mỗi câu hỏi kèm fixture trong `fixtures/hooks/` nếu có.
 
 Phiên bản Claude Code đã thử: `claude --version` → `2.1.239` (phiên headless 1–5), `2.1.306` (phiên tương tác Q1/Q2 và
-lần kiểm lại SessionStart; CLI tự cập nhật giữa chừng). Windows 11, hook trỏ về `hub --record` ở `127.0.0.1:7879`.
+lần kiểm lại SessionStart; CLI tự cập nhật giữa chừng), `2.1.308` (Q1b ở T3, hub luồng duyệt thật). Windows 11, hook trỏ
+về hub ở `127.0.0.1:7879`.
 
 ## Câu hỏi mở
 
 | # | Câu hỏi | Vì sao quan trọng | Kết quả | Fixture |
 |---|---|---|---|---|
-| Q1 | Trong lúc HTTP hook `PermissionRequest` đang chờ, terminal có hiện hộp thoại duyệt không, hay treo? | Quyết định timeout và nút "trả về terminal" | **Không treo: hộp thoại hiện song song** trong lúc hub còn giữ request (v2.1.306, `--record-delay 20`). Hub nhận lúc 16:29:20.5; màn hình đọc trước 16:29:26 đã có "Do you want to proceed? 1. Yes … 4. No"; `Notification` `permission_prompt` tới lúc 16:29:26.6. Người dùng có thể trả lời ở terminal **trước** khi hub trả lời (chưa thử điều gì xảy ra khi đó, xem Q1b trong Nhật ký). | `fixtures/hooks/PermissionRequest/01M5FMQE8JCRSZ8PXH45HV306F.json`, `fixtures/hooks/Notification/01M5FMQM4X9CTXY61KY2MW7M16.json` |
+| Q1 | Trong lúc HTTP hook `PermissionRequest` đang chờ, terminal có hiện hộp thoại duyệt không, hay treo? | Quyết định timeout và nút "trả về terminal" | **Không treo: hộp thoại hiện song song** trong lúc hub còn giữ request (v2.1.306, `--record-delay 20`). Hub nhận lúc 16:29:20.5; màn hình đọc trước 16:29:26 đã có "Do you want to proceed? 1. Yes … 4. No"; `Notification` `permission_prompt` tới lúc 16:29:26.6. Người dùng có thể trả lời ở terminal **trước** khi hub trả lời (xem Q1b). | `fixtures/hooks/PermissionRequest/01M5FMQE8JCRSZ8PXH45HV306F.json`, `fixtures/hooks/Notification/01M5FMQM4X9CTXY61KY2MW7M16.json` |
+| Q1b | Người trả lời ở terminal trong lúc hub còn giữ request: Claude Code có đóng kết nối HTTP không? | Dọn yêu cầu đã được trả lời ở nơi khác (T3) | **Không đóng** (v2.1.308). Chỉ bật hook `PermissionRequest`: hub nhận 05:09:09.2; bấm "1. Yes" ở terminal 05:09:12.2; lệnh chạy ngay (`q1b-marker.txt` tạo lúc 05:09:13.27) trong khi hub **vẫn giữ** kết nối; kết nối chỉ đóng lúc 05:09:31.26, ngay sau khi tiến trình `claude` bị tắt (≈18 s sau khi lệnh chạy). Câu trả lời muộn của hub sau đó không còn tác dụng. Hệ quả: hub phải tự nhận ra yêu cầu đã được trả lời: T3 hủy (trả `{}`) khi tới `PostToolUse`/`PostToolUseFailure` cùng agent, cùng `tool_name` + `tool_input` (lần chạy đủ hook: hủy 1,2 s sau khi bấm), hoặc `Stop`/`StopFailure`/`UserPromptSubmit`/`SubagentStop` của cùng agent; tắt tiến trình thì guard ngắt kết nối hủy. | Log hub trong Nhật ký (không có fixture mới: body `PermissionRequest` giống Q1) |
 | Q2 | Trả `{}` (2xx) thì Claude Code có hiện hộp thoại bình thường ngay không? | Fail-safe | **Có.** Tương tác: hộp thoại đã hiện từ trước và giữ nguyên sau khi hub trả `{}` (16:29:40), vẫn chờ người trả lời. Headless `-p`: `{}` → không có người để hỏi → Claude Code **từ chối** lệnh (`marker-p.txt` không được tạo) và giải thích. Không trường hợp nào `{}` thành allow. | `fixtures/hooks/PermissionRequest/01M5FKGN3X96RXWT3QPR7887AR.json` |
 | Q3 | Trường nào trong đầu vào `PermissionRequest` chứa lệnh, tool, cwd, session_id? | Chuẩn hóa schema | Cấp cao nhất: `session_id`, `cwd`, `transcript_path`, `scratchpad_dir`, `prompt_id`, `permission_mode`, `effort.level`, `hook_event_name`, `tool_name`, `tool_input` (Bash: `command`, `description`), `permission_suggestions` (mảng `{type: "addDirectories" \| "setMode", …, destination}`). **Không có `tool_use_id`** (PreToolUse/PostToolUse có). Subagent thêm `agent_id`, `agent_type`. | `fixtures/hooks/PermissionRequest/01M5FKGN3X96RXWT3QPR7887AR.json` |
 | Q4 | Subagent có gửi `PermissionRequest` riêng không? Có trường agent_id/agent_type không? | Nhân vật "thực tập sinh" | **Có.** Subagent `general-purpose` chạy `touch sub-marker.txt` → `PermissionRequest` riêng với `agent_id` (ví dụ `ad7e4b71226dc3e83`) và `agent_type: "general-purpose"`, cùng `session_id` với phiên cha. `SubagentStart`/`SubagentStop` có `agent_id`, `agent_type` (`SubagentStop` thêm `agent_transcript_path`); mọi PreToolUse/PostToolUse của subagent mang `agent_id`. | `fixtures/hooks/PermissionRequest/01M5FKHVNVJ4DXZ5JJ78SM8SV9.json`, `fixtures/hooks/SubagentStart/01M5FKF3AQKEB0Z0XC6Z6Q9VDZ.json`, `fixtures/hooks/PreToolUse/01M5FKF68K2YRM92H05BZDE4XM.json` |
@@ -60,5 +62,14 @@ lần kiểm lại SessionStart; CLI tự cập nhật giữa chừng). Windows 
 - 2026-10-21 · F1 · hook http cho SessionStart không bắn (2.1.239, kiểm lại trên 2.1.306); hook command + curl thì có.
 - 2026-10-21 · Q1, Q2, Q10 · tương tác `claude --permission-mode default` trong tab Terminal, hub `--record-delay 20`,
   đọc màn hình ở +6 s và sau +20 s. Lần chạy đầu ở auto mode nên không có PermissionRequest (F2).
-- Chưa thử (Q1b): người dùng trả lời ở terminal **trong lúc** hub còn giữ request thì Claude Code đóng kết nối HTTP hay
-  để hub chờ tới hết giờ. Cần một người bấm phím trong 20 giây; đề xuất làm ở T3 hoặc T17.
+- 2026-10-22 · Q1b (T3) · hub luồng duyệt thật (`hub --bind 127.0.0.1:7879`, timeout 110 s), Claude Code 2.1.308
+  tương tác `--permission-mode default` trong `lab/`, lái bằng ConPTY (`node-pty`): gửi prompt
+  "run the command: touch q1b-marker.txt", chờ hộp thoại, bấm `1` sau 3 s. Ba lần chạy:
+  1. Đủ hook, script không nhận ra hộp thoại nên không bấm: hub giữ 05:05:26.8 → hết giờ 05:07:16.8, trả `{}`; hộp thoại
+     vẫn hiện, chờ người (khớp Q2 trên 2.1.308).
+  2. Đủ hook (`lab/settings.local.json`), bấm Yes 05:08:20.1: lệnh chạy, `PostToolUse` tới, hub log
+     `hủy yêu cầu duyệt, trả {} … why="tool đã chạy xong: yêu cầu được trả lời ở nơi khác"` lúc 05:08:21.29.
+  3. Chỉ hook `PermissionRequest`: bấm Yes 05:09:12.2, file tạo 05:09:13.27, hub vẫn giữ; log
+     `kết nối hook đóng trước khi có quyết định, hủy yêu cầu` lúc 05:09:31.26, ngay sau khi script tắt `claude`
+     (05:09:30.2 + Ctrl-C). Kết luận: Claude Code không đóng kết nối khi người trả lời ở terminal; chỉ đóng khi tiến trình
+     thoát (hoặc hết timeout của hook).

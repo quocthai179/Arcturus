@@ -592,6 +592,19 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - `countdown_origin_rejected_before_elapsed`, `countdown_origin_rejected_while_paused`
 - `countdown_allow_records_decided_by_countdown`
 
+**Đã làm ở T3 (lệch so với trên, đã duyệt kế hoạch)**
+- Hủy khi đã được trả lời ở terminal (Q1b: Claude Code **không** đóng kết nối, `docs/HOOK_FINDINGS.md`): sự kiện kế
+  tiếp của cùng agent (`PostToolUse`/`PostToolUseFailure` cùng `tool_name` + `tool_input`, `Stop`, `StopFailure`,
+  `UserPromptSubmit`, `SubagentStop`) hủy pending → `{}`. `Notification` không hủy. Client đóng kết nối (tiến trình thoát)
+  → guard trong handler hủy, ghi `cancelled`.
+- Kiểu tạm trong `hub/src/approvals.rs`, thay ở task sau: trait `Policy` + `AlwaysAsk` (T8 chuyển sang
+  `hub-core/src/policy/`), trait `ApprovalStore` + `NoStore` (T6; không có store thì AutoAllow luôn rơi về hỏi người),
+  `ApprovalNotice` (T5 đổi thành `ServerMsg`, dựng `ApprovalView`), `Approvals::decide` trả `DecideResult` (T5 đổi
+  `Expired`/`Held` thành `Feed`). Bước 3 (`state.apply`) chưa gọi: T4. Cờ tạm dừng nằm trong `Approvals`
+  (`set_paused`), T5 nối với `TeamPause`/`TeamResume`.
+- Hàng đợi pending dùng `std::sync::Mutex` (không giữ qua `.await`) để guard hủy trong `Drop` khóa được.
+- `--approval-timeout` (1–115 s, mặc định 110) thay cho `approval_timeout_secs` tới khi có `config.rs` (T4).
+
 ### T4 · ARC-25 · State machine và persona
 
 **Tạo:** `state.rs` (3.6), `persona.rs`, `config.rs` (3.7).
