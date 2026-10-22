@@ -30,6 +30,14 @@ use tokio::io::AsyncWriteExt;
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
+/// Cấu hình hàng đợi cho các test về hành vi khác: tắt sàn thời gian duyệt (đã có test riêng ở `tests/min_review.rs`).
+fn no_floor() -> ApprovalsConfig {
+    ApprovalsConfig {
+        min_review: Duration::ZERO,
+        ..ApprovalsConfig::default()
+    }
+}
+
 const TOKEN: &str = "test-token-0123456789abcdef-arcturus-t3";
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -188,12 +196,7 @@ struct TestHub {
 
 impl TestHub {
     async fn start() -> Self {
-        Self::start_with(
-            ApprovalsConfig::default(),
-            Box::new(AlwaysAsk),
-            Box::new(NoStore),
-        )
-        .await
+        Self::start_with(no_floor(), Box::new(AlwaysAsk), Box::new(NoStore)).await
     }
 
     async fn start_with(
@@ -340,12 +343,7 @@ async fn join<T>(h: JoinHandle<T>) -> T {
 
 fn direct(policy: Box<dyn Policy>) -> (Arc<Approvals>, Arc<Mutex<Vec<ApprovalRecord>>>) {
     let (store, records) = TestStore::new(Ack::Ok);
-    let approvals = Arc::new(Approvals::new(
-        ApprovalsConfig::default(),
-        policy,
-        Box::new(store),
-        bus(),
-    ));
+    let approvals = Arc::new(Approvals::new(no_floor(), policy, Box::new(store), bus()));
     (approvals, records)
 }
 
@@ -397,12 +395,7 @@ async fn user_allow_returns_allow_decision() {
 #[tokio::test]
 async fn user_deny_returns_deny_decision() {
     let (store, records) = TestStore::new(Ack::Ok);
-    let mut hub = TestHub::start_with(
-        ApprovalsConfig::default(),
-        Box::new(AlwaysAsk),
-        Box::new(store),
-    )
-    .await;
+    let mut hub = TestHub::start_with(no_floor(), Box::new(AlwaysAsk), Box::new(store)).await;
     let h = hub.permission(permission_body("s1", None, "git push --force"));
     let p = hub.next_requested().await;
     assert_eq!(
@@ -500,7 +493,7 @@ async fn http_timeout_returns_empty_object() {
     let mut hub = TestHub::start_with(
         ApprovalsConfig {
             timeout: Duration::from_millis(200),
-            ..ApprovalsConfig::default()
+            ..no_floor()
         },
         Box::new(AlwaysAsk),
         Box::new(NoStore),
@@ -517,12 +510,7 @@ async fn http_timeout_returns_empty_object() {
 #[tokio::test]
 async fn session_end_while_pending_returns_empty_object() {
     let (store, records) = TestStore::new(Ack::Ok);
-    let mut hub = TestHub::start_with(
-        ApprovalsConfig::default(),
-        Box::new(AlwaysAsk),
-        Box::new(store),
-    )
-    .await;
+    let mut hub = TestHub::start_with(no_floor(), Box::new(AlwaysAsk), Box::new(store)).await;
     let h = hub.permission(permission_body("s1", None, "ls"));
     let p = hub.next_requested().await;
     let other = hub.permission(permission_body("s2", None, "ls"));
@@ -582,7 +570,7 @@ async fn decide_on_expired_request_is_noop() {
     let mut hub = TestHub::start_with(
         ApprovalsConfig {
             timeout: Duration::from_millis(100),
-            ..ApprovalsConfig::default()
+            ..no_floor()
         },
         Box::new(AlwaysAsk),
         Box::new(NoStore),
@@ -751,12 +739,7 @@ async fn subagent_stop_does_not_cancel_parent_pending() {
 #[tokio::test]
 async fn auto_allow_with_acked_store_returns_allow() {
     let (store, records) = TestStore::new(Ack::Ok);
-    let hub = TestHub::start_with(
-        ApprovalsConfig::default(),
-        Box::new(auto_allow()),
-        Box::new(store),
-    )
-    .await;
+    let hub = TestHub::start_with(no_floor(), Box::new(auto_allow()), Box::new(store)).await;
     let (status, body) = join(hub.permission(permission_body("s1", None, "ls"))).await;
     assert_eq!(status, 200);
     assert_eq!(behavior(&body), Some("allow"));
@@ -773,12 +756,7 @@ async fn auto_allow_with_acked_store_returns_allow() {
 #[tokio::test]
 async fn paused_converts_auto_allow_to_ask_user() {
     let (store, _) = TestStore::new(Ack::Ok);
-    let mut hub = TestHub::start_with(
-        ApprovalsConfig::default(),
-        Box::new(auto_allow()),
-        Box::new(store),
-    )
-    .await;
+    let mut hub = TestHub::start_with(no_floor(), Box::new(auto_allow()), Box::new(store)).await;
     hub.core.approvals.set_paused(true);
     let h = hub.permission(permission_body("s1", None, "ls"));
     let p = hub.next_requested().await;
@@ -803,7 +781,7 @@ async fn auto_allow_store_failure_falls_back_to_ask_user() {
         let mut hub = TestHub::start_with(
             ApprovalsConfig {
                 store_ack_timeout: Duration::from_millis(100),
-                ..ApprovalsConfig::default()
+                ..no_floor()
             },
             Box::new(auto_allow()),
             store,
@@ -1021,7 +999,7 @@ async fn oversized_body_is_rejected() {
 #[tokio::test]
 async fn non_permission_event_on_permission_endpoint_returns_empty_object() {
     let hub = TestHub::start_with(
-        ApprovalsConfig::default(),
+        no_floor(),
         Box::new(auto_allow()),
         Box::new(TestStore::new(Ack::Ok).0),
     )
@@ -1059,7 +1037,7 @@ async fn pause_during_store_ack_falls_back_to_ask_user() {
     let records = Arc::new(Mutex::new(Vec::new()));
     let held = Arc::new(Mutex::new(Vec::new()));
     let approvals = Arc::new(Approvals::new(
-        ApprovalsConfig::default(),
+        no_floor(),
         Box::new(auto_allow()),
         Box::new(ManualStore {
             records: records.clone(),
@@ -1107,7 +1085,7 @@ async fn pause_during_store_ack_falls_back_to_ask_user() {
 async fn auto_allow_fallback_uses_new_request_id() {
     let (store, records) = TestStore::new(Ack::Err);
     let approvals = Arc::new(Approvals::new(
-        ApprovalsConfig::default(),
+        no_floor(),
         Box::new(auto_allow()),
         Box::new(store),
         bus(),
@@ -1135,7 +1113,7 @@ async fn full_queue_returns_empty_object_immediately() {
         ApprovalsConfig {
             max_pending: 3,
             max_pending_per_session: 2,
-            ..ApprovalsConfig::default()
+            ..no_floor()
         },
         Box::new(AlwaysAsk),
         Box::new(NoStore),

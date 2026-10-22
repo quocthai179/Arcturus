@@ -159,6 +159,23 @@ Lệnh quá dài để duyệt trên thẻ (mặc định > 4.096 byte hoặc > 
 nội dung kèm bản đầy đủ): hub trả `{}` ngay để người duyệt trong terminal, chỉ broadcast thẻ báo `approval_handed_off`
 không có nút duyệt (quy tắc bất biến 3).
 
+## Giới hạn bảo mật đã biết (v0)
+
+Arcturus giúp người dùng duyệt yêu cầu của agent; nó **không phải sandbox**. Một agent đã được chạy mã tùy ý dưới cùng
+tài khoản người dùng (lệnh đã allow sẵn trong settings, hoặc người dùng đã duyệt) làm được gần như mọi thứ người dùng làm
+được, và nằm ngoài phạm vi bảo vệ của v0. Cụ thể (F6, `docs/HOOK_FINDINGS.md`):
+
+- Bash tool thừa hưởng biến môi trường của tiến trình `claude`, nên đọc được `ARCTURUS_TOKEN` (token của hook). Vì vậy
+  UI dùng token riêng (D1).
+- File token UI (`<data_dir>/arcturus/ui-token`) cũng đọc được bởi agent như vậy. Giảm rủi ro (T5d · ARC-44):
+  `--ui-token-stdout` để app (T12) nhận token qua pipe, không có file trên đĩa (B1, đã có; mặc định hub vẫn ghi file
+  tới khi T12 dùng chế độ này); luật danger `arcturus_ui_token` đưa mọi lệnh chạm token hay WebSocket của hub về
+  Critical (B2, **dự kiến ở T8, chưa có**); sàn thời gian duyệt `min_review_ms` chặn tự duyệt ngay khi thẻ vừa được
+  phát, áp cho mọi allow kể cả đếm ngược (B4, đã có).
+- Còn lại: agent đọc được bộ nhớ của tiến trình app/hub cùng tài khoản, hoặc chờ quá sàn thời gian rồi gửi `decide`,
+  vẫn có thể tự duyệt. Lớp bảo vệ thật là deny rule trong settings của Claude Code (hook allow không vượt được deny) và
+  việc người dùng không allow sẵn lệnh chạy mã tùy ý.
+
 ## Mở rộng sau v0
 
 - v1: VRM view (three-vrm, chỉ render khi cửa sổ hiện), giọng nói (whisper.cpp base, Piper), trust ladder 7 mức.

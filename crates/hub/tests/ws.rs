@@ -25,6 +25,14 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+/// Cấu hình hàng đợi cho các test về hành vi khác: tắt sàn thời gian duyệt (đã có test riêng ở `tests/min_review.rs`).
+fn no_floor() -> ApprovalsConfig {
+    ApprovalsConfig {
+        min_review: Duration::ZERO,
+        ..ApprovalsConfig::default()
+    }
+}
+
 const HOOK: &str = "hook-token-0123456789abcdef-arcturus-t5b";
 const UI: &str = "ui-token-fedcba9876543210-arcturus-t5b-xyz";
 const WAIT: Duration = Duration::from_secs(5);
@@ -48,19 +56,20 @@ impl T {
 
     async fn start_with(policy: Box<dyn Policy>, wcfg: WsConfig) -> T {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        Self::start_on(listener, policy, wcfg).await
+        Self::start_on(listener, policy, wcfg, no_floor()).await
     }
 
     async fn start_on(
         listener: tokio::net::TcpListener,
         policy: Box<dyn Policy>,
         wcfg: WsConfig,
+        acfg: ApprovalsConfig,
     ) -> T {
         let (core, tasks) = Hub::start_with(
             Config::default(),
             PersonaBook::default(),
             "laptop".to_owned(),
-            ApprovalsConfig::default(),
+            acfg,
             policy,
             Box::new(NoStore),
         );
@@ -396,6 +405,43 @@ async fn ws_decide_resolves_pending_request() {
 }
 
 #[tokio::test]
+async fn ws_allow_too_fast_is_held_with_feed() {
+    // Sàn thời gian duyệt (T5d · ARC-44, F6 B4): allow tới ngay khi thẻ hiện bị giữ, client nhận Feed riêng.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let t = T::start_on(
+        listener,
+        Box::new(AlwaysAsk),
+        WsConfig::default(),
+        ApprovalsConfig {
+            min_review: Duration::from_secs(60),
+            ..ApprovalsConfig::default()
+        },
+    )
+    .await;
+    let (mut ws, _) = t.connect().await;
+    let h = t.permission(bash_permission("s1", "cargo test"));
+    let id = requested_id(&mut ws).await;
+    send(&mut ws, decide(&id, "allow", "user")).await;
+    assert_eq!(
+        next_of(&mut ws, &["feed"]).await["text"],
+        "Duyệt quá nhanh: xem lại thẻ rồi bấm lại"
+    );
+    assert!(
+        t.core.approvals.pending(&id).is_some(),
+        "yêu cầu phải còn chờ"
+    );
+    assert!(!h.is_finished());
+    // Deny không bị sàn chặn.
+    send(&mut ws, decide(&id, "deny", "user")).await;
+    let res = tokio::time::timeout(WAIT, h).await.unwrap().unwrap();
+    assert_eq!(
+        res.pointer("/hookSpecificOutput/decision/behavior"),
+        Some(&json!("deny"))
+    );
+    t.stop().await;
+}
+
+#[tokio::test]
 async fn ws_decide_errors_are_private_feeds() {
     let t = T::start().await;
     let (mut ws, _) = t.connect().await;
@@ -723,6 +769,7 @@ async fn ws_disconnects_stalled_client() {
             frames_capacity: 100_000,
             ..WsConfig::default()
         },
+        no_floor(),
     )
     .await;
 

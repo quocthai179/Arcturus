@@ -462,6 +462,9 @@ fn handle(st: &WsState, conn: u64, raw: &str, limiter: &mut Limiter) -> Vec<Mess
                 DecideResult::Held(HeldReason::NotReviewed) => {
                     vec![feed("Cần mở bản đầy đủ trước khi duyệt")]
                 }
+                DecideResult::Held(HeldReason::TooFast) => {
+                    vec![feed("Duyệt quá nhanh: xem lại thẻ rồi bấm lại")]
+                }
                 DecideResult::Held(_) => vec![feed("Cần trưởng nhóm bấm duyệt")],
                 DecideResult::HandedOff => {
                     vec![feed("Yêu cầu này đang được duyệt trong terminal")]

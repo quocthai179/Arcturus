@@ -19,6 +19,9 @@ pub const MAX_HANDOFF_THRESHOLD: usize = 1024 * 1024;
 pub const MIN_HELD_INPUT_MAX_BYTES: usize = 64 * 1024;
 pub const MAX_HELD_INPUT_MAX_BYTES: usize = 256 * 1024 * 1024;
 
+/// Trần của `[hub] min_review_ms` (T5d · ARC-44); `0` là tắt sàn thời gian duyệt.
+pub const MAX_MIN_REVIEW_MS: u64 = 10_000;
+
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
@@ -43,6 +46,9 @@ pub struct HubConfig {
     /// Trần tổng byte `tool_input` hub giữ cùng lúc khi chờ duyệt (quy tắc bất biến 6). Vượt thì yêu cầu mới nhận `{}`
     /// và Claude Code hỏi trong terminal (T5c · ARC-43).
     pub held_input_max_bytes: usize,
+    /// Sàn thời gian duyệt (ms): `allow` do người bấm tới sớm hơn chừng này kể từ lúc thẻ hiện bị giữ lại. `0` là tắt.
+    /// Biện pháp B4 cho F6 (T5d · ARC-44).
+    pub min_review_ms: u64,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -69,6 +75,7 @@ impl Default for HubConfig {
             handoff_max_bytes: 4096,
             handoff_max_lines: 50,
             held_input_max_bytes: 8 * 1024 * 1024,
+            min_review_ms: 1000,
         }
     }
 }
@@ -194,6 +201,15 @@ impl Config {
                 ),
             ));
         }
+        if self.hub.min_review_ms > MAX_MIN_REVIEW_MS {
+            return Err(invalid(
+                "hub.min_review_ms",
+                format!(
+                    "{} ngoài khoảng 0–{MAX_MIN_REVIEW_MS}",
+                    self.hub.min_review_ms
+                ),
+            ));
+        }
         for (field, value) in [
             (
                 "hub.reconcile_interval_secs",
@@ -312,6 +328,27 @@ mod tests {
             }
             other => panic!("cần lỗi Parse, có {other:?}"),
         }
+    }
+
+    #[test]
+    fn min_review_ms_default_and_range() {
+        assert_eq!(Config::default().hub.min_review_ms, 1000);
+        assert_eq!(
+            parse("[hub]\nmin_review_ms = 0\n")
+                .unwrap()
+                .hub
+                .min_review_ms,
+            0
+        );
+        let err = parse(&format!(
+            "[hub]\nmin_review_ms = {}\n",
+            MAX_MIN_REVIEW_MS + 1
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Invalid { field, .. } if field == "hub.min_review_ms"),
+            "{err}"
+        );
     }
 
     #[test]
