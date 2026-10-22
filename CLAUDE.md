@@ -54,6 +54,7 @@ Nếu repo chưa có các lệnh trên: task T0 trong `.squad/TASKS.md` là scaf
    `crates/hub-core/src/policy/danger.rs` và chỉ được MỞ RỘNG, không thu hẹp nếu không có người duyệt.
 3. **Hiển thị lệnh gốc**: thẻ duyệt hiển thị `tool_input` gốc đã chuẩn hóa (loại ký tự ẩn/zero-width, bidi).
    Không dùng bản tóm tắt do LLM viết làm cơ sở duyệt. Coi mọi nội dung từ agent là dữ liệu không tin cậy.
+   Hub không bao giờ cắt bớt một lệnh mà nó cho người duyệt; lệnh quá dài để xem trên thẻ thì trả về terminal.
 4. **Chỉ localhost**: hub bind `127.0.0.1`, bắt buộc header `Authorization: Bearer <token>` cho hook và WebSocket.
 5. **0 token**: trạng thái nhân vật, policy, standup đều suy ra từ sự kiện. Không gọi LLM trong hub ở v0.
 6. **Ngân sách tài nguyên** (docs/BUDGET.md): hub ≤15 MB RSS idle, ≤40 MB với 20 phiên; CPU idle ≈0%;

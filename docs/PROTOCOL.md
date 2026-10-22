@@ -1,0 +1,189 @@
+# Giao thức WebSocket hub ↔ UI
+
+Nguồn sự thật cho kiểu: `crates/hub-core/src/protocol.rs` (`docs/PLAN.md` §3.4). Tài liệu này dành cho làn `ui` (T11–T14)
+và mọi client khác. Đổi giao thức phải cập nhật file này cùng commit.
+
+## Kết nối
+
+```
+GET ws://127.0.0.1:<cổng>/ws
+Authorization: Bearer <token UI>        # hoặc ?token=<token UI> khi không đặt được header (webview)
+```
+
+- **Token UI** khác token của hook (`ARCTURUS_TOKEN`). Hub sinh token UI mới mỗi lần khởi động và ghi vào
+  `<data_dir>/arcturus/ui-token` (Windows: `%APPDATA%\arcturus\ui-token`; đổi bằng `--ui-token-file`). App đọc file này
+  mỗi lần (kết nối lại sau khi hub khởi động lại thì phải đọc lại). Token hook bị từ chối ở `/ws` (`401`).
+- `Host` phải là `127.0.0.1:<cổng>`, `localhost:<cổng>` hoặc `[::1]:<cổng>`. `Origin`, nếu có, phải là một trong
+  `http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost`; Vite dev (`http://127.0.0.1:5173`,
+  `http://localhost:5173`) chỉ được nhận khi hub là bản debug. Sai → `403`.
+- Tối đa 8 kết nối cùng lúc; vượt → `503`.
+- Không đưa token vào log, URL hiển thị hay thông báo lỗi.
+
+## Vòng đời
+
+1. Sau khi nâng cấp, thông điệp **đầu tiên** luôn là `snapshot`: toàn bộ trạng thái hiện tại.
+2. Sau đó là **delta**. Client áp delta theo kiểu **upsert, không giả định thứ tự tuyệt đối**:
+   - `agent_updated`, `approval_requested`, `approval_handed_off`: thêm hoặc thay theo id.
+   - `agent_removed`, `approval_resolved`, `handoff_cleared` cho id không biết: bỏ qua.
+   - Có thể nhận trùng một thay đổi ngay sau `snapshot` (hub đăng ký kênh trước khi dựng snapshot để không lỡ).
+3. Nhận `snapshot` ở **bất kỳ lúc nào** (client bị tụt sau kênh): **thay toàn bộ** trạng thái bằng snapshot đó.
+4. Hub gửi Ping mỗi 30 giây; không trả Pong 2 lần liên tiếp thì hub đóng kết nối. Trình duyệt và tungstenite tự trả Pong.
+5. Client không nhận được frame trong 10 giây (treo, mạng nghẽn) bị ngắt. Kết nối lại thì nhận snapshot mới.
+6. Hub tắt: gửi Close `1001` ("hub tắt"). Mọi yêu cầu đang chờ đã được trả `{}` (Claude Code hỏi trong terminal).
+
+Giới hạn: frame từ client tối đa 64 KB; `decide`, `team_pause`, `team_resume`, `focus_set` chung tối đa 20 lần/giây mỗi
+kết nối; `message` khi từ chối tối đa 500 ký tự.
+
+## Server → client
+
+### `snapshot`
+
+```json
+{"t":"snapshot",
+ "agents":[ AgentView… ],
+ "queue":[ ApprovalView… ],
+ "handoffs":[ HandoffView… ],
+ "team":{"paused":false,"focus":false,"roster_max":5}}
+```
+
+### `agent_updated` / `agent_removed`
+
+```json
+{"t":"agent_updated","agent":{
+  "id":"agt_cd99a479-…","parent_id":null,"kind":"session",
+  "name":"Khoa","role":"backend","palette":{"hair":"#1F1F24","outfit":"#4C8DF6","acc":"#9AA3B5"},
+  "mood":"working","activity":"typing","act_text":"Đang sửa LoginForm.tsx",
+  "host":"laptop","source":"claude-code","cwd":"D:\\code\\Arcturus\\.claude\\worktrees\\hub",
+  "context_pct":null,"last_event_at":"2026-10-22T09:00:00Z"}}
+{"t":"agent_removed","id":"agt_cd99a479-…"}
+```
+
+- `kind`: `session` | `subagent` | `teammate`; agent con có `parent_id`.
+- `mood`: `idle` | `working` | `approval` | `error` | `done`. `activity`: `typing` | `reading` | `running` | `thinking` |
+  `waiting` | `idle`.
+- `act_text` chỉ để hiển thị (đã bỏ ký tự điều khiển, lệnh Bash cắt 60 ký tự). `"Duyệt trong terminal"` nghĩa là agent đang
+  chờ người duyệt trong terminal (xem `approval_handed_off`).
+- Thay đổi chỉ `last_event_at` không được gửi; giá trị mới nhất có trong snapshot.
+
+### `approval_requested`
+
+```json
+{"t":"approval_requested","approval":{
+  "request_id":"req_01M5…","agent_id":"agt_s1","agent_name":"Khoa","tool":"Bash",
+  "command_original":"git push origin main","command_normalized":"git push origin main",
+  "tool_options":{"run_in_background":"true"},
+  "danger_spans":[],"suspicions":[],"truncated":false,
+  "risk":"medium","reversible":false,"group_key":"Bash",
+  "created_at":"2026-10-22T09:00:00Z","deadline_at":"2026-10-22T09:01:50Z","countdown_ms":null}}
+```
+
+Quy tắc hiển thị thẻ duyệt (quy tắc bất biến 3):
+- **Cơ sở duyệt là `command_normalized`**, không phải tóm tắt nào khác. Render bằng text node, **không bao giờ** như HTML,
+  không cắt bằng CSS (ellipsis, overflow ẩn). Mọi chuỗi từ agent (`command_*`, `tool_options`, `cwd`, `act_text`, `tool`,
+  `agent_name`) đều không tin cậy.
+- `tool_options` (Bash): các trường ngoài `command` đổi cách lệnh chạy, ví dụ `dangerouslyDisableSandbox: true` (chạy ngoài
+  sandbox), `run_in_background`, `timeout`. Hiện **rõ, tách khỏi lệnh**, nổi bật khi `dangerouslyDisableSandbox` là `true`.
+- Ký tự ẩn/điều khiển/bidi/khoảng trắng lạ đã được thay bằng `⟨U+XXXX⟩` (chuỗi lặp `⟨U+XXXX×N⟩`); có
+  `"hidden_chars"` trong `suspicions` thì hiện cảnh báo rõ ràng.
+- `danger_spans`: `[start, end)` theo **chỉ số ký tự Unicode** trong `command_normalized`. Cắt bằng
+  `Array.from(s).slice(start, end).join('')`, không dùng `String.prototype.slice`.
+- `truncated: true` (chỉ Edit/Write/MultiEdit/NotebookEdit): nội dung trên thẻ đã bị cắt. UI bắt người dùng mở bản đầy đủ
+  (`GET /approvals/{request_id}/input`) trước khi cho bấm Allow; hub cũng giữ nguyên mọi `allow` cho thẻ này tới khi bản
+  đầy đủ đã được lấy (trả `feed` "Cần mở bản đầy đủ trước khi duyệt"). `deny` không cần.
+- `countdown_ms` khác `null`: đếm ngược phủ quyết; hết giờ thì UI gửi `decide{decision:"allow",origin:"countdown"}`. Khi
+  `team.paused` là `true`, UI dừng **mọi** đếm ngược (hub cũng từ chối đếm ngược khi tạm dừng).
+
+### `approval_resolved`
+
+```json
+{"t":"approval_resolved","request_id":"req_01M5…","decision":"allow","decided_by":"user"}
+{"t":"approval_resolved","request_id":"req_01M5…","decision":null,"decided_by":"timeout"}
+```
+
+`decided_by`: `user` | `countdown` | `policy` | `timeout` | `cancelled`. `decision` là `null` khi `timeout`/`cancelled` (hub
+đã trả `{}`, Claude Code hỏi trong terminal). Bỏ thẻ khỏi hàng đợi.
+
+### `approval_handed_off` / `handoff_cleared`
+
+Lệnh quá dài để duyệt trên thẻ (mặc định > 4.096 byte UTF-8 hoặc > 50 dòng; không áp dụng cho Edit/Write/MultiEdit/
+NotebookEdit). Hub **đã trả `{}`**: người duyệt trong hộp thoại của terminal, nơi lệnh hiện đầy đủ.
+
+```json
+{"t":"approval_handed_off","handoff":{
+  "handoff_id":"hof_01M5…","agent_id":"agt_s1","agent_name":"Khoa","tool":"Bash",
+  "bytes":18230,"lines":412,
+  "preview_head":"#!/bin/sh\nset -e\n…","preview_tail":"…\necho done",
+  "suspicions":["hidden_chars"],
+  "message":"Lệnh quá dài để duyệt ở đây — hãy mở terminal của Khoa để xem đủ và quyết định.",
+  "created_at":"2026-10-22T09:00:00Z"}}
+{"t":"handoff_cleared","handoff_id":"hof_01M5…"}
+```
+
+- Thẻ này **không có nút Allow/Deny**, không đếm ngược. Gửi `decide` với `handoff_id` chỉ nhận `feed` từ chối.
+- `suspicions` tính trên lệnh **đầy đủ**, kể cả phần không có trong xem trước.
+- `handoff_cleared` khi agent đã sang bước khác (đã được duyệt hay từ chối trong terminal) hoặc phiên kết thúc.
+
+### `team_updated`
+
+```json
+{"t":"team_updated","team":{"paused":true,"focus":false,"roster_max":5}}
+```
+
+### `feed`
+
+```json
+{"t":"feed","text":"Yêu cầu đã hết hạn","ts":"2026-10-22T09:00:00Z"}
+```
+
+Tin nhắn cho người dùng, thường **chỉ gửi cho client vừa gửi lệnh**:
+
+| `text` | Khi nào |
+|---|---|
+| `Yêu cầu đã hết hạn` | `decide` cho yêu cầu không còn chờ (đã hết giờ, đã quyết, đã hủy) |
+| `Cần trưởng nhóm bấm duyệt` | `decide` với `origin: countdown` không hợp lệ (không có đếm ngược, chưa hết giờ, đang tạm dừng, hoặc kèm `deny`); yêu cầu vẫn chờ |
+| `Cần mở bản đầy đủ trước khi duyệt` | `allow` cho thẻ `truncated` khi chưa lấy `GET /approvals/{id}/input`; yêu cầu vẫn chờ |
+| `Yêu cầu này đang được duyệt trong terminal` | `decide` cho `handoff_id` |
+| `Lý do từ chối quá dài (tối đa 500 ký tự)` | `message` quá dài; yêu cầu vẫn chờ |
+| `Quá nhiều lệnh duyệt, hãy thử lại sau` | quá 20 `decide`/giây |
+| `Quá nhiều lệnh, hãy thử lại sau` | quá 20 lệnh/giây tính cả `team_pause`, `team_resume`, `focus_set` |
+| `Lệnh này chưa được hỗ trợ` | `decide_group`, `batch_open`, `batch_close`, `suggestion_answer` (T9, T10) |
+| `Thông điệp không hợp lệ` | JSON sai hoặc `t` không biết |
+| `Chỉ nhận thông điệp JSON dạng text` | frame nhị phân |
+
+Thông điệp sai không làm đóng kết nối.
+
+### `suggestion` (T10, chưa có)
+
+## Client → server
+
+```json
+{"t":"decide","request_id":"req_01M5…","decision":"allow","origin":"user"}
+{"t":"decide","request_id":"req_01M5…","decision":"deny","origin":"user","message":"dùng cargo clean"}
+{"t":"decide","request_id":"req_01M5…","decision":"allow","origin":"countdown"}
+{"t":"team_pause"}
+{"t":"team_resume"}
+{"t":"focus_set","on":true}
+{"t":"decide_group","group_key":"Bash","decision":"allow"}      // T9
+{"t":"batch_open","group_key":"Bash","minutes":60}              // T9
+{"t":"batch_close","group_key":"Bash"}                          // T9
+{"t":"suggestion_answer","id":"…","accept":true}                // T10
+```
+
+- Kết quả của `decide` thành công đến qua `approval_resolved` (broadcast cho mọi client), không có trả lời riêng.
+- `team_pause` xóa đếm ngược của mọi yêu cầu đang chờ (snapshot sau đó có `countdown_ms: null`); `team_resume` không
+  khôi phục. Lệnh của cùng một kết nối được xử lý đúng thứ tự gửi.
+- Không có `return_to_terminal`: terminal luôn hỏi song song (Q1), và hub tự trả lệnh quá dài về terminal.
+
+## HTTP cho UI
+
+```
+GET /approvals/{request_id}/input
+Authorization: Bearer <token UI>        # chỉ header, không nhận ?token=
+```
+
+- `200`, `Content-Type: application/json`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`: `tool_input`
+  đầy đủ (JSON gốc của hook) của yêu cầu đang chờ. Hiển thị như văn bản thuần. Lấy thành công thì hub ghi nhận "đã mở bản
+  đầy đủ" cho yêu cầu đó (mở khóa allow khi `truncated`).
+- Route không có CORS. Webview gọi `fetch` kèm header `Authorization` sẽ bị preflight chặn: app gọi qua phía Rust của
+  Tauri (T12), không thêm CORS dễ dãi.
+- `404`: không còn chờ, không tồn tại, hoặc là `handoff_id`. `401`: thiếu/sai token UI. `403`: `Host`/`Origin` sai.

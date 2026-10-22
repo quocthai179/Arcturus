@@ -36,6 +36,7 @@ pub const TEXT_THINKING: &str = "Đang suy nghĩ";
 pub const TEXT_DONE: &str = "Xong";
 pub const TEXT_ERROR: &str = "Gặp lỗi";
 pub const TEXT_DELEGATING: &str = "Đang giao việc cho trợ lý";
+pub const TEXT_APPROVE_IN_TERMINAL: &str = "Duyệt trong terminal";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct AgentRuntime {
@@ -172,6 +173,27 @@ impl TeamState {
     /// Tên hiển thị của agent (cho thẻ duyệt).
     pub fn name_of(&self, id: &str) -> Option<&str> {
         self.agents.get(id).map(|a| a.view.name.as_str())
+    }
+
+    /// Yêu cầu của `id` được trả về terminal (lệnh quá dài, T5b): agent vẫn giơ tay, nhưng chữ trạng thái chỉ chỗ
+    /// cần duyệt.
+    pub fn approval_in_terminal(&mut self, id: &str) -> Vec<ServerMsg> {
+        let Some(rt) = self.agents.get_mut(id) else {
+            return Vec::new();
+        };
+        let before = rt.view.clone();
+        set(
+            &mut rt.view,
+            Mood::Approval,
+            Activity::Waiting,
+            TEXT_APPROVE_IN_TERMINAL,
+        );
+        if before == rt.view {
+            return Vec::new();
+        }
+        vec![ServerMsg::AgentUpdated {
+            agent: rt.view.clone(),
+        }]
     }
 
     /// Yêu cầu duyệt của `id` đã có quyết định (PLAN T3 bước 9): agent đang chờ duyệt quay về suy nghĩ.
@@ -938,6 +960,30 @@ mod tests {
         assert_eq!(w.view("agt_s1").cwd.chars().count(), CWD_MAX_CHARS);
         w.apply(h);
         assert_eq!(w.view("agt_s1").cwd.chars().count(), CWD_MAX_CHARS);
+    }
+
+    #[test]
+    fn approval_in_terminal_sets_status_text() {
+        let mut w = World::new();
+        let mut p = pre_tool("s1", "Bash", json!({ "command": "x" }));
+        p["hook_event_name"] = json!("PermissionRequest");
+        w.apply(p);
+        assert_eq!(w.st.approval_in_terminal("agt_s1").len(), 1);
+        assert_state(
+            &w,
+            "agt_s1",
+            Mood::Approval,
+            Activity::Waiting,
+            TEXT_APPROVE_IN_TERMINAL,
+        );
+        assert!(
+            w.st.approval_in_terminal("agt_s1").is_empty(),
+            "không đổi thì không gửi"
+        );
+        assert!(w.st.approval_in_terminal("agt_khong_co").is_empty());
+        // Sự kiện kế tiếp (đã duyệt ở terminal) đưa nhân vật đi tiếp như thường.
+        w.apply(hook("UserPromptSubmit", "s1"));
+        assert_eq!(w.view("agt_s1").mood, Mood::Working);
     }
 
     #[test]

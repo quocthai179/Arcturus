@@ -37,6 +37,8 @@ pub struct Hub {
     events: mpsc::Sender<HookInput>,
     /// Thời điểm cần `tick` sớm nhất (`TeamState::next_wakeup`); `None` thì task tick ngủ, không hẹn giờ.
     wake: watch::Sender<Option<OffsetDateTime>>,
+    /// Khóa ngoài cùng cho thay đổi cờ đội (`set_paused`, `set_focus`); lấy trước khóa của `Approvals` và `state`.
+    team: Mutex<()>,
 }
 
 /// Các task nền của hub; drop không dừng chúng (dừng khi `Hub` bị drop và kênh đóng).
@@ -50,6 +52,8 @@ impl Hub {
     pub fn start(cfg: Config, personas: PersonaBook, host: String) -> (Arc<Hub>, HubTasks) {
         let approvals_cfg = ApprovalsConfig {
             timeout: Duration::from_secs(cfg.hub.approval_timeout_secs),
+            handoff_max_bytes: cfg.hub.handoff_max_bytes,
+            handoff_max_lines: cfg.hub.handoff_max_lines,
             ..ApprovalsConfig::default()
         };
         Self::start_with(
@@ -83,6 +87,7 @@ impl Hub {
             tx,
             events,
             wake,
+            team: Mutex::new(()),
         });
         let tasks = HubTasks {
             events: tokio::spawn(event_loop(Arc::downgrade(&hub), events_rx)),
@@ -128,18 +133,22 @@ impl Hub {
         self.update_wake();
 
         let outcome = self.approvals.request(input, &ev, &name).await;
-        if matches!(
-            outcome,
-            PermissionOutcome::Decided(_) | PermissionOutcome::AutoAllowed
-        ) {
-            let msgs = self.lock_state().approval_finished(&ev.agent.id);
-            self.publish(msgs);
-        }
+        let msgs = match outcome {
+            PermissionOutcome::Decided(_) | PermissionOutcome::AutoAllowed => {
+                self.lock_state().approval_finished(&ev.agent.id)
+            }
+            PermissionOutcome::HandedOff { .. } => {
+                self.lock_state().approval_in_terminal(&ev.agent.id)
+            }
+            _ => Vec::new(),
+        };
+        self.publish(msgs);
         outcome
     }
 
     /// `TeamPause` / `TeamResume` (T5b nối với WebSocket): cờ duy nhất nằm trong `Approvals` (D3).
     pub fn set_paused(&self, paused: bool) {
+        let _team = self.lock_team();
         self.approvals.set_paused(paused);
         self.publish(vec![ServerMsg::TeamUpdated {
             team: self.team_view(),
@@ -148,10 +157,17 @@ impl Hub {
 
     /// `FocusSet` (T14).
     pub fn set_focus(&self, on: bool) {
+        let _team = self.lock_team();
         self.lock_state().focus = on;
         self.publish(vec![ServerMsg::TeamUpdated {
             team: self.team_view(),
         }]);
+    }
+
+    /// Tuần tự hóa "đổi cờ đội + broadcast": hai client bấm tạm dừng/tiếp tục cùng lúc không làm `TeamUpdated` cuối cùng
+    /// mang giá trị cũ (audit T5b finding 6). Chỉ giữ quanh các thao tác đồng bộ, không qua `.await`.
+    fn lock_team(&self) -> MutexGuard<'_, ()> {
+        self.team.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn team_view(&self) -> TeamView {

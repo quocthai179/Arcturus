@@ -3,6 +3,8 @@
 //! T4: phần trạng thái agent. T5a: thông điệp server phát ra từ luồng duyệt và đội (`ApprovalRequested`,
 //! `ApprovalResolved`, `TeamUpdated`). T5b thêm `Snapshot`, `Feed`, `ClientMsg` và viết `docs/PROTOCOL.md`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -15,6 +17,19 @@ use crate::schema::{
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ServerMsg {
+    /// Gửi đầu tiên cho mỗi client mới, và gửi lại khi client bị tụt sau kênh broadcast.
+    Snapshot {
+        agents: Vec<AgentView>,
+        queue: Vec<ApprovalView>,
+        handoffs: Vec<HandoffView>,
+        team: TeamView,
+    },
+    /// Tin nhắn cho trưởng nhóm (thường chỉ gửi riêng cho client vừa gửi lệnh, ví dụ "Yêu cầu đã hết hạn").
+    Feed {
+        text: String,
+        #[serde(with = "time::serde::rfc3339")]
+        ts: OffsetDateTime,
+    },
     AgentUpdated {
         agent: AgentView,
     },
@@ -33,6 +48,38 @@ pub enum ServerMsg {
     TeamUpdated {
         team: TeamView,
     },
+    /// Lệnh quá dài để duyệt trên thẻ: hub đã trả `{}`, người quyết định trong terminal. Thẻ chỉ để báo, không có nút
+    /// duyệt (quy tắc bất biến 3, T5b).
+    ApprovalHandedOff {
+        handoff: HandoffView,
+    },
+    /// Thẻ báo "duyệt trong terminal" hết hiệu lực (agent đã sang bước khác hoặc phiên kết thúc).
+    HandoffCleared {
+        handoff_id: String,
+    },
+}
+
+/// Thẻ báo cho lệnh trả về terminal. Không phải thẻ duyệt: UI không được hiện nút Allow/Deny cho nó.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct HandoffView {
+    /// `"hof_<ulid>"`; không bao giờ là `request_id` của yêu cầu đang chờ.
+    pub handoff_id: String,
+    pub agent_id: AgentId,
+    pub agent_name: String,
+    pub tool: String,
+    /// Kích thước của lệnh đầy đủ (byte UTF-8) và số dòng.
+    pub bytes: usize,
+    pub lines: usize,
+    /// Đầu và cuối lệnh (khoảng 300 ký tự mỗi phần), đã hiện ký tự ẩn như `command_normalized`.
+    pub preview_head: String,
+    pub preview_tail: String,
+    /// Tính trên lệnh **đầy đủ**, không chỉ phần xem trước.
+    pub suspicions: Vec<Suspicion>,
+    /// Như [`ApprovalView::tool_options`].
+    pub tool_options: BTreeMap<String, String>,
+    pub message: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
 }
 
 /// Thẻ duyệt (§3.4). `command_normalized` là cơ sở duyệt (quy tắc bất biến 3), không phải tóm tắt.
@@ -44,6 +91,10 @@ pub struct ApprovalView {
     pub tool: String,
     /// `tool_input` gốc dạng chuỗi: Bash là lệnh; tool khác là JSON, trường nội dung bị cắt (`truncated`).
     pub command_original: String,
+    /// Bash: mọi trường của `tool_input` ngoài `command` và `description` (ví dụ `dangerouslyDisableSandbox`,
+    /// `run_in_background`, `timeout`), giá trị dạng JSON đã hiện ký tự ẩn. Chúng đổi cách lệnh chạy nên UI phải hiện rõ
+    /// trên thẻ, tách khỏi lệnh (agent không giả được). Tool khác: rỗng (JSON đầy đủ đã nằm trong `command_*`).
+    pub tool_options: BTreeMap<String, String>,
     /// Sau chuẩn hóa: ký tự ẩn/điều khiển/bidi hiện thành `⟨U+XXXX⟩` (T8 thay bằng normalize đầy đủ).
     pub command_normalized: String,
     /// `[start, end)` theo chỉ số ký tự Unicode trong `command_normalized` (§3.4).
@@ -83,6 +134,40 @@ pub struct TeamView {
 pub enum DecideOrigin {
     User,
     Countdown,
+}
+
+/// Lệnh từ UI (§3.4). Không có `ReturnToTerminal`: terminal luôn hỏi song song (Q1), lệnh quá dài được hub tự trả về
+/// terminal (T5b). Các lệnh của T9/T10 đã có kiểu nhưng hub trả `Feed` "chưa hỗ trợ" cho tới khi làm các task đó.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[serde(tag = "t", rename_all = "snake_case")]
+pub enum ClientMsg {
+    Decide {
+        request_id: RequestId,
+        decision: Decision,
+        #[serde(default)]
+        message: Option<String>,
+        origin: DecideOrigin,
+    },
+    DecideGroup {
+        group_key: String,
+        decision: Decision,
+    },
+    BatchOpen {
+        group_key: String,
+        minutes: u32,
+    },
+    BatchClose {
+        group_key: String,
+    },
+    TeamPause,
+    TeamResume,
+    FocusSet {
+        on: bool,
+    },
+    SuggestionAnswer {
+        id: String,
+        accept: bool,
+    },
 }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -169,6 +254,7 @@ mod tests {
                 agent_name: "Khoa".to_owned(),
                 tool: "Bash".to_owned(),
                 command_original: "echo a\u{202E}b".to_owned(),
+                tool_options: BTreeMap::from([("run_in_background".to_owned(), "true".to_owned())]),
                 command_normalized: "echo a⟨U+202E⟩b".to_owned(),
                 danger_spans: vec![(0, 4)],
                 suspicions: vec![Suspicion::HiddenChars],
@@ -185,6 +271,10 @@ mod tests {
         assert_eq!(v["t"], "approval_requested");
         assert_eq!(v["approval"]["danger_spans"], json!([[0, 4]]));
         assert_eq!(v["approval"]["suspicions"], json!(["hidden_chars"]));
+        assert_eq!(
+            v["approval"]["tool_options"],
+            json!({"run_in_background": "true"})
+        );
         assert_eq!(v["approval"]["deadline_at"], "2026-10-22T09:01:50Z");
         assert_eq!(serde_json::from_value::<ServerMsg>(v).unwrap(), requested);
 
@@ -222,6 +312,136 @@ mod tests {
         assert_eq!(
             serde_json::to_value(DecideOrigin::Countdown).unwrap(),
             json!("countdown")
+        );
+    }
+
+    #[test]
+    fn protocol_roundtrip_serde() {
+        let ts = datetime!(2026-10-22 09:00:00 UTC);
+        let team = TeamView {
+            paused: false,
+            focus: true,
+            roster_max: 5,
+        };
+        let server = [
+            ServerMsg::Snapshot {
+                agents: vec![],
+                queue: vec![],
+                handoffs: vec![],
+                team,
+            },
+            ServerMsg::Feed {
+                text: "Yêu cầu đã hết hạn".to_owned(),
+                ts,
+            },
+            ServerMsg::AgentRemoved {
+                id: "agt_s1".to_owned(),
+            },
+            ServerMsg::ApprovalResolved {
+                request_id: "req_1".to_owned(),
+                decision: Some(Decision::Deny),
+                decided_by: DecidedBy::Countdown,
+            },
+            ServerMsg::TeamUpdated { team },
+            ServerMsg::HandoffCleared {
+                handoff_id: "hof_1".to_owned(),
+            },
+        ];
+        for m in server {
+            let v = serde_json::to_value(&m).unwrap();
+            assert!(v["t"].is_string(), "{v}");
+            assert_eq!(serde_json::from_value::<ServerMsg>(v).unwrap(), m);
+        }
+        let snap = serde_json::to_value(ServerMsg::Snapshot {
+            agents: vec![],
+            queue: vec![],
+            handoffs: vec![],
+            team,
+        })
+        .unwrap();
+        assert_eq!(
+            snap,
+            json!({"t": "snapshot", "agents": [], "queue": [], "handoffs": [], "team": {"paused": false, "focus": true, "roster_max": 5}})
+        );
+
+        let client = [
+            ClientMsg::Decide {
+                request_id: "req_1".to_owned(),
+                decision: Decision::Allow,
+                message: None,
+                origin: DecideOrigin::User,
+            },
+            ClientMsg::DecideGroup {
+                group_key: "Bash".to_owned(),
+                decision: Decision::Deny,
+            },
+            ClientMsg::BatchOpen {
+                group_key: "Bash".to_owned(),
+                minutes: 10,
+            },
+            ClientMsg::BatchClose {
+                group_key: "Bash".to_owned(),
+            },
+            ClientMsg::TeamPause,
+            ClientMsg::TeamResume,
+            ClientMsg::FocusSet { on: true },
+            ClientMsg::SuggestionAnswer {
+                id: "s".to_owned(),
+                accept: false,
+            },
+        ];
+        for m in client {
+            let v = serde_json::to_value(&m).unwrap();
+            assert_eq!(serde_json::from_value::<ClientMsg>(v).unwrap(), m);
+        }
+        // Dạng UI gửi: không có `message` vẫn hợp lệ; lệnh không còn trong giao thức bị từ chối.
+        let d: ClientMsg = serde_json::from_value(
+            json!({"t": "decide", "request_id": "req_1", "decision": "deny", "origin": "countdown"}),
+        )
+        .unwrap();
+        assert!(matches!(d, ClientMsg::Decide { message: None, .. }));
+        assert_eq!(
+            serde_json::to_value(ClientMsg::TeamPause).unwrap(),
+            json!({"t": "team_pause"})
+        );
+        assert!(serde_json::from_value::<ClientMsg>(
+            json!({"t": "return_to_terminal", "request_id": "r"})
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn handoff_messages_wire_format() {
+        let m = ServerMsg::ApprovalHandedOff {
+            handoff: HandoffView {
+                handoff_id: "hof_1".to_owned(),
+                agent_id: "agt_s1".to_owned(),
+                agent_name: "Khoa".to_owned(),
+                tool: "Bash".to_owned(),
+                bytes: 5000,
+                lines: 80,
+                preview_head: "head".to_owned(),
+                preview_tail: "tail".to_owned(),
+                suspicions: vec![Suspicion::HiddenChars],
+                tool_options: BTreeMap::new(),
+                message: "m".to_owned(),
+                created_at: datetime!(2026-10-22 09:00:00 UTC),
+            },
+        };
+        let v = serde_json::to_value(&m).unwrap();
+        assert_eq!(v["t"], "approval_handed_off");
+        assert_eq!(v["handoff"]["bytes"], 5000);
+        assert!(
+            v["handoff"].get("request_id").is_none(),
+            "không có id để Decide"
+        );
+        assert_eq!(serde_json::from_value::<ServerMsg>(v).unwrap(), m);
+        assert_eq!(
+            serde_json::to_value(ServerMsg::HandoffCleared {
+                handoff_id: "hof_1".to_owned()
+            })
+            .unwrap(),
+            json!({"t": "handoff_cleared", "handoff_id": "hof_1"})
         );
     }
 }

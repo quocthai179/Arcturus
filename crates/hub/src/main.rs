@@ -9,7 +9,7 @@ use anyhow::Context;
 use clap::Parser;
 use hub::hub::Hub;
 use hub::record::{self, RecordConfig};
-use hub::{auth, hooks, server};
+use hub::{auth, hooks, server, ui_token, ws};
 use hub_core::config::Config;
 use tracing_subscriber::EnvFilter;
 
@@ -36,6 +36,10 @@ struct Cli {
     /// Địa chỉ lắng nghe, ghi đè `hub.bind` trong cấu hình; chỉ chấp nhận loopback.
     #[arg(long)]
     bind: Option<SocketAddr>,
+
+    /// Nơi ghi token UI (sinh mới mỗi lần chạy) cho app đọc. Mặc định `<data_dir>/arcturus/ui-token`.
+    #[arg(long, value_name = "FILE", conflicts_with = "record")]
+    ui_token_file: Option<PathBuf>,
 }
 
 #[tokio::main]
@@ -87,19 +91,34 @@ async fn main() -> anyhow::Result<()> {
             .context("persona trong cấu hình không hợp lệ")?;
         let timeout_s = cfg.hub.approval_timeout_secs;
         let n_personas = cfg.personas.len();
+        // Token UI riêng (D1): sinh mới, ghi vào file chỉ người dùng đọc được; không bao giờ log giá trị.
+        let ui_token =
+            ui_token::generate().map_err(|e| anyhow::anyhow!("không sinh được token UI: {e}"))?;
+        let ui_token_path = match cli.ui_token_file {
+            Some(p) => p,
+            None => ui_token::default_path()
+                .context("không tìm thấy thư mục dữ liệu người dùng; chỉ định --ui-token-file")?,
+        };
+        ui_token::write(&ui_token_path, &ui_token)
+            .with_context(|| format!("không ghi được token UI vào {}", ui_token_path.display()))?;
+
         let (hub, _tasks) = Hub::start(cfg, personas, hostname());
-        let app = hooks::router(hub.clone(), token);
+        let port = listener.local_addr().context("không đọc được cổng")?.port();
+        let (ui, ws_handle) = ws::router(hub.clone(), ui_token, port, ws::WsConfig::default());
+        let app = hooks::router(hub.clone(), token).merge(ui);
         tracing::info!(
             %bind,
             timeout_s,
             personas = n_personas,
             config = %cfg_path.display(),
             config_found = cfg_found,
+            ui_token_file = %ui_token_path.display(),
             "hub đang chạy"
         );
         server::serve_until(listener, app, async move {
             server::ctrl_c().await;
             hub.shutdown();
+            ws_handle.shutdown();
         })
         .await
         .context("server dừng do lỗi")?;
