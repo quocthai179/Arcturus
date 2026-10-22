@@ -1,6 +1,7 @@
 //! Khởi động server HTTP: chỉ loopback (quy tắc bất biến 4), tắt êm khi nhận Ctrl-C.
 
 use std::fmt;
+use std::future::Future;
 use std::net::SocketAddr;
 
 use axum::Router;
@@ -35,12 +36,24 @@ pub fn validate_bind(addr: SocketAddr) -> Result<SocketAddr, NonLoopbackBind> {
 
 /// Phục vụ `app` trên `listener` tới khi nhận Ctrl-C.
 pub async fn serve(listener: TcpListener, app: Router) -> std::io::Result<()> {
+    serve_until(listener, app, ctrl_c()).await
+}
+
+/// Phục vụ tới khi `shutdown` xong, rồi chờ các request đang chạy kết thúc. Muốn trả `{}` cho yêu cầu duyệt đang
+/// giữ thì gọi `Approvals::shutdown` bên trong `shutdown`, nếu không server sẽ chờ tới khi chúng hết giờ.
+pub async fn serve_until(
+    listener: TcpListener,
+    app: Router,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> std::io::Result<()> {
     axum::serve(listener, app)
-        .with_graceful_shutdown(async {
-            // Không cài được handler thì vẫn phục vụ; tắt bằng cách giết process.
-            if tokio::signal::ctrl_c().await.is_err() {
-                std::future::pending::<()>().await;
-            }
-        })
+        .with_graceful_shutdown(shutdown)
         .await
+}
+
+/// Chờ Ctrl-C. Không cài được handler thì chờ mãi (tắt bằng cách giết process).
+pub async fn ctrl_c() {
+    if tokio::signal::ctrl_c().await.is_err() {
+        std::future::pending::<()>().await;
+    }
 }
