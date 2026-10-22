@@ -1,15 +1,16 @@
-//! Daemon Arcturus. Mặc định: luồng duyệt (T3). `--record`: chế độ ghi băng của T1.
+//! Daemon Arcturus. Mặc định: luồng duyệt (T3) với trạng thái agent và cấu hình `arcturus.toml` (T4, T5a).
+//! `--record`: chế độ ghi băng của T1.
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
-use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
-use hub::approvals::{AlwaysAsk, Approvals, ApprovalsConfig, NoStore};
+use hub::hub::Hub;
 use hub::record::{self, RecordConfig};
 use hub::{auth, hooks, server};
+use hub_core::config::Config;
 use tracing_subscriber::EnvFilter;
 
 #[derive(Parser, Debug)]
@@ -28,14 +29,13 @@ struct Cli {
           value_parser = clap::value_parser!(u64).range(0..=600))]
     record_delay: u64,
 
-    /// Giữ yêu cầu duyệt tối đa bao nhiêu giây rồi trả {}; phải nhỏ hơn timeout 120 s của hook.
-    #[arg(long, value_name = "GIÂY", default_value_t = 110, conflicts_with = "record",
-          value_parser = clap::value_parser!(u64).range(1..=115))]
-    approval_timeout: u64,
+    /// File cấu hình (persona, timeout duyệt, bind…). Không có file thì dùng mặc định.
+    #[arg(long, value_name = "FILE", default_value = "arcturus.toml")]
+    config: PathBuf,
 
-    /// Địa chỉ lắng nghe; chỉ chấp nhận loopback.
-    #[arg(long, default_value = server::DEFAULT_BIND)]
-    bind: SocketAddr,
+    /// Địa chỉ lắng nghe, ghi đè `hub.bind` trong cấu hình; chỉ chấp nhận loopback.
+    #[arg(long)]
+    bind: Option<SocketAddr>,
 }
 
 #[tokio::main]
@@ -48,7 +48,14 @@ async fn main() -> anyhow::Result<()> {
 
     let cli = Cli::parse();
     let token = auth::token_from_env(std::env::var(auth::TOKEN_ENV).ok())?;
-    let bind = server::validate_bind(cli.bind)?;
+    let cfg = Config::load(&cli.config)?;
+    let bind = match cli.bind {
+        Some(b) => b,
+        None => cfg
+            .bind_addr()
+            .context("hub.bind không hợp lệ (đã kiểm khi đọc cấu hình)")?,
+    };
+    let bind = server::validate_bind(bind)?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("không bind được {bind}"))?;
@@ -72,20 +79,17 @@ async fn main() -> anyhow::Result<()> {
             .await
             .context("server dừng do lỗi")?;
     } else {
-        // T8 thay AlwaysAsk bằng policy thật, T6 thay NoStore bằng SQLite.
-        let approvals = Arc::new(Approvals::new(
-            ApprovalsConfig {
-                timeout: Duration::from_secs(cli.approval_timeout),
-                ..ApprovalsConfig::default()
-            },
-            Box::new(AlwaysAsk),
-            Box::new(NoStore),
-        ));
-        let app = hooks::router(approvals.clone(), hostname(), token);
-        tracing::info!(%bind, timeout_s = cli.approval_timeout, "hub đang chạy");
+        let personas = cfg
+            .persona_book()
+            .context("persona trong cấu hình không hợp lệ")?;
+        let timeout_s = cfg.hub.approval_timeout_secs;
+        let n_personas = cfg.personas.len();
+        let (hub, _tasks) = Hub::start(cfg, personas, hostname());
+        let app = hooks::router(hub.clone(), token);
+        tracing::info!(%bind, timeout_s, personas = n_personas, config = %cli.config.display(), "hub đang chạy");
         server::serve_until(listener, app, async move {
             server::ctrl_c().await;
-            approvals.shutdown();
+            hub.shutdown();
         })
         .await
         .context("server dừng do lỗi")?;

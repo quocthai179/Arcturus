@@ -286,7 +286,7 @@ pub enum ServerMsg {
     AgentUpdated { agent: AgentView },
     AgentRemoved { id: AgentId },
     ApprovalRequested { approval: ApprovalView },
-    ApprovalResolved { request_id: RequestId, decision: Decision, decided_by: DecidedBy },
+    ApprovalResolved { request_id: RequestId, decision: Option<Decision>, decided_by: DecidedBy }, // None khi timeout/cancelled (D2, T5)
     TeamUpdated { team: TeamView },
     Feed { text: String, ts: OffsetDateTime },
     Suggestion { suggestion: TrustSuggestionView },   // T10
@@ -406,7 +406,7 @@ Dọn TTL: mỗi 6 giờ xóa `events` cũ hơn `event_ttl_days`.
 ```rust
 pub struct TeamState {
     pub agents: BTreeMap<AgentId, AgentRuntime>,
-    pub paused: bool, pub focus: bool,
+    pub focus: bool,                 // cờ tạm dừng nằm trong Approvals (D3, T5)
 }
 pub struct AgentRuntime { pub view: AgentView, pub done_until: Option<OffsetDateTime> }
 
@@ -672,6 +672,29 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - `ws_decide_resolves_pending_request` (kết hợp với T3)
 - `ws_lagged_client_gets_fresh_snapshot`
 - `protocol_roundtrip_serde` cho mọi biến thể
+
+**Quyết định đã duyệt (T5, chia hai PR: T5a rồi T5b)**
+- D1: token UI riêng cho `/ws` và `/approvals/*`, hub tự sinh mỗi lần chạy, không nằm trong môi trường Claude Code
+  (Bash tool thừa hưởng `ARCTURUS_TOKEN`, `docs/HOOK_FINDINGS.md` F6). Làm ở T5b.
+- D2: `ApprovalResolved.decision: Option<Decision>`, `null` khi `decided_by` là `timeout`/`cancelled`.
+- D3: bỏ `TeamState.paused`; cờ duy nhất nằm trong `Approvals` (kiểm đếm ngược dưới cùng khóa). `TeamView.paused` đọc
+  từ đó.
+
+**Đã làm ở T5a** (nối T3 + T4 vào `crates/hub`, chưa có WebSocket)
+- `hub/src/hub.rs`: `Hub` giữ `Config`, `PersonaBook`, `TeamState`, `Approvals` và kênh broadcast `ServerMsg` (256).
+  Vòng sự kiện: `to_event` → `approvals.on_event` → `state.apply` → broadcast (luồng duyệt trước, nên `SessionEnd` gửi
+  `ApprovalResolved` trước `AgentRemoved`). `/hooks/permission`: `state.apply` (bước 3, nhân vật chờ duyệt) →
+  `approvals.request` → khi có quyết định (người hoặc AutoAllow) `TeamState::approval_finished` đưa nhân vật về suy nghĩ
+  (bước 9). Hết giờ/hủy/đầy giữ "chờ duyệt" vì terminal vẫn đang hỏi.
+- Task tick: ngủ tới `next_wakeup()` (watch channel), không hẹn giờ khi không có agent `done`.
+- `main.rs` đọc `arcturus.toml` (`--config`, mặc định `./arcturus.toml`); `--approval-timeout` bị bỏ, timeout và bind lấy
+  từ cấu hình (`--bind` vẫn ghi đè được).
+- `ApprovalNotice` của T3 bị thay bằng `ServerMsg::ApprovalRequested{ApprovalView}` / `ApprovalResolved`. Thẻ duyệt
+  broadcast đã cắt nội dung (`hub/src/view.rs`); `tool_input` đầy đủ chỉ nằm trong hàng đợi (`Approvals::tool_input`).
+- Trước T8: `command_normalized` hiện ký tự điều khiển/zero-width/bidi thành `⟨U+XXXX⟩` và gắn `hidden_chars`;
+  `danger_spans = []`, `reversible = false`, `group_key = tool`. T8 thay bằng normalize đầy đủ.
+- `protocol.rs` thêm `ApprovalView`, `Suspicion`, `TeamView`, `DecideOrigin` (chuyển từ `hub`), `ApprovalRequested`,
+  `ApprovalResolved`, `TeamUpdated`. `Hub::set_paused` / `set_focus` broadcast `TeamUpdated` (T5b nối với `ClientMsg`).
 
 ### T6 · ARC-27 · Lưu trữ
 

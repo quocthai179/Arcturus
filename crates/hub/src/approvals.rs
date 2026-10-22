@@ -4,8 +4,9 @@
 //! đã được store xác nhận ghi kiểm toán. Mọi nhánh khác (hết giờ, hủy, phiên kết thúc, client đóng kết nối, tắt hub,
 //! lỗi ghi) trả `{}` để Claude Code tiếp tục hỏi trong terminal.
 //!
-//! Phần chưa có được thay bằng kiểu tạm trong file này: [`Policy`] (T8), [`ApprovalStore`] (T6), [`ApprovalNotice`]
-//! (T5 đổi thành `ServerMsg`). Trạng thái agent (T4) chưa được cập nhật ở đây.
+//! Phần chưa có được thay bằng kiểu tạm trong file này: [`Policy`] (T8), [`ApprovalStore`] (T6). Thông báo cho UI
+//! đi qua kênh broadcast `ServerMsg` chung của hub (T5): thẻ duyệt là `ApprovalView` đã cắt nội dung, `tool_input`
+//! đầy đủ chỉ nằm trong hàng đợi (lấy qua [`Approvals::tool_input`]). Trạng thái agent do `crate::hub` cập nhật.
 
 use std::collections::HashMap;
 use std::fmt;
@@ -13,11 +14,15 @@ use std::sync::{Mutex, MutexGuard};
 use std::time::Duration;
 
 use hub_core::hook::HookInput;
+pub use hub_core::protocol::DecideOrigin;
+use hub_core::protocol::{ApprovalView, ServerMsg};
 use hub_core::schema::{AgentId, DecidedBy, Decision, Event, EventKind, RequestId, Risk};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, oneshot};
 use tokio::time::Instant;
+
+use crate::view::approval_view;
 
 /// Hub tự trả `{}` sau chừng này, trước timeout 120 s của hook (`hooks/arcturus-dogfood.json`).
 pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(110);
@@ -28,9 +33,6 @@ pub const DEFAULT_STORE_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 /// Giới hạn yêu cầu đang giữ: toàn hub và mỗi phiên (audit T3, finding 2).
 pub const DEFAULT_MAX_PENDING: usize = 64;
 pub const DEFAULT_MAX_PENDING_PER_SESSION: usize = 16;
-
-/// Sức chứa kênh thông báo cho UI (`docs/PLAN.md` §4).
-pub const NOTICE_CAPACITY: usize = 256;
 
 // ---------------------------------------------------------------------------------------------------------------
 // Policy tạm (T8 thay bằng `hub-core/src/policy/`)
@@ -148,18 +150,6 @@ pub struct PendingApproval {
     pub countdown: Option<Duration>,
 }
 
-/// Thông báo cho UI. T5 ánh xạ sang `ServerMsg::ApprovalRequested` / `ApprovalResolved`.
-#[derive(Clone, Debug, PartialEq)]
-pub enum ApprovalNotice {
-    Requested(PendingApproval),
-    /// `decision` là `None` khi hết giờ hoặc bị hủy (hub trả `{}`).
-    Resolved {
-        request_id: RequestId,
-        decision: Option<Decision>,
-        decided_by: DecidedBy,
-    },
-}
-
 #[derive(Clone, Debug, PartialEq)]
 pub struct Decided {
     pub decision: Decision,
@@ -180,13 +170,6 @@ pub enum PermissionOutcome {
     NotPermissionRequest,
     /// Hàng đợi đầy ([`ApprovalsConfig::max_pending`]): không giữ, để terminal hỏi.
     Overloaded,
-}
-
-/// Ai gửi lệnh `Decide` (§3.4).
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum DecideOrigin {
-    User,
-    Countdown,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -271,6 +254,7 @@ impl Default for ApprovalsConfig {
 
 struct Entry {
     info: PendingApproval,
+    agent_name: String,
     started: Instant,
     reply: oneshot::Sender<Decided>,
 }
@@ -290,30 +274,31 @@ pub struct Approvals {
     policy: Box<dyn Policy>,
     store: Box<dyn ApprovalStore>,
     inner: Mutex<Inner>,
-    notices: broadcast::Sender<ApprovalNotice>,
+    tx: broadcast::Sender<ServerMsg>,
 }
 
 impl Approvals {
+    /// `tx`: kênh broadcast chung của hub (`ApprovalRequested`, `ApprovalResolved`).
     pub fn new(
         cfg: ApprovalsConfig,
         policy: Box<dyn Policy>,
         store: Box<dyn ApprovalStore>,
+        tx: broadcast::Sender<ServerMsg>,
     ) -> Self {
-        let (notices, _) = broadcast::channel(NOTICE_CAPACITY);
         Approvals {
             cfg,
             policy,
             store,
             inner: Mutex::new(Inner::default()),
-            notices,
+            tx,
         }
     }
 
-    pub fn subscribe(&self) -> broadcast::Receiver<ApprovalNotice> {
-        self.notices.subscribe()
+    pub fn subscribe(&self) -> broadcast::Receiver<ServerMsg> {
+        self.tx.subscribe()
     }
 
-    /// Các yêu cầu đang chờ, cũ trước (cho `Snapshot` ở T5).
+    /// Các yêu cầu đang chờ, cũ trước.
     pub fn snapshot(&self) -> Vec<PendingApproval> {
         let mut out: Vec<_> = self
             .lock()
@@ -323,6 +308,30 @@ impl Approvals {
             .collect();
         out.sort_by_key(|p| p.created_at);
         out
+    }
+
+    /// Thẻ duyệt của mọi yêu cầu đang chờ, cũ trước (cho `Snapshot`, T5b).
+    pub fn views(&self) -> Vec<ApprovalView> {
+        let mut out: Vec<_> = self
+            .lock()
+            .entries
+            .values()
+            .map(|e| approval_view(&e.info, &e.agent_name))
+            .collect();
+        out.sort_by_key(|v| v.created_at);
+        out
+    }
+
+    pub fn pending(&self, request_id: &str) -> Option<PendingApproval> {
+        self.lock().entries.get(request_id).map(|e| e.info.clone())
+    }
+
+    /// `tool_input` đầy đủ của yêu cầu đang chờ (`GET /approvals/{id}/input`, T5b).
+    pub fn tool_input(&self, request_id: &str) -> Option<Value> {
+        self.lock()
+            .entries
+            .get(request_id)
+            .map(|e| e.info.tool_input.clone())
     }
 
     pub fn is_paused(&self) -> bool {
@@ -340,9 +349,14 @@ impl Approvals {
         }
     }
 
-    /// Xử lý một `PermissionRequest`. `ev` là `hook::to_event(input)`. Nhận `input` theo giá trị để nhả JSON thô
-    /// trước khi chờ (tới 110 s): chỉ giữ lại các trường cần dùng.
-    pub async fn request(&self, input: HookInput, ev: &Event) -> PermissionOutcome {
+    /// Xử lý một `PermissionRequest`. `ev` là `hook::to_event(input)`, `agent_name` là tên nhân vật trên thẻ duyệt.
+    /// Nhận `input` theo giá trị để nhả JSON thô trước khi chờ (tới 110 s): chỉ giữ lại các trường cần dùng.
+    pub async fn request(
+        &self,
+        input: HookInput,
+        ev: &Event,
+        agent_name: &str,
+    ) -> PermissionOutcome {
         if ev.kind != EventKind::ApprovalRequested {
             tracing::warn!(
                 event = ?input.event_name(),
@@ -419,6 +433,7 @@ impl Approvals {
                 request_id.clone(),
                 Entry {
                     info: info.clone(),
+                    agent_name: agent_name.to_owned(),
                     started: Instant::now(),
                     reply,
                 },
@@ -428,7 +443,9 @@ impl Approvals {
         self.record(&info, ApprovalStatus::Pending, None);
         // `?`: chuỗi từ agent không tin cậy, Debug escape xuống dòng (chặn giả dòng log).
         tracing::info!(%request_id, session = ?info.session_id, tool = ?info.tool, "đang giữ yêu cầu duyệt");
-        let _ = self.notices.send(ApprovalNotice::Requested(info));
+        let _ = self.tx.send(ServerMsg::ApprovalRequested {
+            approval: approval_view(&info, agent_name),
+        });
 
         // Future bị drop (client đóng kết nối) thì guard hủy yêu cầu; mọi nhánh dưới tự dọn nên tắt guard.
         let mut guard = CancelOnDrop {
@@ -568,7 +585,7 @@ impl Approvals {
             Ok(()) => {
                 tracing::info!(request_id, ?decision, ?by, "đã quyết định");
                 self.record(&info, status, Some(by));
-                let _ = self.notices.send(ApprovalNotice::Resolved {
+                let _ = self.tx.send(ServerMsg::ApprovalResolved {
                     request_id: info.request_id,
                     decision: Some(decision),
                     decided_by: by,
@@ -667,7 +684,7 @@ impl Approvals {
     ) {
         let Entry { info, reply, .. } = entry;
         self.record(&info, status, Some(by));
-        let _ = self.notices.send(ApprovalNotice::Resolved {
+        let _ = self.tx.send(ServerMsg::ApprovalResolved {
             request_id: info.request_id,
             decision,
             decided_by: by,

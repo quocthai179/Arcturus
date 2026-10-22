@@ -39,7 +39,8 @@ pub struct AgentRuntime {
 #[derive(Clone, Debug, Default)]
 pub struct TeamState {
     pub agents: BTreeMap<AgentId, AgentRuntime>,
-    pub paused: bool,
+    /// "Giờ tập trung" (T14). Cờ tạm dừng không nằm ở đây: `Approvals` giữ nó để kiểm đếm ngược dưới cùng một khóa
+    /// (quyết định D3 ở T5).
     pub focus: bool,
 }
 
@@ -145,6 +146,30 @@ impl TeamState {
     /// Mọi agent, cho `Snapshot` (T5).
     pub fn views(&self) -> Vec<AgentView> {
         self.agents.values().map(|a| a.view.clone()).collect()
+    }
+
+    /// Tên hiển thị của agent (cho thẻ duyệt).
+    pub fn name_of(&self, id: &str) -> Option<&str> {
+        self.agents.get(id).map(|a| a.view.name.as_str())
+    }
+
+    /// Yêu cầu duyệt của `id` đã có quyết định (PLAN T3 bước 9): agent đang chờ duyệt quay về suy nghĩ.
+    /// Agent đã sang trạng thái khác (sự kiện kế tiếp tới trước) thì giữ nguyên.
+    pub fn approval_finished(&mut self, id: &str) -> Vec<ServerMsg> {
+        match self.agents.get_mut(id) {
+            Some(rt) if rt.view.mood == Mood::Approval => {
+                set(
+                    &mut rt.view,
+                    Mood::Working,
+                    Activity::Thinking,
+                    TEXT_THINKING,
+                );
+                vec![ServerMsg::AgentUpdated {
+                    agent: rt.view.clone(),
+                }]
+            }
+            _ => Vec::new(),
+        }
     }
 
     fn name_in_use(&self, name: &str) -> bool {
@@ -864,6 +889,30 @@ mod tests {
         }
         w.apply(hook("UserPromptSubmit", "abcdef12"));
         assert_eq!(w.view("agt_abcdef12").name, "Agent abcd");
+    }
+
+    #[test]
+    fn approval_finished_returns_waiting_agent_to_thinking() {
+        let mut w = World::new();
+        let mut p = pre_tool("s1", "Bash", json!({ "command": "git push" }));
+        p["hook_event_name"] = json!("PermissionRequest");
+        w.apply(p);
+        assert_eq!(w.st.name_of("agt_s1"), Some("Muphrid"));
+        assert_eq!(w.st.approval_finished("agt_s1").len(), 1);
+        assert_state(
+            &w,
+            "agt_s1",
+            Mood::Working,
+            Activity::Thinking,
+            TEXT_THINKING,
+        );
+
+        // Đã sang trạng thái khác, hoặc agent không còn: không làm gì.
+        w.apply(hook("Stop", "s1"));
+        assert!(w.st.approval_finished("agt_s1").is_empty());
+        assert_eq!(w.view("agt_s1").mood, Mood::Done);
+        assert!(w.st.approval_finished("agt_khong_co").is_empty());
+        assert_eq!(w.st.name_of("agt_khong_co"), None);
     }
 
     #[test]
