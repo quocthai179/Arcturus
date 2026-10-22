@@ -35,6 +35,10 @@ pub const DEFAULT_STORE_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 pub const DEFAULT_MAX_PENDING: usize = 64;
 pub const DEFAULT_MAX_PENDING_PER_SESSION: usize = 16;
 
+/// Trần tổng byte `tool_input` đang giữ (T5c · ARC-43, quy tắc bất biến 6): 64 Write ~1 MB từng đẩy hub lên 93 MB.
+/// Khớp `Config::default()`.
+pub const DEFAULT_HELD_INPUT_MAX_BYTES: usize = 8 * 1024 * 1024;
+
 /// Ngưỡng mặc định "quá dài để duyệt trên thẻ" (khớp `Config::default()`).
 pub const DEFAULT_HANDOFF_MAX_BYTES: usize = 4096;
 pub const DEFAULT_HANDOFF_MAX_LINES: usize = 50;
@@ -265,6 +269,8 @@ pub struct ApprovalsConfig {
     /// Tối đa yêu cầu đang giữ (giữ RAM trong ngân sách, quy tắc bất biến 6). Vượt thì trả `{}` ngay.
     pub max_pending: usize,
     pub max_pending_per_session: usize,
+    /// Trần tổng byte `tool_input` đang giữ (ước lượng bằng [`held_size`]). Vượt thì trả `{}` ngay.
+    pub held_input_max_bytes: usize,
     /// Ngưỡng trả về terminal (`[hub] handoff_max_bytes`, `handoff_max_lines`).
     pub handoff_max_bytes: usize,
     pub handoff_max_lines: usize,
@@ -277,6 +283,7 @@ impl Default for ApprovalsConfig {
             store_ack_timeout: DEFAULT_STORE_ACK_TIMEOUT,
             max_pending: DEFAULT_MAX_PENDING,
             max_pending_per_session: DEFAULT_MAX_PENDING_PER_SESSION,
+            held_input_max_bytes: DEFAULT_HELD_INPUT_MAX_BYTES,
             handoff_max_bytes: DEFAULT_HANDOFF_MAX_BYTES,
             handoff_max_lines: DEFAULT_HANDOFF_MAX_LINES,
         }
@@ -300,15 +307,59 @@ struct Entry {
     reply: oneshot::Sender<Decided>,
     /// Bản đầy đủ đã được mở qua `GET /approvals/{id}/input` (bắt buộc trước khi allow thẻ `truncated`).
     reviewed: bool,
+    /// Phần của entry này trong [`Inner::held_bytes`].
+    held_bytes: usize,
 }
 
 #[derive(Default)]
 struct Inner {
+    /// Chỉ thêm/bớt qua [`Inner::insert_entry`], [`Inner::remove_entry`], [`Inner::drain_entries`] để `held_bytes`
+    /// không bao giờ lệch.
     entries: HashMap<RequestId, Entry>,
+    /// Tổng [`Entry::held_bytes`] của mọi entry đang giữ.
+    held_bytes: usize,
     /// Cũ trước; tối đa [`MAX_HANDOFFS`], đầy thì bỏ thẻ cũ nhất.
     handoffs: VecDeque<Handoff>,
     paused: bool,
     closed: bool,
+}
+
+impl Inner {
+    fn insert_entry(&mut self, id: RequestId, entry: Entry) {
+        self.held_bytes += entry.held_bytes;
+        if let Some(old) = self.entries.insert(id, entry) {
+            // Không xảy ra (id là ULID mới); vẫn giữ bộ đếm đúng.
+            self.held_bytes = self.held_bytes.saturating_sub(old.held_bytes);
+        }
+    }
+
+    fn remove_entry(&mut self, id: &str) -> Option<Entry> {
+        let e = self.entries.remove(id)?;
+        self.held_bytes = self.held_bytes.saturating_sub(e.held_bytes);
+        Some(e)
+    }
+
+    fn drain_entries(&mut self) -> Vec<Entry> {
+        self.held_bytes = 0;
+        self.entries.drain().map(|(_, e)| e).collect()
+    }
+}
+
+/// Ước lượng byte RAM một `tool_input` chiếm khi giữ trong hàng đợi: độ dài chuỗi và khóa cộng phần đầu cố định của mỗi
+/// nút JSON. Không serialize lại (đầu vào có thể tới 1 MB).
+pub fn held_size(v: &Value) -> usize {
+    const NODE: usize = 32;
+    match v {
+        Value::Null | Value::Bool(_) | Value::Number(_) => NODE,
+        Value::String(s) => NODE + s.len(),
+        Value::Array(items) => NODE + items.iter().map(held_size).sum::<usize>(),
+        Value::Object(map) => {
+            NODE + map
+                .iter()
+                .map(|(k, v)| NODE + k.len() + held_size(v))
+                .sum::<usize>()
+        }
+    }
 }
 
 /// Hàng đợi yêu cầu duyệt (`Hub::pending` trong §4).
@@ -365,6 +416,11 @@ impl Approvals {
             .collect();
         out.sort_by_key(|v| v.created_at);
         out
+    }
+
+    /// Tổng byte `tool_input` đang giữ (ước lượng, xem [`held_size`]).
+    pub fn held_bytes(&self) -> usize {
+        self.lock().held_bytes
     }
 
     pub fn pending(&self, request_id: &str) -> Option<PendingApproval> {
@@ -461,6 +517,7 @@ impl Approvals {
             PolicyOutcome::AskUser { risk, countdown } => (risk, countdown),
         };
 
+        let held_bytes = held_size(&tool_input);
         let request_id = new_request_id();
         let (reply, mut rx) = oneshot::channel();
         let mut info = PendingApproval {
@@ -498,6 +555,16 @@ impl Approvals {
                 );
                 return PermissionOutcome::Overloaded;
             }
+            if inner.held_bytes.saturating_add(held_bytes) > self.cfg.held_input_max_bytes {
+                tracing::warn!(
+                    session = ?ev.session_id,
+                    held = inner.held_bytes,
+                    request = held_bytes,
+                    max = self.cfg.held_input_max_bytes,
+                    "hàng đợi duyệt đầy bộ nhớ, trả {{}} để Claude Code hỏi trong terminal"
+                );
+                return PermissionOutcome::Overloaded;
+            }
             if inner.paused {
                 info.countdown = None;
                 view.countdown_ms = None;
@@ -510,7 +577,7 @@ impl Approvals {
             let _ = self.tx.send(ServerMsg::ApprovalRequested {
                 approval: view.clone(),
             });
-            inner.entries.insert(
+            inner.insert_entry(
                 request_id.clone(),
                 Entry {
                     info,
@@ -518,6 +585,7 @@ impl Approvals {
                     started: Instant::now(),
                     reviewed: false,
                     reply,
+                    held_bytes,
                 },
             );
         }
@@ -732,7 +800,7 @@ impl Approvals {
                 );
                 return DecideResult::Held(HeldReason::NotReviewed);
             }
-            match inner.entries.remove(request_id) {
+            match inner.remove_entry(request_id) {
                 Some(e) => e,
                 None => return DecideResult::Expired,
             }
@@ -834,7 +902,7 @@ impl Approvals {
         let drained: Vec<Entry> = {
             let mut inner = self.lock();
             inner.closed = true;
-            inner.entries.drain().map(|(_, e)| e).collect()
+            inner.drain_entries()
         };
         let n = drained.len();
         for entry in drained {
@@ -855,9 +923,7 @@ impl Approvals {
                 .filter(|(_, e)| pred(&e.info))
                 .map(|(id, _)| id.clone())
                 .collect();
-            ids.iter()
-                .filter_map(|id| inner.entries.remove(id))
-                .collect()
+            ids.iter().filter_map(|id| inner.remove_entry(id)).collect()
         };
         let n = taken.len();
         for entry in taken {
@@ -868,7 +934,7 @@ impl Approvals {
     }
 
     fn take(&self, request_id: &str) -> Option<Entry> {
-        self.lock().entries.remove(request_id)
+        self.lock().remove_entry(request_id)
     }
 
     /// Ghi trạng thái cuối, báo UI, rồi drop `reply` (handler đang chờ rơi vào nhánh hủy và trả `{}`).
