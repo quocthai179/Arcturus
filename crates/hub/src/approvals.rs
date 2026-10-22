@@ -45,6 +45,10 @@ pub const MAX_TOOL_NAME_BYTES: usize = 256;
 pub const MAX_ID_BYTES: usize = 256;
 pub const MAX_CWD_BYTES: usize = 32 * 1024;
 
+/// Sàn thời gian duyệt (T5d · ARC-44, F6 biện pháp B4): `allow` do người bấm tới sớm hơn chừng này kể từ lúc thẻ hiện
+/// bị giữ lại. Khớp `Config::default()`.
+pub const DEFAULT_MIN_REVIEW: Duration = Duration::from_millis(1000);
+
 /// Ngưỡng mặc định "quá dài để duyệt trên thẻ" (khớp `Config::default()`).
 pub const DEFAULT_HANDOFF_MAX_BYTES: usize = 4096;
 pub const DEFAULT_HANDOFF_MAX_LINES: usize = 50;
@@ -207,6 +211,8 @@ pub enum HeldReason {
     CountdownCannotDeny,
     /// Allow thẻ đã cắt nội dung khi chưa mở bản đầy đủ.
     NotReviewed,
+    /// Allow do người bấm tới sớm hơn [`ApprovalsConfig::min_review`] kể từ lúc thẻ hiện.
+    TooFast,
 }
 
 /// Kết quả `Decide`. T5 đổi `Expired` thành `Feed` "Yêu cầu đã hết hạn", `Held` thành "Cần trưởng nhóm bấm duyệt".
@@ -277,6 +283,8 @@ pub struct ApprovalsConfig {
     pub max_pending_per_session: usize,
     /// Trần tổng byte `tool_input` đang giữ (ước lượng bằng [`held_size`]). Vượt thì trả `{}` ngay.
     pub held_input_max_bytes: usize,
+    /// Sàn thời gian duyệt cho `allow` do người bấm (`Duration::ZERO` là tắt). Không áp cho deny và đếm ngược.
+    pub min_review: Duration,
     /// Ngưỡng trả về terminal (`[hub] handoff_max_bytes`, `handoff_max_lines`).
     pub handoff_max_bytes: usize,
     pub handoff_max_lines: usize,
@@ -290,6 +298,7 @@ impl Default for ApprovalsConfig {
             max_pending: DEFAULT_MAX_PENDING,
             max_pending_per_session: DEFAULT_MAX_PENDING_PER_SESSION,
             held_input_max_bytes: DEFAULT_HELD_INPUT_MAX_BYTES,
+            min_review: DEFAULT_MIN_REVIEW,
             handoff_max_bytes: DEFAULT_HANDOFF_MAX_BYTES,
             handoff_max_lines: DEFAULT_HANDOFF_MAX_LINES,
         }
@@ -963,6 +972,18 @@ impl Approvals {
                     );
                     return DecideResult::Held(reason);
                 }
+            }
+            // Sàn thời gian duyệt (F6, B4): script đọc được token UI không duyệt được thẻ ngay khi nó vừa hiện, người
+            // dùng không lỡ tay duyệt thẻ vừa bật lên. Chỉ allow của người; deny luôn được nhận.
+            if decision == Decision::Allow
+                && origin == DecideOrigin::User
+                && e.started.elapsed() < self.cfg.min_review
+            {
+                tracing::info!(
+                    request_id,
+                    "giữ nguyên yêu cầu: allow tới sớm hơn sàn thời gian duyệt"
+                );
+                return DecideResult::Held(HeldReason::TooFast);
             }
             // Thẻ đã cắt nội dung: chỉ cho allow sau khi bản đầy đủ đã được mở (audit T5b finding 3, bất biến 3).
             if decision == Decision::Allow && e.view.truncated && !e.reviewed {

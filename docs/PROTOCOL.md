@@ -90,6 +90,8 @@ Quy tắc hiển thị thẻ duyệt (quy tắc bất biến 3):
 - `truncated: true` (chỉ Edit/Write/MultiEdit/NotebookEdit): nội dung trên thẻ đã bị cắt. UI bắt người dùng mở bản đầy đủ
   (`GET /approvals/{request_id}/input`) trước khi cho bấm Allow; hub cũng giữ nguyên mọi `allow` cho thẻ này tới khi bản
   đầy đủ đã được lấy (trả `feed` "Cần mở bản đầy đủ trước khi duyệt"). `deny` không cần.
+- Sàn thời gian duyệt: hub giữ `allow` của người tới sớm hơn `min_review_ms` sau khi thẻ hiện (`feed` "Duyệt quá nhanh: xem
+  lại thẻ rồi bấm lại"). UI nên làm mờ nút Allow trong khoảng đó để người dùng không phải bấm lại.
 - `countdown_ms` khác `null`: đếm ngược phủ quyết; hết giờ thì UI gửi `decide{decision:"allow",origin:"countdown"}`. Khi
   `team.paused` là `true`, UI dừng **mọi** đếm ngược (hub cũng từ chối đếm ngược khi tạm dừng).
 
@@ -142,6 +144,7 @@ Tin nhắn cho người dùng, thường **chỉ gửi cho client vừa gửi l�
 | `Yêu cầu đã hết hạn` | `decide` cho yêu cầu không còn chờ (đã hết giờ, đã quyết, đã hủy) |
 | `Cần trưởng nhóm bấm duyệt` | `decide` với `origin: countdown` không hợp lệ (không có đếm ngược, chưa hết giờ, đang tạm dừng, hoặc kèm `deny`); yêu cầu vẫn chờ |
 | `Cần mở bản đầy đủ trước khi duyệt` | `allow` cho thẻ `truncated` khi chưa lấy `GET /approvals/{id}/input`; yêu cầu vẫn chờ |
+| `Duyệt quá nhanh: xem lại thẻ rồi bấm lại` | `allow` với `origin: user` tới sớm hơn `min_review_ms` (mặc định 1.000 ms) kể từ lúc thẻ được phát; yêu cầu vẫn chờ, bấm lại sau là được. `deny` và đếm ngược không bị chặn |
 | `Yêu cầu này đang được duyệt trong terminal` | `decide` cho `handoff_id` |
 | `Lý do từ chối quá dài (tối đa 500 ký tự)` | `message` quá dài; yêu cầu vẫn chờ |
 | `Quá nhiều lệnh duyệt, hãy thử lại sau` | quá 20 `decide`/giây |

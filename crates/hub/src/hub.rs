@@ -55,6 +55,7 @@ impl Hub {
             handoff_max_bytes: cfg.hub.handoff_max_bytes,
             handoff_max_lines: cfg.hub.handoff_max_lines,
             held_input_max_bytes: cfg.hub.held_input_max_bytes,
+            min_review: Duration::from_millis(cfg.hub.min_review_ms),
             ..ApprovalsConfig::default()
         };
         Self::start_with(

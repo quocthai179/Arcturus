@@ -21,6 +21,14 @@ use time::OffsetDateTime;
 use tokio::sync::broadcast;
 use tokio::task::JoinHandle;
 
+/// Cấu hình hàng đợi cho các test về hành vi khác: tắt sàn thời gian duyệt (đã có test riêng ở `tests/min_review.rs`).
+fn no_floor() -> ApprovalsConfig {
+    ApprovalsConfig {
+        min_review: Duration::ZERO,
+        ..ApprovalsConfig::default()
+    }
+}
+
 const WAIT: Duration = Duration::from_secs(5);
 
 fn approvals_with(cfg: ApprovalsConfig) -> (Arc<Approvals>, broadcast::Receiver<ServerMsg>) {
@@ -32,7 +40,7 @@ fn approvals_with(cfg: ApprovalsConfig) -> (Arc<Approvals>, broadcast::Receiver<
 fn cfg(held_input_max_bytes: usize) -> ApprovalsConfig {
     ApprovalsConfig {
         held_input_max_bytes,
-        ..ApprovalsConfig::default()
+        ..no_floor()
     }
 }
 
@@ -268,7 +276,7 @@ async fn count_and_byte_limits_both_apply() {
 /// giữ tối đa 8 MiB nội dung; phần còn lại nhận `{}` ngay.
 #[tokio::test]
 async fn many_large_writes_stay_under_cap() {
-    let (a, _rx) = approvals_with(ApprovalsConfig::default());
+    let (a, _rx) = approvals_with(no_floor());
     let one_mb = 1024 * 1024 - 512;
     // 4 phiên × 16 (giới hạn mỗi phiên) = 64 yêu cầu.
     let handles: Vec<_> = (0..64)
