@@ -49,6 +49,9 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     let token = auth::token_from_env(std::env::var(auth::TOKEN_ENV).ok())?;
     let cfg = Config::load(&cli.config)?;
+    // Ghi rõ file thật sự dùng: cấu hình mặc định đọc từ thư mục hiện tại (audit T5a finding 8).
+    let cfg_path = std::path::absolute(&cli.config).unwrap_or_else(|_| cli.config.clone());
+    let cfg_found = cfg_path.is_file();
     let bind = match cli.bind {
         Some(b) => b,
         None => cfg
@@ -86,7 +89,14 @@ async fn main() -> anyhow::Result<()> {
         let n_personas = cfg.personas.len();
         let (hub, _tasks) = Hub::start(cfg, personas, hostname());
         let app = hooks::router(hub.clone(), token);
-        tracing::info!(%bind, timeout_s, personas = n_personas, config = %cli.config.display(), "hub đang chạy");
+        tracing::info!(
+            %bind,
+            timeout_s,
+            personas = n_personas,
+            config = %cfg_path.display(),
+            config_found = cfg_found,
+            "hub đang chạy"
+        );
         server::serve_until(listener, app, async move {
             server::ctrl_c().await;
             hub.shutdown();

@@ -695,6 +695,16 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
   `danger_spans = []`, `reversible = false`, `group_key = tool`. T8 thay bằng normalize đầy đủ.
 - `protocol.rs` thêm `ApprovalView`, `Suspicion`, `TeamView`, `DecideOrigin` (chuyển từ `hub`), `ApprovalRequested`,
   `ApprovalResolved`, `TeamUpdated`. `Hub::set_paused` / `set_focus` broadcast `TeamUpdated` (T5b nối với `ClientMsg`).
+- Theo security audit T5a: danh sách ký tự ẩn gồm Cc, toàn bộ Default_Ignorable_Code_Point, Cf khác, Zl/Zp, Co, khoảng
+  trắng không phải ASCII và U+2800; chuỗi lặp hiện `⟨U+XXXX×N⟩`; cờ `hidden_chars` xét mọi chuỗi/khóa của `tool_input`
+  gốc. Chỉ Edit/Write/MultiEdit/NotebookEdit bị cắt, MultiEdit cắt từng `old_string`/`new_string` (giữ mảng,
+  `replace_all`). Thẻ duyệt dựng một lần, cache trong hàng đợi; `ApprovalRequested` và bản ghi `pending` gửi khi còn giữ
+  khóa (không còn thẻ "ma" tới sau `ApprovalResolved`). `TeamState` tối đa 256 agent, `cwd` tối đa 4.096 ký tự. Hub log
+  đường dẫn tuyệt đối của file cấu hình.
+- Còn mở (cần quyết hoặc làm ở task sau): giới hạn hiển thị lệnh Bash rất dài (bất biến 3 hiện cấm cắt Bash; body tối
+  đa 1 MB) — cần người quyết; T5b: serialize mỗi thông điệp broadcast một lần, giới hạn hàng gửi mỗi client, UI bắt mở
+  bản đầy đủ khi `truncated`; T8: bảng Unicode đầy đủ (gồm Cn); cấu hình mặc định nên ở thư mục cấu hình người dùng
+  trước khi T8/T10 đưa policy vào file.
 
 ### T6 · ARC-27 · Lưu trữ
 

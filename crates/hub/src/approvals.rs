@@ -116,6 +116,8 @@ pub type StoreAck = oneshot::Receiver<Result<(), StoreError>>;
 
 pub trait ApprovalStore: Send + Sync {
     /// Gửi bản ghi cho writer. Người gọi không cần chờ thì bỏ receiver.
+    ///
+    /// Có thể được gọi khi `Approvals` đang giữ khóa: phải không chặn (chỉ đẩy vào kênh), không gọi ngược `Approvals`.
     fn record(&self, rec: ApprovalRecord) -> StoreAck;
 }
 
@@ -254,7 +256,8 @@ impl Default for ApprovalsConfig {
 
 struct Entry {
     info: PendingApproval,
-    agent_name: String,
+    /// Thẻ duyệt dựng một lần lúc tạo (không dựng lại dưới khóa, audit T5a finding 2, 6).
+    view: ApprovalView,
     started: Instant,
     reply: oneshot::Sender<Decided>,
 }
@@ -316,7 +319,7 @@ impl Approvals {
             .lock()
             .entries
             .values()
-            .map(|e| approval_view(&e.info, &e.agent_name))
+            .map(|e| e.view.clone())
             .collect();
         out.sort_by_key(|v| v.created_at);
         out
@@ -345,6 +348,7 @@ impl Approvals {
         if paused {
             for e in inner.entries.values_mut() {
                 e.info.countdown = None;
+                e.view.countdown_ms = None;
             }
         }
     }
@@ -397,7 +401,22 @@ impl Approvals {
 
         let request_id = new_request_id();
         let (reply, mut rx) = oneshot::channel();
-        let info = {
+        let mut info = PendingApproval {
+            request_id: request_id.clone(),
+            session_id: ev.session_id.clone(),
+            agent_id: ev.agent.id.clone(),
+            tool,
+            tool_input,
+            cwd,
+            risk,
+            created_at: ev.ts,
+            deadline_at: ev.ts + self.cfg.timeout,
+            countdown,
+        };
+        // Dựng thẻ (cắt, escape) ngoài khóa.
+        let mut view = approval_view(&info, agent_name);
+        let rec = self.record_of(&info, ApprovalStatus::Pending, None);
+        {
             let mut inner = self.lock();
             if inner.closed {
                 return PermissionOutcome::Cancelled;
@@ -417,35 +436,28 @@ impl Approvals {
                 );
                 return PermissionOutcome::Overloaded;
             }
-            let info = PendingApproval {
-                request_id: request_id.clone(),
-                session_id: ev.session_id.clone(),
-                agent_id: ev.agent.id.clone(),
-                tool,
-                tool_input,
-                cwd,
-                risk,
-                created_at: ev.ts,
-                deadline_at: ev.ts + self.cfg.timeout,
-                countdown: if inner.paused { None } else { countdown },
-            };
+            if inner.paused {
+                info.countdown = None;
+                view.countdown_ms = None;
+            }
+            // `?`: chuỗi từ agent không tin cậy, Debug escape xuống dòng (chặn giả dòng log).
+            tracing::info!(%request_id, session = ?info.session_id, tool = ?info.tool, "đang giữ yêu cầu duyệt");
+            // Ghi `pending` và gửi khi còn giữ khóa: bản ghi/thông báo kết thúc của yêu cầu này (hủy, quyết định) chỉ có
+            // thể tới sau (audit T5a finding 5). Cả hai chỉ đẩy vào kênh, không chờ.
+            drop(self.store.record(rec));
+            let _ = self.tx.send(ServerMsg::ApprovalRequested {
+                approval: view.clone(),
+            });
             inner.entries.insert(
                 request_id.clone(),
                 Entry {
-                    info: info.clone(),
-                    agent_name: agent_name.to_owned(),
+                    info,
+                    view,
                     started: Instant::now(),
                     reply,
                 },
             );
-            info
-        };
-        self.record(&info, ApprovalStatus::Pending, None);
-        // `?`: chuỗi từ agent không tin cậy, Debug escape xuống dòng (chặn giả dòng log).
-        tracing::info!(%request_id, session = ?info.session_id, tool = ?info.tool, "đang giữ yêu cầu duyệt");
-        let _ = self.tx.send(ServerMsg::ApprovalRequested {
-            approval: approval_view(&info, agent_name),
-        });
+        }
 
         // Future bị drop (client đóng kết nối) thì guard hủy yêu cầu; mọi nhánh dưới tự dọn nên tắt guard.
         let mut guard = CancelOnDrop {
@@ -694,7 +706,16 @@ impl Approvals {
 
     /// Ghi không chờ xác nhận (chỉ AutoAllow cần chờ).
     fn record(&self, info: &PendingApproval, status: ApprovalStatus, by: Option<DecidedBy>) {
-        drop(self.store.record(ApprovalRecord {
+        drop(self.store.record(self.record_of(info, status, by)));
+    }
+
+    fn record_of(
+        &self,
+        info: &PendingApproval,
+        status: ApprovalStatus,
+        by: Option<DecidedBy>,
+    ) -> ApprovalRecord {
+        ApprovalRecord {
             request_id: info.request_id.clone(),
             session_id: info.session_id.clone(),
             agent_id: info.agent_id.clone(),
@@ -702,7 +723,7 @@ impl Approvals {
             status,
             decided_by: by,
             at: OffsetDateTime::now_utc(),
-        }));
+        }
     }
 
     fn lock(&self) -> MutexGuard<'_, Inner> {
