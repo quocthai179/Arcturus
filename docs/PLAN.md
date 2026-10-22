@@ -751,6 +751,15 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - Token UI riêng (D1) và kiểm `Host`/`Origin` (§3.3). P2: Windows dựa vào quyền mặc định của `%APPDATA%`. P3: cấu hình
   vẫn đọc từ thư mục hiện tại tới T8.
 - `GET /approvals/{id}/input` (§3.3). `docs/PROTOCOL.md` mô tả đầy đủ giao thức cho làn `ui`.
+- Theo security audit T5b (không có mức cao): `ApprovalView`/`HandoffView` thêm `tool_options` (Bash: trường ngoài
+  `command`/`description`, ví dụ `dangerouslyDisableSandbox`, hiện tách khỏi lệnh); allow thẻ `truncated` bị giữ
+  (`HeldReason::NotReviewed`) tới khi `GET /approvals/{id}/input` đã được gọi; tối đa 8 kết nối WebSocket, lệnh đội chung
+  giới hạn 20/s với `Decide`; đổi cờ đội và broadcast tuần tự (không còn `TeamUpdated` cũ); file tạm của token UI luôn
+  tạo mới (không theo symlink, không giữ quyền cũ), thư mục 0700 trên Unix; origin Vite dev chỉ ở bản debug.
+- Còn mở sau audit T5b: (1) token UI vẫn đọc được bởi agent đã có quyền chạy mã dưới cùng người dùng (giới hạn của D1) —
+  cần người quyết giữa sàn thời gian phản ứng cho allow, hoặc app khởi động hub và trao token qua pipe; đề xuất ticket T8:
+  luật danger + cờ khi `tool_input` chạm `arcturus/ui-token` hoặc `/ws`. (2) Edit/MultiEdit rất lớn vẫn là thẻ (L1), có
+  thể tới gần 1 MB mỗi thẻ trong Snapshot; cân nhắc ngưỡng tổng kích thước cho nhóm này.
 
 ### T6 · ARC-27 · Lưu trữ
 

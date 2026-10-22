@@ -14,8 +14,9 @@ Authorization: Bearer <token UI>        # hoặc ?token=<token UI> khi không đ
   `<data_dir>/arcturus/ui-token` (Windows: `%APPDATA%\arcturus\ui-token`; đổi bằng `--ui-token-file`). App đọc file này
   mỗi lần (kết nối lại sau khi hub khởi động lại thì phải đọc lại). Token hook bị từ chối ở `/ws` (`401`).
 - `Host` phải là `127.0.0.1:<cổng>`, `localhost:<cổng>` hoặc `[::1]:<cổng>`. `Origin`, nếu có, phải là một trong
-  `http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost`, `http://127.0.0.1:5173`,
-  `http://localhost:5173`. Sai → `403`.
+  `http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost`; Vite dev (`http://127.0.0.1:5173`,
+  `http://localhost:5173`) chỉ được nhận khi hub là bản debug. Sai → `403`.
+- Tối đa 8 kết nối cùng lúc; vượt → `503`.
 - Không đưa token vào log, URL hiển thị hay thông báo lỗi.
 
 ## Vòng đời
@@ -30,7 +31,8 @@ Authorization: Bearer <token UI>        # hoặc ?token=<token UI> khi không đ
 5. Client không nhận được frame trong 10 giây (treo, mạng nghẽn) bị ngắt. Kết nối lại thì nhận snapshot mới.
 6. Hub tắt: gửi Close `1001` ("hub tắt"). Mọi yêu cầu đang chờ đã được trả `{}` (Claude Code hỏi trong terminal).
 
-Giới hạn: frame từ client tối đa 64 KB; `decide` tối đa 20 lần/giây mỗi kết nối; `message` khi từ chối tối đa 500 ký tự.
+Giới hạn: frame từ client tối đa 64 KB; `decide`, `team_pause`, `team_resume`, `focus_set` chung tối đa 20 lần/giây mỗi
+kết nối; `message` khi từ chối tối đa 500 ký tự.
 
 ## Server → client
 
@@ -69,20 +71,25 @@ Giới hạn: frame từ client tối đa 64 KB; `decide` tối đa 20 lần/gi�
 {"t":"approval_requested","approval":{
   "request_id":"req_01M5…","agent_id":"agt_s1","agent_name":"Khoa","tool":"Bash",
   "command_original":"git push origin main","command_normalized":"git push origin main",
+  "tool_options":{"run_in_background":"true"},
   "danger_spans":[],"suspicions":[],"truncated":false,
   "risk":"medium","reversible":false,"group_key":"Bash",
   "created_at":"2026-10-22T09:00:00Z","deadline_at":"2026-10-22T09:01:50Z","countdown_ms":null}}
 ```
 
 Quy tắc hiển thị thẻ duyệt (quy tắc bất biến 3):
-- **Cơ sở duyệt là `command_normalized`**, không phải tóm tắt nào khác. Render bằng text node, **không bao giờ** như HTML.
-  Mọi chuỗi từ agent (`command_*`, `cwd`, `act_text`, `tool`, `agent_name`) đều không tin cậy.
+- **Cơ sở duyệt là `command_normalized`**, không phải tóm tắt nào khác. Render bằng text node, **không bao giờ** như HTML,
+  không cắt bằng CSS (ellipsis, overflow ẩn). Mọi chuỗi từ agent (`command_*`, `tool_options`, `cwd`, `act_text`, `tool`,
+  `agent_name`) đều không tin cậy.
+- `tool_options` (Bash): các trường ngoài `command` đổi cách lệnh chạy, ví dụ `dangerouslyDisableSandbox: true` (chạy ngoài
+  sandbox), `run_in_background`, `timeout`. Hiện **rõ, tách khỏi lệnh**, nổi bật khi `dangerouslyDisableSandbox` là `true`.
 - Ký tự ẩn/điều khiển/bidi/khoảng trắng lạ đã được thay bằng `⟨U+XXXX⟩` (chuỗi lặp `⟨U+XXXX×N⟩`); có
   `"hidden_chars"` trong `suspicions` thì hiện cảnh báo rõ ràng.
 - `danger_spans`: `[start, end)` theo **chỉ số ký tự Unicode** trong `command_normalized`. Cắt bằng
   `Array.from(s).slice(start, end).join('')`, không dùng `String.prototype.slice`.
-- `truncated: true` (chỉ Edit/Write/MultiEdit/NotebookEdit): nội dung trên thẻ đã bị cắt. UI **phải** bắt người dùng mở
-  bản đầy đủ (`GET /approvals/{request_id}/input`) trước khi cho bấm Allow.
+- `truncated: true` (chỉ Edit/Write/MultiEdit/NotebookEdit): nội dung trên thẻ đã bị cắt. UI bắt người dùng mở bản đầy đủ
+  (`GET /approvals/{request_id}/input`) trước khi cho bấm Allow; hub cũng giữ nguyên mọi `allow` cho thẻ này tới khi bản
+  đầy đủ đã được lấy (trả `feed` "Cần mở bản đầy đủ trước khi duyệt"). `deny` không cần.
 - `countdown_ms` khác `null`: đếm ngược phủ quyết; hết giờ thì UI gửi `decide{decision:"allow",origin:"countdown"}`. Khi
   `team.paused` là `true`, UI dừng **mọi** đếm ngược (hub cũng từ chối đếm ngược khi tạm dừng).
 
@@ -134,9 +141,11 @@ Tin nhắn cho người dùng, thường **chỉ gửi cho client vừa gửi l�
 |---|---|
 | `Yêu cầu đã hết hạn` | `decide` cho yêu cầu không còn chờ (đã hết giờ, đã quyết, đã hủy) |
 | `Cần trưởng nhóm bấm duyệt` | `decide` với `origin: countdown` không hợp lệ (không có đếm ngược, chưa hết giờ, đang tạm dừng, hoặc kèm `deny`); yêu cầu vẫn chờ |
+| `Cần mở bản đầy đủ trước khi duyệt` | `allow` cho thẻ `truncated` khi chưa lấy `GET /approvals/{id}/input`; yêu cầu vẫn chờ |
 | `Yêu cầu này đang được duyệt trong terminal` | `decide` cho `handoff_id` |
 | `Lý do từ chối quá dài (tối đa 500 ký tự)` | `message` quá dài; yêu cầu vẫn chờ |
 | `Quá nhiều lệnh duyệt, hãy thử lại sau` | quá 20 `decide`/giây |
+| `Quá nhiều lệnh, hãy thử lại sau` | quá 20 lệnh/giây tính cả `team_pause`, `team_resume`, `focus_set` |
 | `Lệnh này chưa được hỗ trợ` | `decide_group`, `batch_open`, `batch_close`, `suggestion_answer` (T9, T10) |
 | `Thông điệp không hợp lệ` | JSON sai hoặc `t` không biết |
 | `Chỉ nhận thông điệp JSON dạng text` | frame nhị phân |
@@ -173,5 +182,8 @@ Authorization: Bearer <token UI>        # chỉ header, không nhận ?token=
 ```
 
 - `200`, `Content-Type: application/json`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store`: `tool_input`
-  đầy đủ (JSON gốc của hook) của yêu cầu đang chờ. Hiển thị như văn bản thuần.
+  đầy đủ (JSON gốc của hook) của yêu cầu đang chờ. Hiển thị như văn bản thuần. Lấy thành công thì hub ghi nhận "đã mở bản
+  đầy đủ" cho yêu cầu đó (mở khóa allow khi `truncated`).
+- Route không có CORS. Webview gọi `fetch` kèm header `Authorization` sẽ bị preflight chặn: app gọi qua phía Rust của
+  Tauri (T12), không thêm CORS dễ dãi.
 - `404`: không còn chờ, không tồn tại, hoặc là `handoff_id`. `401`: thiếu/sai token UI. `403`: `Host`/`Origin` sai.

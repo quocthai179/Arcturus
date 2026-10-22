@@ -37,6 +37,8 @@ pub struct Hub {
     events: mpsc::Sender<HookInput>,
     /// Thời điểm cần `tick` sớm nhất (`TeamState::next_wakeup`); `None` thì task tick ngủ, không hẹn giờ.
     wake: watch::Sender<Option<OffsetDateTime>>,
+    /// Khóa ngoài cùng cho thay đổi cờ đội (`set_paused`, `set_focus`); lấy trước khóa của `Approvals` và `state`.
+    team: Mutex<()>,
 }
 
 /// Các task nền của hub; drop không dừng chúng (dừng khi `Hub` bị drop và kênh đóng).
@@ -85,6 +87,7 @@ impl Hub {
             tx,
             events,
             wake,
+            team: Mutex::new(()),
         });
         let tasks = HubTasks {
             events: tokio::spawn(event_loop(Arc::downgrade(&hub), events_rx)),
@@ -145,6 +148,7 @@ impl Hub {
 
     /// `TeamPause` / `TeamResume` (T5b nối với WebSocket): cờ duy nhất nằm trong `Approvals` (D3).
     pub fn set_paused(&self, paused: bool) {
+        let _team = self.lock_team();
         self.approvals.set_paused(paused);
         self.publish(vec![ServerMsg::TeamUpdated {
             team: self.team_view(),
@@ -153,10 +157,17 @@ impl Hub {
 
     /// `FocusSet` (T14).
     pub fn set_focus(&self, on: bool) {
+        let _team = self.lock_team();
         self.lock_state().focus = on;
         self.publish(vec![ServerMsg::TeamUpdated {
             team: self.team_view(),
         }]);
+    }
+
+    /// Tuần tự hóa "đổi cờ đội + broadcast": hai client bấm tạm dừng/tiếp tục cùng lúc không làm `TeamUpdated` cuối cùng
+    /// mang giá trị cũ (audit T5b finding 6). Chỉ giữ quanh các thao tác đồng bộ, không qua `.await`.
+    fn lock_team(&self) -> MutexGuard<'_, ()> {
+        self.team.lock().unwrap_or_else(|e| e.into_inner())
     }
 
     pub fn team_view(&self) -> TeamView {

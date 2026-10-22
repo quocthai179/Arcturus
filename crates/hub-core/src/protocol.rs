@@ -3,6 +3,8 @@
 //! T4: phần trạng thái agent. T5a: thông điệp server phát ra từ luồng duyệt và đội (`ApprovalRequested`,
 //! `ApprovalResolved`, `TeamUpdated`). T5b thêm `Snapshot`, `Feed`, `ClientMsg` và viết `docs/PROTOCOL.md`.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 use time::OffsetDateTime;
 
@@ -73,6 +75,8 @@ pub struct HandoffView {
     pub preview_tail: String,
     /// Tính trên lệnh **đầy đủ**, không chỉ phần xem trước.
     pub suspicions: Vec<Suspicion>,
+    /// Như [`ApprovalView::tool_options`].
+    pub tool_options: BTreeMap<String, String>,
     pub message: String,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
@@ -87,6 +91,10 @@ pub struct ApprovalView {
     pub tool: String,
     /// `tool_input` gốc dạng chuỗi: Bash là lệnh; tool khác là JSON, trường nội dung bị cắt (`truncated`).
     pub command_original: String,
+    /// Bash: mọi trường của `tool_input` ngoài `command` và `description` (ví dụ `dangerouslyDisableSandbox`,
+    /// `run_in_background`, `timeout`), giá trị dạng JSON đã hiện ký tự ẩn. Chúng đổi cách lệnh chạy nên UI phải hiện rõ
+    /// trên thẻ, tách khỏi lệnh (agent không giả được). Tool khác: rỗng (JSON đầy đủ đã nằm trong `command_*`).
+    pub tool_options: BTreeMap<String, String>,
     /// Sau chuẩn hóa: ký tự ẩn/điều khiển/bidi hiện thành `⟨U+XXXX⟩` (T8 thay bằng normalize đầy đủ).
     pub command_normalized: String,
     /// `[start, end)` theo chỉ số ký tự Unicode trong `command_normalized` (§3.4).
@@ -246,6 +254,7 @@ mod tests {
                 agent_name: "Khoa".to_owned(),
                 tool: "Bash".to_owned(),
                 command_original: "echo a\u{202E}b".to_owned(),
+                tool_options: BTreeMap::from([("run_in_background".to_owned(), "true".to_owned())]),
                 command_normalized: "echo a⟨U+202E⟩b".to_owned(),
                 danger_spans: vec![(0, 4)],
                 suspicions: vec![Suspicion::HiddenChars],
@@ -262,6 +271,10 @@ mod tests {
         assert_eq!(v["t"], "approval_requested");
         assert_eq!(v["approval"]["danger_spans"], json!([[0, 4]]));
         assert_eq!(v["approval"]["suspicions"], json!(["hidden_chars"]));
+        assert_eq!(
+            v["approval"]["tool_options"],
+            json!({"run_in_background": "true"})
+        );
         assert_eq!(v["approval"]["deadline_at"], "2026-10-22T09:01:50Z");
         assert_eq!(serde_json::from_value::<ServerMsg>(v).unwrap(), requested);
 
@@ -410,6 +423,7 @@ mod tests {
                 preview_head: "head".to_owned(),
                 preview_tail: "tail".to_owned(),
                 suspicions: vec![Suspicion::HiddenChars],
+                tool_options: BTreeMap::new(),
                 message: "m".to_owned(),
                 created_at: datetime!(2026-10-22 09:00:00 UTC),
             },

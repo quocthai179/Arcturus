@@ -8,6 +8,8 @@
 //!   `⟨U+XXXX×N⟩`). `Suspicion::HiddenChars` dựa trên mọi chuỗi trong `tool_input` gốc, không chỉ phần hiển thị.
 //!   T8 thay bằng normalize đầy đủ theo thuộc tính Unicode (subshell, eval, encoded, `danger_spans`, `risk`).
 
+use std::collections::BTreeMap;
+
 use hub_core::protocol::{ApprovalView, HandoffView, Suspicion};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
@@ -35,6 +37,7 @@ pub fn approval_view(p: &PendingApproval, agent_name: &str) -> ApprovalView {
         agent_id: p.agent_id.clone(),
         agent_name: agent_name.to_owned(),
         tool: p.tool.clone(),
+        tool_options: tool_options(&p.tool, &p.tool_input),
         command_original,
         command_normalized,
         danger_spans: Vec::new(),
@@ -107,11 +110,33 @@ pub fn handoff_view(
         } else {
             Vec::new()
         },
+        tool_options: tool_options(&p.tool, &p.tool_input),
         message: format!(
             "Lệnh quá dài để duyệt ở đây — hãy mở terminal của {who} để xem đủ và quyết định."
         ),
         created_at: now,
     }
+}
+
+/// Bash: các trường ngoài `command`/`description` (đổi cách lệnh chạy: `dangerouslyDisableSandbox`, `run_in_background`,
+/// `timeout`…), giá trị JSON đã hiện ký tự ẩn. Tool khác: rỗng. Khóa có ký tự ẩn cũng được escape.
+pub fn tool_options(tool: &str, tool_input: &Value) -> BTreeMap<String, String> {
+    if tool != "Bash" {
+        return BTreeMap::new();
+    }
+    // `command` không phải chuỗi thì cả `tool_input` đã hiện dạng JSON trong `command_*`.
+    if !tool_input.get("command").is_some_and(Value::is_string) {
+        return BTreeMap::new();
+    }
+    tool_input
+        .as_object()
+        .map(|obj| {
+            obj.iter()
+                .filter(|(k, _)| k.as_str() != "command" && k.as_str() != "description")
+                .map(|(k, v)| (escape_hidden(k).0, escape_hidden(&v.to_string()).0))
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `tool_input` dạng chuỗi cho thẻ duyệt, và có cắt trường nội dung nào không.
@@ -264,6 +289,45 @@ mod tests {
             deadline_at: datetime!(2026-10-22 09:01:50 UTC),
             countdown: None,
         }
+    }
+
+    #[test]
+    fn bash_options_shown_separately_from_command() {
+        // Audit T5b finding 2: trường đổi cách chạy lệnh phải hiện trên thẻ, không chỉ `command`.
+        let input = json!({
+            "command": "ls", "description": "liệt kê",
+            "dangerouslyDisableSandbox": true, "run_in_background": true, "timeout": 600000,
+            "x\u{200B}": "a\u{202E}b",
+        });
+        let v = approval_view(&pending("Bash", input.clone()), "K");
+        assert_eq!(v.command_normalized, "ls");
+        assert_eq!(
+            v.tool_options,
+            BTreeMap::from([
+                ("dangerouslyDisableSandbox".to_owned(), "true".to_owned()),
+                ("run_in_background".to_owned(), "true".to_owned()),
+                ("timeout".to_owned(), "600000".to_owned()),
+                ("x⟨U+200B⟩".to_owned(), "\"a⟨U+202E⟩b\"".to_owned()),
+            ])
+        );
+        assert_eq!(v.suspicions, vec![Suspicion::HiddenChars]);
+        let h = handoff_view(
+            "hof_1",
+            &pending("Bash", input),
+            "K",
+            "ls",
+            datetime!(2026-10-22 09:00:00 UTC),
+        );
+        assert_eq!(h.tool_options.len(), 4);
+        // Chỉ `command` + `description`: không có tùy chọn; tool khác: rỗng (JSON đầy đủ đã hiện).
+        assert!(approval_view(
+            &pending("Bash", json!({ "command": "ls", "description": "d" })),
+            "K"
+        )
+        .tool_options
+        .is_empty());
+        assert!(tool_options("mcp__x", &json!({ "a": 1 })).is_empty());
+        assert!(tool_options("Bash", &json!({ "command": 5, "timeout": 1 })).is_empty());
     }
 
     #[test]

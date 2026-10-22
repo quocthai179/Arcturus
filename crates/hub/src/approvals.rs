@@ -195,6 +195,8 @@ pub enum HeldReason {
     Paused,
     /// Đếm ngược chỉ được allow.
     CountdownCannotDeny,
+    /// Allow thẻ đã cắt nội dung khi chưa mở bản đầy đủ.
+    NotReviewed,
 }
 
 /// Kết quả `Decide`. T5 đổi `Expired` thành `Feed` "Yêu cầu đã hết hạn", `Held` thành "Cần trưởng nhóm bấm duyệt".
@@ -296,6 +298,8 @@ struct Entry {
     view: ApprovalView,
     started: Instant,
     reply: oneshot::Sender<Decided>,
+    /// Bản đầy đủ đã được mở qua `GET /approvals/{id}/input` (bắt buộc trước khi allow thẻ `truncated`).
+    reviewed: bool,
 }
 
 #[derive(Default)]
@@ -367,12 +371,20 @@ impl Approvals {
         self.lock().entries.get(request_id).map(|e| e.info.clone())
     }
 
-    /// `tool_input` đầy đủ của yêu cầu đang chờ (`GET /approvals/{id}/input`, T5b).
+    /// `tool_input` đầy đủ của yêu cầu đang chờ (chỉ đọc).
     pub fn tool_input(&self, request_id: &str) -> Option<Value> {
         self.lock()
             .entries
             .get(request_id)
             .map(|e| e.info.tool_input.clone())
+    }
+
+    /// `GET /approvals/{id}/input`: trả `tool_input` đầy đủ và đánh dấu đã mở bản đầy đủ (mở khóa allow cho thẻ đã cắt).
+    pub fn tool_input_for_review(&self, request_id: &str) -> Option<Value> {
+        let mut inner = self.lock();
+        let e = inner.entries.get_mut(request_id)?;
+        e.reviewed = true;
+        Some(e.info.tool_input.clone())
     }
 
     pub fn is_paused(&self) -> bool {
@@ -504,6 +516,7 @@ impl Approvals {
                     info,
                     view,
                     started: Instant::now(),
+                    reviewed: false,
                     reply,
                 },
             );
@@ -710,6 +723,14 @@ impl Approvals {
                     );
                     return DecideResult::Held(reason);
                 }
+            }
+            // Thẻ đã cắt nội dung: chỉ cho allow sau khi bản đầy đủ đã được mở (audit T5b finding 3, bất biến 3).
+            if decision == Decision::Allow && e.view.truncated && !e.reviewed {
+                tracing::info!(
+                    request_id,
+                    "giữ nguyên yêu cầu: allow thẻ đã cắt khi chưa mở bản đầy đủ"
+                );
+                return DecideResult::Held(HeldReason::NotReviewed);
             }
             match inner.entries.remove(request_id) {
                 Some(e) => e,

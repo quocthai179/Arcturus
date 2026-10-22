@@ -27,18 +27,35 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 
-use crate::approvals::DecideResult;
+use crate::approvals::{DecideResult, HeldReason};
 use crate::auth;
 use crate::hub::Hub;
 
-/// Origin được phép mở WebSocket: webview Tauri (Windows / macOS, Linux) và Vite dev server của `ui/`.
-pub const ALLOWED_ORIGINS: [&str; 5] = [
+/// Origin được phép mở WebSocket: webview Tauri (Windows / macOS, Linux).
+pub const ALLOWED_ORIGINS: [&str; 3] = [
     "http://tauri.localhost",
     "https://tauri.localhost",
     "tauri://localhost",
-    "http://127.0.0.1:5173",
-    "http://localhost:5173",
 ];
+
+/// Vite dev server của `ui/` (`pnpm -C ui dev`): chỉ nhận ở bản debug của hub. Cổng 5173 là mặc định của mọi dự án
+/// Vite, nên bản release không tin origin này (audit T5b finding 8).
+pub const DEV_ORIGINS: [&str; 2] = ["http://127.0.0.1:5173", "http://localhost:5173"];
+
+/// Tối đa kết nối WebSocket cùng lúc (audit T5b finding 5).
+pub const MAX_CLIENTS: usize = 8;
+
+fn origin_allowed(origin: &str) -> bool {
+    let dev: &[&str] = if cfg!(debug_assertions) {
+        &DEV_ORIGINS
+    } else {
+        &[]
+    };
+    ALLOWED_ORIGINS
+        .iter()
+        .chain(dev)
+        .any(|ok| origin.eq_ignore_ascii_case(ok))
+}
 
 /// Kích thước tối đa một thông điệp từ client.
 pub const MAX_CLIENT_MESSAGE_BYTES: usize = 64 * 1024;
@@ -163,9 +180,7 @@ async fn require_local_origin(
         });
     let origin_ok = match req.headers().get(header::ORIGIN) {
         None => true,
-        Some(o) => o
-            .to_str()
-            .is_ok_and(|o| ALLOWED_ORIGINS.iter().any(|ok| o.eq_ignore_ascii_case(ok))),
+        Some(o) => o.to_str().is_ok_and(origin_allowed),
     };
     if host_ok && origin_ok {
         next.run(req).await
@@ -204,6 +219,10 @@ async fn ws_upgrade(State(st): State<Arc<WsState>>, ws: WebSocketUpgrade) -> Res
     if *st.shutdown.borrow() {
         return StatusCode::SERVICE_UNAVAILABLE.into_response();
     }
+    if st.clients.load(Ordering::SeqCst) >= MAX_CLIENTS {
+        tracing::warn!(max = MAX_CLIENTS, "từ chối client UI: đã đủ số kết nối");
+        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+    }
     ws.max_message_size(MAX_CLIENT_MESSAGE_BYTES)
         .max_frame_size(MAX_CLIENT_MESSAGE_BYTES)
         .on_upgrade(move |socket| client(st, socket))
@@ -214,7 +233,7 @@ async fn approval_input(
     State(st): State<Arc<WsState>>,
     Path(request_id): Path<String>,
 ) -> Response {
-    match st.hub.approvals.tool_input(&request_id) {
+    match st.hub.approvals.tool_input_for_review(&request_id) {
         Some(v) => (
             StatusCode::OK,
             [
@@ -440,11 +459,20 @@ fn handle(st: &WsState, conn: u64, raw: &str, limiter: &mut Limiter) -> Vec<Mess
                     Vec::new()
                 }
                 DecideResult::Expired => vec![feed("Yêu cầu đã hết hạn")],
+                DecideResult::Held(HeldReason::NotReviewed) => {
+                    vec![feed("Cần mở bản đầy đủ trước khi duyệt")]
+                }
                 DecideResult::Held(_) => vec![feed("Cần trưởng nhóm bấm duyệt")],
                 DecideResult::HandedOff => {
                     vec![feed("Yêu cầu này đang được duyệt trong terminal")]
                 }
             }
+        }
+        // Lệnh đội chung giới hạn với Decide: mỗi lệnh broadcast tới mọi client (audit T5b finding 5).
+        ClientMsg::TeamPause | ClientMsg::TeamResume | ClientMsg::FocusSet { .. }
+            if !limiter.allow() =>
+        {
+            vec![feed("Quá nhiều lệnh, hãy thử lại sau")]
         }
         ClientMsg::TeamPause => {
             st.hub.set_paused(true);
