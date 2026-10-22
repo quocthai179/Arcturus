@@ -100,7 +100,8 @@ trường nào có nhiều giá trị thì liệt kê các giá trị hợp lệ
   "host": "laptop",
   "source": "claude-code",
   "session_id": "abc123",
-  "agent": { "id": "agt_abc123", "parent_id": null, "kind": "session | subagent | teammate" },
+  "cwd": "D:\\code\\Arcturus",
+  "agent": { "id": "agt_abc123", "parent_id": null, "kind": "session | subagent | teammate", "agent_type": "general-purpose" },
   "type": "session.started | prompt.submitted | tool.pre | tool.post | tool.failed | approval.requested | approval.resolved | subagent.started | subagent.stopped | notification | turn.stopped | turn.failed | session.ended | unknown",
   "activity": "typing | reading | running | thinking | waiting | idle",
   "tool": { "name": "Bash", "summary": "npm test", "risk": "low | medium | high | critical" },
@@ -110,6 +111,8 @@ trường nào có nhiều giá trị thì liệt kê các giá trị hợp lệ
 ```
 
 - `activity`, `tool`, `approval`, `metrics` có thể là `null`; `tool.risk` chỉ policy được điền.
+- `cwd`, `agent.agent_type` (thêm ở T4, không tăng `v`): có thể là `null`; JSON cũ thiếu hai trường này vẫn đọc được.
+  `agent_type` chỉ có ở subagent.
 - `type: "unknown"`: sự kiện hook lạ được giữ lại, không bao giờ làm hub trả lỗi.
 - Tên, vai trò, bảng màu không nằm trong Event: hub gắn persona khi dựng `AgentView` (`docs/PLAN.md` §3.4).
 - JSON hook gốc lưu ở cột `events.raw_json`, tra theo `id` của Event (Event không có trường trỏ riêng).

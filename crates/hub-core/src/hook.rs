@@ -93,8 +93,9 @@ pub fn to_event(input: &HookInput, host: &str, now: OffsetDateTime) -> Event {
         ts: now,
         host: host.to_owned(),
         source: Source::ClaudeCode,
-        agent: agent_ref(&session_id, input.agent_id()),
+        agent: agent_ref(&session_id, input.agent_id(), input.agent_type()),
         session_id,
+        cwd: input.cwd().filter(|c| !c.is_empty()).map(str::to_owned),
         kind,
         activity,
         tool,
@@ -104,18 +105,20 @@ pub fn to_event(input: &HookInput, host: &str, now: OffsetDateTime) -> Event {
 }
 
 /// Agent con khi có `agent_id`: `agt_<session>_<agent_id>`, cha là `agt_<session>`.
-fn agent_ref(session_id: &str, agent_id: Option<&str>) -> AgentRef {
+fn agent_ref(session_id: &str, agent_id: Option<&str>, agent_type: Option<&str>) -> AgentRef {
     let parent = format!("agt_{session_id}");
     match agent_id {
         Some(a) => AgentRef {
             id: format!("{parent}_{a}"),
             parent_id: Some(parent),
             kind: AgentKind::Subagent,
+            agent_type: agent_type.map(str::to_owned),
         },
         None => AgentRef {
             id: parent,
             parent_id: None,
             kind: AgentKind::Session,
+            agent_type: None,
         },
     }
 }

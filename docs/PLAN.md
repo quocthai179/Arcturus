@@ -119,6 +119,8 @@ pub struct Event {
     pub host: String,               // hostname
     pub source: Source,             // ClaudeCode (v0)
     pub session_id: String,
+    #[serde(default)]
+    pub cwd: Option<String>,        // `cwd` của hook (T4: persona, AgentView.cwd); thiếu → None, không tăng v
     pub agent: AgentRef,
     #[serde(rename = "type")]
     pub kind: EventKind,
@@ -134,7 +136,11 @@ pub struct Event {
 pub enum Source { ClaudeCode }
 
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
-pub struct AgentRef { pub id: AgentId, pub parent_id: Option<AgentId>, pub kind: AgentKind }
+pub struct AgentRef {
+    pub id: AgentId, pub parent_id: Option<AgentId>, pub kind: AgentKind,
+    #[serde(default)]
+    pub agent_type: Option<String>, // subagent: "general-purpose"… (Q4), vai trò nhân vật (T4); thiếu → None
+}
 
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -622,6 +628,28 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - `persona_matches_windows_backslash_path`, `persona_matches_subdirectory_of_worktree`
 - `palette_hash_is_deterministic`
 - `invalid_config_fails_with_line_number`
+
+**Đã làm ở T4 (lệch so với trên, đã duyệt kế hoạch)**
+- §3.1: thêm `Event.cwd` và `AgentRef.agent_type` (cả hai `Option`, `#[serde(default)]`, không tăng `v`): `apply` cần
+  `cwd` để khớp persona và hiển thị, subagent dùng `agent_type` làm vai trò. 11 snapshot T2 cập nhật (chỉ thêm 2 trường).
+- `protocol.rs` tạo ở T4 với phần T4 cần: `ServerMsg::{AgentUpdated, AgentRemoved}`, `AgentView`, `Palette` đúng §3.4.
+  T5 thêm các biến thể còn lại, `ClientMsg`, `ApprovalView`, `TeamView`.
+- `act_text` ngoài bảng §3.6: SessionStart và sau `done` → "Đang rảnh"; UserPromptSubmit, PostToolUse, SubagentStart →
+  "Đang suy nghĩ"; PermissionRequest → "Chờ duyệt: <tool>"; Stop → "Xong"; PostToolUseFailure, StopFailure → "Gặp lỗi"
+  (giữ activity). Ký tự điều khiển trong `act_text` đổi thành khoảng trắng. Read → tên file; Grep/Glob/LS → pattern
+  (≤60 ký tự); LS không có trường tóm tắt → "Đang đọc thư mục".
+- Chỉ gửi `AgentUpdated` khi có thay đổi nhìn thấy được; `last_event_at` vẫn cập nhật. `TeamState::next_wakeup()` cho
+  hub biết lúc cần gọi `tick` (không timer khi không có agent `done`). Notification/Unknown không xóa mood error, không
+  hủy đếm `done`.
+- Agent tạo từ sự kiện đầu tiên của phiên lạ (F1); sự kiện có `agent_id` lạ tạo con, và tạo cả cha (trạng thái
+  "Đang giao việc cho trợ lý") nếu chưa có.
+- Persona: subagent không lấy persona (tránh trùng tên cha), nhận tên sao riêng, vai trò `agent_type` (thiếu → "trợ lý"),
+  màu theo hash `agent.id`. Phiên không khớp: vai trò "thành viên". Tên sao nhả lại khi agent bị xóa.
+- `config.rs`: khóa lạ là lỗi (có số dòng); `approval_timeout_secs` 1–115 (khớp `--approval-timeout` T3); `bind` phải
+  loopback; màu persona chỉ nhận `#RRGGBB` (được chèn vào SVG); glob hỏng báo `persona[i].match_cwd`.
+- Chưa nối vào `crates/hub` (đợi PR T3 merge): gọi `state.apply` trong vòng sự kiện và bước 3 của `/hooks/permission`,
+  thay `--approval-timeout` bằng `Config.hub.approval_timeout_secs`, hẹn `tick` theo `next_wakeup`, đồng bộ
+  `TeamState.paused` với `Approvals::set_paused` (T5).
 
 ### T5 · ARC-26 · WebSocket
 
