@@ -475,6 +475,7 @@ reconcile_interval_secs = 30
 event_ttl_days = 30
 handoff_max_bytes = 4096       # lệnh dài hơn (byte UTF-8) hoặc nhiều dòng hơn: trả về terminal (§3.4, T5b); 1–1048576
 handoff_max_lines = 50
+held_input_max_bytes = 8388608 # tổng byte tool_input đang giữ; vượt thì yêu cầu mới nhận {} (T5c · ARC-43); 65536–268435456
 
 [team]
 main_roster_max = 5

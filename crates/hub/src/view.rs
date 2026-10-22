@@ -68,6 +68,29 @@ pub fn untruncated_text(tool: &str, tool_input: &Value) -> Option<String> {
     }
 }
 
+/// Edit/Write/MultiEdit/NotebookEdit: JSON của `tool_input` đã BỎ các trường nội dung (đường dẫn, cờ, khóa phụ). Phần
+/// này không bị cắt trên thẻ, nên nếu quá dài thì cả yêu cầu phải trả về terminal (audit ARC-43 finding 3, bất biến 3).
+/// Tool khác: `None`.
+pub fn non_content_text(tool: &str, tool_input: &Value) -> Option<String> {
+    if !TRUNCATED_TOOLS.contains(&tool) {
+        return None;
+    }
+    let mut v = tool_input.clone();
+    if let Some(obj) = v.as_object_mut() {
+        for key in CONTENT_FIELDS {
+            obj.remove(key);
+        }
+        if let Some(Value::Array(edits)) = obj.get_mut("edits") {
+            for edit in edits.iter_mut().filter_map(Value::as_object_mut) {
+                for key in CONTENT_FIELDS {
+                    edit.remove(key);
+                }
+            }
+        }
+    }
+    Some(serde_json::to_string_pretty(&v).unwrap_or_else(|_| v.to_string()))
+}
+
 /// Quá `max_bytes` byte UTF-8 hoặc quá `max_lines` dòng.
 pub fn is_too_long(text: &str, max_bytes: usize, max_lines: usize) -> bool {
     text.len() > max_bytes || text.lines().count() > max_lines

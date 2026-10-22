@@ -23,7 +23,7 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, oneshot};
 use tokio::time::Instant;
 
-use crate::view::{approval_view, handoff_view, is_too_long, untruncated_text};
+use crate::view::{approval_view, handoff_view, is_too_long, non_content_text, untruncated_text};
 
 /// Hub tự trả `{}` sau chừng này, trước timeout 120 s của hook (`hooks/arcturus-dogfood.json`).
 pub const DEFAULT_APPROVAL_TIMEOUT: Duration = Duration::from_secs(110);
@@ -34,6 +34,16 @@ pub const DEFAULT_STORE_ACK_TIMEOUT: Duration = Duration::from_secs(1);
 /// Giới hạn yêu cầu đang giữ: toàn hub và mỗi phiên (audit T3, finding 2).
 pub const DEFAULT_MAX_PENDING: usize = 64;
 pub const DEFAULT_MAX_PENDING_PER_SESSION: usize = 16;
+
+/// Trần tổng byte `tool_input` đang giữ (T5c · ARC-43, quy tắc bất biến 6): 64 Write ~1 MB từng đẩy hub lên 93 MB.
+/// Khớp `Config::default()`.
+pub const DEFAULT_HELD_INPUT_MAX_BYTES: usize = 8 * 1024 * 1024;
+
+/// Độ dài tối đa (byte) của các trường do agent gửi được sao chép vào hàng đợi, thẻ duyệt và trạng thái (audit ARC-43
+/// finding 1). Vượt thì trả `{}`: Claude Code hỏi trong terminal.
+pub const MAX_TOOL_NAME_BYTES: usize = 256;
+pub const MAX_ID_BYTES: usize = 256;
+pub const MAX_CWD_BYTES: usize = 32 * 1024;
 
 /// Ngưỡng mặc định "quá dài để duyệt trên thẻ" (khớp `Config::default()`).
 pub const DEFAULT_HANDOFF_MAX_BYTES: usize = 4096;
@@ -265,6 +275,8 @@ pub struct ApprovalsConfig {
     /// Tối đa yêu cầu đang giữ (giữ RAM trong ngân sách, quy tắc bất biến 6). Vượt thì trả `{}` ngay.
     pub max_pending: usize,
     pub max_pending_per_session: usize,
+    /// Trần tổng byte `tool_input` đang giữ (ước lượng bằng [`held_size`]). Vượt thì trả `{}` ngay.
+    pub held_input_max_bytes: usize,
     /// Ngưỡng trả về terminal (`[hub] handoff_max_bytes`, `handoff_max_lines`).
     pub handoff_max_bytes: usize,
     pub handoff_max_lines: usize,
@@ -277,6 +289,7 @@ impl Default for ApprovalsConfig {
             store_ack_timeout: DEFAULT_STORE_ACK_TIMEOUT,
             max_pending: DEFAULT_MAX_PENDING,
             max_pending_per_session: DEFAULT_MAX_PENDING_PER_SESSION,
+            held_input_max_bytes: DEFAULT_HELD_INPUT_MAX_BYTES,
             handoff_max_bytes: DEFAULT_HANDOFF_MAX_BYTES,
             handoff_max_lines: DEFAULT_HANDOFF_MAX_LINES,
         }
@@ -300,15 +313,120 @@ struct Entry {
     reply: oneshot::Sender<Decided>,
     /// Bản đầy đủ đã được mở qua `GET /approvals/{id}/input` (bắt buộc trước khi allow thẻ `truncated`).
     reviewed: bool,
+    /// Phần của entry này trong [`Inner::held_bytes`].
+    held_bytes: usize,
 }
 
 #[derive(Default)]
 struct Inner {
+    /// Chỉ thêm/bớt qua [`Inner::insert_entry`], [`Inner::remove_entry`], [`Inner::drain_entries`] để `held_bytes`
+    /// không bao giờ lệch.
     entries: HashMap<RequestId, Entry>,
+    /// Tổng [`Entry::held_bytes`] của mọi entry đang giữ.
+    held_bytes: usize,
+    /// Byte đã đặt chỗ cho body `/hooks/permission` đang nhận ([`Approvals::reserve_body`]).
+    inflight_bytes: usize,
     /// Cũ trước; tối đa [`MAX_HANDOFFS`], đầy thì bỏ thẻ cũ nhất.
     handoffs: VecDeque<Handoff>,
     paused: bool,
     closed: bool,
+}
+
+impl Inner {
+    fn insert_entry(&mut self, id: RequestId, entry: Entry) {
+        self.held_bytes += entry.held_bytes;
+        if let Some(old) = self.entries.insert(id, entry) {
+            // Không xảy ra (id là ULID mới); vẫn giữ bộ đếm đúng.
+            self.held_bytes = self.held_bytes.saturating_sub(old.held_bytes);
+        }
+    }
+
+    fn remove_entry(&mut self, id: &str) -> Option<Entry> {
+        let e = self.entries.remove(id)?;
+        self.held_bytes = self.held_bytes.saturating_sub(e.held_bytes);
+        Some(e)
+    }
+
+    fn drain_entries(&mut self) -> Vec<Entry> {
+        self.held_bytes = 0;
+        self.entries.drain().map(|(_, e)| e).collect()
+    }
+}
+
+/// Chỗ đặt cho một body `/hooks/permission` đang nhận và parse: trả lại khi drop.
+pub struct BodyReservation<'a> {
+    approvals: &'a Approvals,
+    bytes: usize,
+}
+
+impl BodyReservation<'_> {
+    /// Nới chỗ đặt lên `bytes` (ví dụ ước lượng sau khi đếm nút JSON). `false`: không còn chỗ, chỗ cũ giữ nguyên.
+    pub fn grow_to(&mut self, bytes: usize) -> bool {
+        if bytes <= self.bytes {
+            return true;
+        }
+        let mut inner = self.approvals.lock();
+        let extra = bytes - self.bytes;
+        let used = inner.held_bytes.saturating_add(inner.inflight_bytes);
+        if used.saturating_add(extra) > self.approvals.cfg.held_input_max_bytes {
+            return false;
+        }
+        inner.inflight_bytes += extra;
+        self.bytes = bytes;
+        true
+    }
+}
+
+impl Drop for BodyReservation<'_> {
+    fn drop(&mut self) {
+        let mut inner = self.approvals.lock();
+        inner.inflight_bytes = inner.inflight_bytes.saturating_sub(self.bytes);
+    }
+}
+
+/// Phần đầu ước lượng của mỗi lần cấp phát trên heap (bộ cấp phát của hệ điều hành).
+const ALLOC_OVERHEAD: usize = 16;
+/// Ước lượng cho mỗi phần tử `BTreeMap` (nút B-tree chia đều cho phần tử).
+const MAP_ENTRY_OVERHEAD: usize = 100;
+
+/// Ước lượng byte RAM một giá trị JSON đã parse chiếm: theo `capacity` của chuỗi và mảng (không chỉ `len`), cộng phần
+/// đầu mỗi lần cấp phát và mỗi phần tử object (audit ARC-43 finding 3). Không serialize lại (đầu vào có thể tới 1 MB).
+pub fn held_size(v: &Value) -> usize {
+    let node = std::mem::size_of::<Value>();
+    match v {
+        Value::Null | Value::Bool(_) | Value::Number(_) => node,
+        Value::String(s) => node + s.capacity() + ALLOC_OVERHEAD,
+        Value::Array(items) => {
+            node + ALLOC_OVERHEAD
+                + (items.capacity() - items.len()) * node
+                + items.iter().map(held_size).sum::<usize>()
+        }
+        Value::Object(map) => {
+            node + map
+                .iter()
+                .map(|(k, v)| MAP_ENTRY_OVERHEAD + k.capacity() + ALLOC_OVERHEAD + held_size(v))
+                .sum::<usize>()
+        }
+    }
+}
+
+/// Byte RAM của thẻ duyệt giữ cùng entry (thẻ có thể lớn hơn `tool_input`: ký tự ẩn hiện thành `⟨U+XXXX⟩` dài gấp 4).
+fn view_size(v: &ApprovalView) -> usize {
+    let s = |x: &String| x.capacity() + ALLOC_OVERHEAD;
+    std::mem::size_of::<ApprovalView>()
+        + s(&v.request_id)
+        + s(&v.agent_id)
+        + s(&v.agent_name)
+        + s(&v.tool)
+        + s(&v.command_original)
+        + s(&v.command_normalized)
+        + s(&v.group_key)
+        + v.tool_options
+            .iter()
+            .map(|(k, x)| MAP_ENTRY_OVERHEAD + s(k) + s(x))
+            .sum::<usize>()
+        + v.danger_spans.capacity() * std::mem::size_of::<(usize, usize)>()
+        + v.suspicions.capacity() * 8
 }
 
 /// Hàng đợi yêu cầu duyệt (`Hub::pending` trong §4).
@@ -367,6 +485,32 @@ impl Approvals {
         out
     }
 
+    /// Tổng byte `tool_input` đang giữ (ước lượng, xem [`held_size`]).
+    pub fn held_bytes(&self) -> usize {
+        self.lock().held_bytes
+    }
+
+    /// Đặt chỗ `declared` byte (thường là `Content-Length`) cho một body `/hooks/permission` TRƯỚC khi đọc nó, trong
+    /// cùng ngân sách [`ApprovalsConfig::held_input_max_bytes`] với các yêu cầu đang giữ. `None`: không còn chỗ, handler
+    /// trả `{}` ngay mà không đọc body (nhiều body ~1 MB về cùng lúc từng đẩy RSS lên ~50 MB, đo ở T5c).
+    pub fn reserve_body(&self, declared: usize) -> Option<BodyReservation<'_>> {
+        let mut inner = self.lock();
+        let used = inner.held_bytes.saturating_add(inner.inflight_bytes);
+        if used.saturating_add(declared) > self.cfg.held_input_max_bytes {
+            return None;
+        }
+        inner.inflight_bytes += declared;
+        Some(BodyReservation {
+            approvals: self,
+            bytes: declared,
+        })
+    }
+
+    /// Tổng byte đang đặt chỗ cho body đang nhận.
+    pub fn inflight_body_bytes(&self) -> usize {
+        self.lock().inflight_bytes
+    }
+
     pub fn pending(&self, request_id: &str) -> Option<PendingApproval> {
         self.lock().entries.get(request_id).map(|e| e.info.clone())
     }
@@ -418,6 +562,42 @@ impl Approvals {
             );
             return PermissionOutcome::NotPermissionRequest;
         }
+        // Trường do agent gửi được sao chép nhiều lần (sự kiện, hàng đợi, thẻ, trạng thái): chặn độ dài trước mọi thứ
+        // khác (audit ARC-43 finding 1). Quá dài thì `{}`, không bao giờ allow.
+        let too_long = [
+            (
+                "tool_name",
+                input.tool_name().map_or(0, str::len),
+                MAX_TOOL_NAME_BYTES,
+            ),
+            (
+                "session_id",
+                input.session_id().map_or(0, str::len),
+                MAX_ID_BYTES,
+            ),
+            (
+                "agent_id",
+                input.agent_id().map_or(0, str::len),
+                MAX_ID_BYTES,
+            ),
+            (
+                "agent_type",
+                input.agent_type().map_or(0, str::len),
+                MAX_ID_BYTES,
+            ),
+            ("cwd", input.cwd().map_or(0, str::len), MAX_CWD_BYTES),
+        ]
+        .into_iter()
+        .find(|(_, len, max)| len > max);
+        if let Some((field, len, max)) = too_long {
+            tracing::warn!(
+                field,
+                len,
+                max,
+                "trường hook quá dài, trả {{}} để Claude Code hỏi trong terminal"
+            );
+            return PermissionOutcome::Overloaded;
+        }
         let tool = input.tool_name().unwrap_or("").to_owned();
         let cwd = input.cwd().unwrap_or("").to_owned();
         let mut raw = input.raw;
@@ -437,6 +617,26 @@ impl Approvals {
             ) {
                 return self.hand_off(ev, tool, tool_input, cwd, &text, agent_name);
             }
+        }
+        // Edit/Write/…: nội dung được cắt trên thẻ, nhưng đường dẫn và khóa phụ thì không; phần đó quá dài cũng trả về
+        // terminal (audit ARC-43 finding 3).
+        if let Some(text) = non_content_text(&tool, &tool_input) {
+            if is_too_long(
+                &text,
+                self.cfg.handoff_max_bytes,
+                self.cfg.handoff_max_lines,
+            ) {
+                return self.hand_off(ev, tool, tool_input, cwd, &text, agent_name);
+            }
+        }
+
+        // Kiểm rẻ trước khi dựng thẻ (dựng thẻ tốn bộ nhớ gấp nhiều lần `tool_input`, audit ARC-43 finding 2): hàng đợi
+        // đầy hay hết ngân sách byte thì `{}` ngay. Kiểm lại chính xác (gồm thẻ) khi chèn.
+        let input_bytes = held_size(&tool_input)
+            + 3 * (tool.capacity() + ev.session_id.len() + ev.agent.id.len())
+            + cwd.capacity();
+        if let Some(early) = self.admission_precheck(&ev.session_id, input_bytes) {
+            return early;
         }
 
         let outcome = self.policy.decide(&ApprovalCtx {
@@ -477,6 +677,7 @@ impl Approvals {
         };
         // Dựng thẻ (cắt, escape) ngoài khóa.
         let mut view = approval_view(&info, agent_name);
+        let held_bytes = input_bytes + view_size(&view);
         let rec = self.record_of(&info, ApprovalStatus::Pending, None);
         {
             let mut inner = self.lock();
@@ -498,6 +699,16 @@ impl Approvals {
                 );
                 return PermissionOutcome::Overloaded;
             }
+            if inner.held_bytes.saturating_add(held_bytes) > self.cfg.held_input_max_bytes {
+                tracing::warn!(
+                    session = ?ev.session_id,
+                    held = inner.held_bytes,
+                    request = held_bytes,
+                    max = self.cfg.held_input_max_bytes,
+                    "hàng đợi duyệt đầy bộ nhớ, trả {{}} để Claude Code hỏi trong terminal"
+                );
+                return PermissionOutcome::Overloaded;
+            }
             if inner.paused {
                 info.countdown = None;
                 view.countdown_ms = None;
@@ -510,7 +721,7 @@ impl Approvals {
             let _ = self.tx.send(ServerMsg::ApprovalRequested {
                 approval: view.clone(),
             });
-            inner.entries.insert(
+            inner.insert_entry(
                 request_id.clone(),
                 Entry {
                     info,
@@ -518,6 +729,7 @@ impl Approvals {
                     started: Instant::now(),
                     reviewed: false,
                     reply,
+                    held_bytes,
                 },
             );
         }
@@ -551,6 +763,34 @@ impl Approvals {
     }
 
     /// Trả lệnh quá dài về terminal: không giữ yêu cầu, ghi `handed_off`, broadcast thẻ báo (không có nút duyệt).
+    /// Kiểm hàng đợi trước khi dựng thẻ: đóng, đầy theo số lượng (toàn hub, mỗi phiên), hoặc `bytes` làm tổng vượt ngân
+    /// sách. `None`: được đi tiếp (kiểm lại chính xác khi chèn).
+    fn admission_precheck(&self, session_id: &str, bytes: usize) -> Option<PermissionOutcome> {
+        let inner = self.lock();
+        if inner.closed {
+            return Some(PermissionOutcome::Cancelled);
+        }
+        let full = inner.entries.len() >= self.cfg.max_pending
+            || inner
+                .entries
+                .values()
+                .filter(|e| e.info.session_id == session_id)
+                .count()
+                >= self.cfg.max_pending_per_session;
+        let used = inner.held_bytes.saturating_add(inner.inflight_bytes);
+        if full || used.saturating_add(bytes) > self.cfg.held_input_max_bytes {
+            tracing::warn!(
+                session = ?session_id,
+                pending = inner.entries.len(),
+                held = inner.held_bytes,
+                request = bytes,
+                "hàng đợi duyệt đầy, trả {{}} để Claude Code hỏi trong terminal"
+            );
+            return Some(PermissionOutcome::Overloaded);
+        }
+        None
+    }
+
     fn hand_off(
         &self,
         ev: &Event,
@@ -732,7 +972,7 @@ impl Approvals {
                 );
                 return DecideResult::Held(HeldReason::NotReviewed);
             }
-            match inner.entries.remove(request_id) {
+            match inner.remove_entry(request_id) {
                 Some(e) => e,
                 None => return DecideResult::Expired,
             }
@@ -834,7 +1074,7 @@ impl Approvals {
         let drained: Vec<Entry> = {
             let mut inner = self.lock();
             inner.closed = true;
-            inner.entries.drain().map(|(_, e)| e).collect()
+            inner.drain_entries()
         };
         let n = drained.len();
         for entry in drained {
@@ -855,9 +1095,7 @@ impl Approvals {
                 .filter(|(_, e)| pred(&e.info))
                 .map(|(id, _)| id.clone())
                 .collect();
-            ids.iter()
-                .filter_map(|id| inner.entries.remove(id))
-                .collect()
+            ids.iter().filter_map(|id| inner.remove_entry(id)).collect()
         };
         let n = taken.len();
         for entry in taken {
@@ -868,7 +1106,7 @@ impl Approvals {
     }
 
     fn take(&self, request_id: &str) -> Option<Entry> {
-        self.lock().entries.remove(request_id)
+        self.lock().remove_entry(request_id)
     }
 
     /// Ghi trạng thái cuối, báo UI, rồi drop `reply` (handler đang chờ rơi vào nhánh hủy và trả `{}`).

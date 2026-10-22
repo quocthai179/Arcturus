@@ -8,6 +8,7 @@ reconcile_interval_secs = 30
 event_ttl_days = 30
 handoff_max_bytes = 4096        # lệnh dài hơn (byte) hoặc nhiều dòng hơn: không duyệt ở Arcturus, trả về terminal
 handoff_max_lines = 50
+held_input_max_bytes = 8388608  # tổng byte tool_input hub giữ cùng lúc khi chờ duyệt; vượt thì trả về terminal (65536–268435456)
 
 [team]
 main_roster_max = 5             # đội hình chính; agent rảnh còn lại gom vào "phòng hỗ trợ"

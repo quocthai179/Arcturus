@@ -54,6 +54,7 @@ impl Hub {
             timeout: Duration::from_secs(cfg.hub.approval_timeout_secs),
             handoff_max_bytes: cfg.hub.handoff_max_bytes,
             handoff_max_lines: cfg.hub.handoff_max_lines,
+            held_input_max_bytes: cfg.hub.held_input_max_bytes,
             ..ApprovalsConfig::default()
         };
         Self::start_with(
