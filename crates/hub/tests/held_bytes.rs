@@ -111,16 +111,29 @@ fn default_cap_is_8_mib() {
 
 #[tokio::test]
 async fn held_bytes_cap_returns_empty_never_allow() {
-    let (a, mut rx) = approvals_with(cfg(3_000));
+    // Kích thước thật một Write 1.200 byte chiếm khi giữ (gồm thẻ duyệt): đo trên hàng đợi riêng.
+    let per = {
+        let (probe, mut prx) = approvals_with(cfg(DEFAULT_HELD_INPUT_MAX_BYTES));
+        let h = spawn_request(&probe, write_body("p", 0, 1_200));
+        next_requested(&mut prx).await;
+        let per = probe.held_bytes();
+        probe.shutdown();
+        join(h).await;
+        per
+    };
+    assert!(per >= 1_200, "phải tính ít nhất tool_input: {per}");
+    // Đủ cho 2 yêu cầu cỡ đó, không đủ cho 3 (và còn chỗ cho một lệnh Bash nhỏ).
+    let cap = 2 * per + per / 2;
+    let (a, mut rx) = approvals_with(cfg(cap));
 
     let h1 = spawn_request(&a, write_body("s1", 1, 1_200));
     next_requested(&mut rx).await;
     let h2 = spawn_request(&a, write_body("s2", 2, 1_200));
     next_requested(&mut rx).await;
     let held = a.held_bytes();
-    assert!((2_400..=3_000).contains(&held), "đang giữ {held} byte");
+    assert!(held <= cap, "đang giữ {held} > trần {cap}");
 
-    // Yêu cầu thứ ba làm tổng vượt 3.000 byte: trả `{}` ngay, không vào hàng đợi.
+    // Yêu cầu thứ ba làm tổng vượt trần: trả `{}` ngay, không vào hàng đợi.
     let o3 = join(spawn_request(&a, write_body("s3", 3, 1_200))).await;
     assert_overloaded(&o3);
     assert_eq!(a.snapshot().len(), 2);
@@ -130,6 +143,7 @@ async fn held_bytes_cap_returns_empty_never_allow() {
     let h4 = spawn_request(&a, bash_body("s4", "echo nho"));
     next_requested(&mut rx).await;
     assert_eq!(a.snapshot().len(), 3);
+    assert!(a.held_bytes() <= cap);
 
     assert_eq!(a.shutdown(), 3);
     for h in [h1, h2, h4] {
@@ -293,6 +307,99 @@ async fn many_large_writes_stay_under_cap() {
 }
 
 // ============================================================================================================
+// Audit ARC-43: trường ngoài `tool_input`, thẻ lớn hơn đầu vào
+// ============================================================================================================
+
+/// Finding 1: `tool_name`, `session_id`, `agent_id`, `cwd` được sao chép nhiều lần; quá dài thì `{}` dù `tool_input` rỗng.
+#[tokio::test]
+async fn oversized_identity_fields_are_rejected() {
+    let (a, _rx) = approvals_with(ApprovalsConfig::default());
+    let big = "x".repeat(1024 * 1024);
+    let base = || {
+        json!({
+            "hook_event_name": "PermissionRequest",
+            "session_id": "s1",
+            "cwd": "D:\\code\\Arcturus",
+            "tool_name": "Bash",
+            "tool_input": {},
+        })
+    };
+    for (field, value) in [
+        ("tool_name", json!(big)),
+        ("session_id", json!(big)),
+        ("agent_id", json!(big)),
+        ("agent_type", json!(big)),
+        ("cwd", json!(big)),
+    ] {
+        let mut body = base();
+        body[field] = value;
+        let o = join(spawn_request(&a, body)).await;
+        assert_overloaded(&o);
+        assert!(a.snapshot().is_empty(), "{field}");
+        assert_eq!(a.held_bytes(), 0, "{field}");
+    }
+    // Ở ngưỡng thì vẫn nhận.
+    let mut body = base();
+    body["tool_name"] = json!("T".repeat(hub::approvals::MAX_TOOL_NAME_BYTES));
+    let h = spawn_request(&a, body);
+    let deadline = tokio::time::Instant::now() + WAIT;
+    while a.snapshot().is_empty() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "tool_name ở ngưỡng phải được giữ"
+        );
+        tokio::time::sleep(Duration::from_millis(5)).await;
+    }
+    a.shutdown();
+    join(h).await;
+}
+
+/// Finding 3: Write có `file_path` 1 MB toàn ký tự ẩn (thẻ sẽ phình ~5 lần vì `⟨U+200B⟩`): phần ngoài nội dung quá dài,
+/// trả về terminal thay vì giữ.
+#[tokio::test]
+async fn write_with_huge_non_content_fields_hands_off() {
+    let (a, _rx) = approvals_with(ApprovalsConfig::default());
+    let path = "\u{200B}\u{200C}".repeat(170_000);
+    let o = join(spawn_request(
+        &a,
+        json!({
+            "hook_event_name": "PermissionRequest",
+            "session_id": "s1",
+            "cwd": "D:\\code\\Arcturus",
+            "tool_name": "Write",
+            "tool_input": { "file_path": path, "content": "ok" },
+        }),
+    ))
+    .await;
+    assert!(
+        matches!(o, PermissionOutcome::HandedOff { .. }),
+        "phải trả về terminal: {o:?}"
+    );
+    assert!(a.snapshot().is_empty());
+    assert_eq!(a.held_bytes(), 0);
+}
+
+/// Finding 3: thẻ được tính vào phần giữ, nên Write có nội dung chứa ký tự ẩn (thẻ lớn hơn đầu vào) chiếm nhiều hơn
+/// Write cùng cỡ nội dung thường.
+#[tokio::test]
+async fn card_size_is_counted() {
+    let (a, mut rx) = approvals_with(ApprovalsConfig::default());
+    let plain = json!({
+        "hook_event_name": "PermissionRequest", "session_id": "s1", "cwd": "D:\\code\\Arcturus",
+        "tool_name": "Bash", "tool_input": { "command": "a".repeat(3_000) },
+    });
+    let h1 = spawn_request(&a, plain);
+    next_requested(&mut rx).await;
+    let plain_bytes = a.held_bytes();
+    assert!(
+        plain_bytes > 2 * 3_000,
+        "lệnh và thẻ (2 bản lệnh) đều được tính: {plain_bytes}"
+    );
+    a.shutdown();
+    join(h1).await;
+}
+
+// ============================================================================================================
 // Kiểm trước khi đọc body (đỉnh tạm thời khi nhiều body ~1 MB về cùng lúc, đo ở 5e33352: 46–50 MB)
 // ============================================================================================================
 
@@ -416,6 +523,43 @@ mod http {
         );
         core.shutdown();
         assert_eq!(tokio::time::timeout(WAIT, h).await.unwrap().unwrap(), "{}");
+    }
+
+    /// Finding 2: JSON nhiều nút nhỏ phình ~40 lần khi parse; ước lượng trước khi parse vượt ngân sách thì `{}` ngay.
+    #[tokio::test]
+    async fn parse_amplifying_body_rejected_before_parse() {
+        let (addr, core, _rx) = start(DEFAULT_HELD_INPUT_MAX_BYTES).await;
+        let nodes = "[0],".repeat(250_000);
+        let body = format!(
+            r#"{{"hook_event_name":"PermissionRequest","session_id":"s1","tool_name":"Bash","tool_input":{{"x":[{}[0]]}}}}"#,
+            nodes
+        );
+        assert!(body.len() < 1024 * 1024);
+        assert!(hooks::parse_estimate(body.as_bytes()) > DEFAULT_HELD_INPUT_MAX_BYTES);
+        let res = reqwest::Client::new()
+            .post(format!("http://{addr}/hooks/permission"))
+            .header("authorization", format!("Bearer {TOKEN}"))
+            .body(body)
+            .send()
+            .await
+            .unwrap();
+        assert_eq!(res.status().as_u16(), 200);
+        assert_eq!(res.text().await.unwrap(), "{}");
+        assert!(core.approvals.snapshot().is_empty());
+        assert_eq!(core.approvals.inflight_body_bytes(), 0);
+        // Bằng chứng KHÔNG parse: nếu body đã được parse, `Hub::permission` đã tạo agent của phiên s1.
+        assert!(
+            core.agent_views().is_empty(),
+            "body phải bị từ chối trước khi parse"
+        );
+    }
+
+    #[test]
+    fn parse_estimate_counts_structure() {
+        let flat = br#"{"command":"echo hi"}"#;
+        assert!(hooks::parse_estimate(flat) >= flat.len());
+        let nested = b"[[0],[0],[0],[0]]";
+        assert!(hooks::parse_estimate(nested) > 8 * std::mem::size_of::<Value>());
     }
 
     #[test]

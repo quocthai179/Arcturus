@@ -43,7 +43,7 @@ async fn hook_permission(State(hub): State<Arc<Hub>>, req: Request) -> Response 
         Some(n) => n,
         None => MAX_BODY_BYTES,
     };
-    let Some(reservation) = hub.approvals.reserve_body(declared) else {
+    let Some(mut reservation) = hub.approvals.reserve_body(declared) else {
         tracing::warn!(
             declared,
             "hàng đợi duyệt đầy bộ nhớ, trả {{}} trước khi đọc body để Claude Code hỏi trong terminal"
@@ -57,6 +57,15 @@ async fn hook_permission(State(hub): State<Arc<Hub>>, req: Request) -> Response 
             return StatusCode::PAYLOAD_TOO_LARGE.into_response();
         }
     };
+    // JSON nhiều nút nhỏ (`[[0],[0],…]`) phình tới ~40 lần khi parse (audit ARC-43 finding 2): ước lượng trước khi parse
+    // và nới chỗ đặt; không đủ thì `{}` ngay.
+    if !reservation.grow_to(parse_estimate(&body)) {
+        tracing::warn!(
+            bytes = body.len(),
+            "JSON sẽ phình quá ngân sách khi parse, trả {{}} để Claude Code hỏi trong terminal"
+        );
+        return overloaded();
+    }
     let input = match HookInput::from_slice(&body) {
         Ok(input) => input,
         Err(err) => return bad_json(err),
@@ -66,6 +75,16 @@ async fn hook_permission(State(hub): State<Arc<Hub>>, req: Request) -> Response 
     drop(reservation);
     let outcome = hub.permission(input).await;
     (StatusCode::OK, Json(response_for(&outcome))).into_response()
+}
+
+/// Ước lượng (dư) bộ nhớ khi parse `body` thành `serde_json::Value`: body + mỗi dấu phân cách cấu trúc (`[`, `{`, `,`,
+/// `:`) có thể là một nút ~32 B cộng phần dư của mảng. Đếm cả dấu nằm trong chuỗi, nên chỉ có thể ước lượng thừa.
+pub fn parse_estimate(body: &[u8]) -> usize {
+    let nodes = body
+        .iter()
+        .filter(|b| matches!(b, b'[' | b'{' | b',' | b':'))
+        .count();
+    body.len() + nodes * 2 * std::mem::size_of::<serde_json::Value>()
 }
 
 fn overloaded() -> Response {
