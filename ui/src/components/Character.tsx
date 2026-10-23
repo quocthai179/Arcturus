@@ -1,9 +1,10 @@
 // Nhân vật SVG có tham số (docs/PLAN.md T11, phụ lục A). Mỗi mood là một nhánh render riêng (không bật/tắt bằng opacity),
 // nên ở mỗi thời điểm DOM chỉ có đúng phần mắt, miệng, phụ kiện của mood hiện tại.
 import { useState } from 'react';
+import type { Mood } from '../protocol';
 import './Character.css';
 
-export type Mood = 'idle' | 'working' | 'approval' | 'error' | 'done';
+export type { Mood };
 
 export interface CharacterProps {
   mood: Mood;

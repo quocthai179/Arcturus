@@ -1,11 +1,27 @@
-/* Token màu từ docs/PLAN.md phụ lục B. */
+/* Token màu và phông theo docs/PLAN.md phụ lục B. Phông đóng gói cục bộ (Fontsource), không tải từ mạng.
+   Lệnh cần duyệt luôn hiện đầy đủ: không ellipsis, không overflow ẩn, xuống dòng ở mọi ký tự (quy tắc bất biến 3). */
 :root {
   --bg: #111318;
   --surface: #1a1d24;
+  --raised: #222631;
+  --border: #2c303b;
   --text: #e8eaf0;
   --muted: #a3a9b8;
+  --approval: #ffb020;
+  --working: #8b7cf6;
+  --allow-bg: #34d1b5;
+  --allow-fg: #06201b;
+  --risk-low-bg: #123a33;
+  --risk-low-fg: #7ee6cf;
+  --risk-medium-bg: #3a2a0e;
+  --risk-medium-fg: #ffd27a;
+  --risk-high-bg: #3a1a16;
+  --risk-high-fg: #ff9f87;
+  --font-ui: 'Be Vietnam Pro', system-ui, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   color-scheme: dark;
-  font-family: system-ui, sans-serif;
+  font-family: var(--font-ui);
+  font-size: 14px;
 }
 
 body {
@@ -14,10 +30,271 @@ body {
   color: var(--text);
 }
 
-.app {
-  padding: 16px;
+.muted {
+  color: var(--muted);
 }
 
-.app p {
+.small {
+  font-size: 12px;
+}
+
+.popup {
+  padding: 12px;
+}
+
+.popup__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.popup__head h1 {
+  font-size: 16px;
+  margin: 0 0 8px;
+}
+
+.banner {
+  margin: 0 0 8px;
+  padding: 6px 10px;
+  border-radius: 8px;
+  background: var(--raised);
+}
+
+.banner--error {
+  background: var(--risk-high-bg);
+  color: var(--risk-high-fg);
+}
+
+.banner--paused {
+  background: var(--risk-medium-bg);
+  color: var(--risk-medium-fg);
+}
+
+.cards {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 10px;
+}
+
+.groups {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-left: 4px solid var(--approval);
+  border-radius: 10px;
+  padding: 10px;
+}
+
+.card--selected {
+  outline: 2px solid var(--working);
+}
+
+.card--handoff {
+  border-left-color: var(--muted);
+}
+
+.card__head {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.card__who {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+
+.card__meta {
+  display: flex;
+  justify-content: space-between;
+  margin: 6px 0;
+}
+
+.tool {
+  font-family: var(--font-mono);
+}
+
+.risk-badge {
+  padding: 2px 8px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.risk-badge--low {
+  background: var(--risk-low-bg);
+  color: var(--risk-low-fg);
+}
+
+.risk-badge--medium {
+  background: var(--risk-medium-bg);
+  color: var(--risk-medium-fg);
+}
+
+.risk-badge--high,
+.risk-badge--critical {
+  background: var(--risk-high-bg);
+  color: var(--risk-high-fg);
+}
+
+.risk-badge--terminal {
+  background: var(--raised);
   color: var(--muted);
+}
+
+.flags {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin: 4px 0;
+  padding: 0;
+}
+
+.flag {
+  background: var(--risk-high-bg);
+  color: var(--risk-high-fg);
+  border-radius: 6px;
+  padding: 1px 6px;
+  font-size: 12px;
+}
+
+.flag::before {
+  content: '⚠ ';
+}
+
+.options {
+  margin: 4px 0;
+  display: grid;
+  gap: 2px;
+}
+
+.option {
+  display: flex;
+  gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 12px;
+  overflow-wrap: anywhere;
+}
+
+.option dt::after {
+  content: ':';
+}
+
+.option dd {
+  margin: 0;
+}
+
+.option--danger {
+  color: var(--risk-high-fg);
+  font-weight: 600;
+}
+
+.command {
+  font-family: var(--font-mono);
+  font-size: 12.5px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 8px;
+  margin: 6px 0;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
+.command mark.danger {
+  background: var(--risk-high-bg);
+  color: var(--risk-high-fg);
+  text-decoration: underline wavy;
+  border-radius: 3px;
+}
+
+.extra {
+  margin: 4px 0;
+}
+
+.error {
+  color: var(--risk-high-fg);
+}
+
+.link {
+  background: none;
+  border: none;
+  color: var(--working);
+  padding: 0;
+  cursor: pointer;
+  font: inherit;
+  text-decoration: underline;
+}
+
+.card__actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  margin-top: 8px;
+}
+
+.btn {
+  font: inherit;
+  border-radius: 8px;
+  padding: 6px 12px;
+  border: 1px solid var(--border);
+  background: var(--raised);
+  color: var(--text);
+  cursor: pointer;
+}
+
+.btn:disabled {
+  opacity: 0.45;
+  cursor: not-allowed;
+}
+
+.btn--allow {
+  background: var(--allow-bg);
+  color: var(--allow-fg);
+  border-color: var(--allow-bg);
+  font-weight: 600;
+}
+
+.btn kbd {
+  font-family: var(--font-mono);
+  font-size: 11px;
+  opacity: 0.7;
+}
+
+.gate-reason {
+  text-align: right;
+  margin: 4px 0 0;
+}
+
+.team {
+  margin-top: 12px;
+  border-top: 1px solid var(--border);
+  padding-top: 8px;
+  display: grid;
+  gap: 4px;
+}
+
+.team__member {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.team__act {
+  overflow-wrap: anywhere;
 }

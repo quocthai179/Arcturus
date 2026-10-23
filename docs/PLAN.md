@@ -1002,6 +1002,39 @@ interface CharacterProps { mood: Mood; width?: number; hair?: string; outfit?: s
 nhóm Critical không có nút duyệt gộp; `hidden_chars` hiện nhãn cảnh báo và "Xem bản gốc" hiện mã `⟨U+…⟩`;
 `truncated` hiện nút "Xem đầy đủ". Đo tay: popup mở ≤300 ms, RSS app sau khi đóng ≤60 MB (ghi vào BUDGET.md).
 
+**Đã làm ở T12** (lệch so với trên, cần người duyệt khi review PR)
+- Hub thêm `--exit-on-stdin-close`: app giữ pipe stdin của hub con; app thoát hay crash thì hub tắt êm như Ctrl-C (trả
+  `{}` cho mọi yêu cầu đang giữ), không mồ côi giữ cổng với token UI không ai biết. Menu "Thoát" cũng tắt hub con. Hub
+  người dùng tự khởi động (đã có trên cổng) thì app chỉ kết nối bằng file token, thoát app không tắt nó.
+- **Lỗi tìm thấy khi chạy thật, đã sửa trong hub**: khi stderr của hub gãy (app đã chết, terminal đã đóng),
+  tracing-subscriber báo lỗi ghi log bằng `eprintln!`, mà `eprintln!` panic, giết task đang ghi log. Thực tế: future tắt
+  hub chết, yêu cầu đang giữ treo tới hết giờ thay vì nhận `{}`. Sửa: `log_internal_errors(false)` (không ghi được thì bỏ
+  dòng log). Test hồi quy `broken_stderr_does_not_block_shutdown`.
+- App: `hub_proc.rs` (tìm hub ở `ARCTURUS_HUB_ADDR`, mặc định `127.0.0.1:7878`, chỉ loopback; binary hub ở
+  `ARCTURUS_HUB_BIN`, cạnh binary app, `target/{debug,release}` khi build debug, rồi `PATH`; token file đổi được bằng
+  `ARCTURUS_UI_TOKEN_FILE`), `link.rs` (WS phía Rust: badge + tạm dừng/tiếp tục đội từ menu), `http.rs` (GET tối giản
+  cho `/healthz` và `/approvals/{id}/input`), `tray.rs`. Lệnh `invoke`: `hub_info`, `approval_input` (kiểm `req_` + chữ
+  số trước khi ghép đường dẫn). Hub con cần `ARCTURUS_TOKEN` trong môi trường của app; thiếu thì tooltip báo dòng lỗi
+  cuối của hub.
+- Linux (appindicator) không báo sự kiện click tray: thêm mục menu "Mở hàng đợi duyệt" (mọi nền tảng). Popup không có
+  vị trí icon thì đặt ở góc trên phải màn hình chính.
+- Badge đếm cả thẻ duyệt và thẻ "duyệt trong terminal" (đều đang chờ người); tooltip ghi riêng hai số.
+- "Duyệt cả N": T9 chưa có `decide_group` ở hub, nên UI gửi từng `decide` (hub vẫn kiểm `allow_gate` cho từng yêu cầu).
+  Nhóm chỉ gồm yêu cầu không Critical (khớp luật T9 "risk ≤ High"); nhóm còn dưới 2 thì không có nút. Nút chỉ bật khi
+  mọi yêu cầu trong nhóm đã qua sàn thời gian và (nếu cắt) đã mở bản đầy đủ.
+- Sàn thời gian ở UI dùng hằng 1.000 ms (mặc định `min_review_ms` của hub): giao thức chưa gửi giá trị cấu hình. Hub vẫn
+  tự giữ allow sớm hơn sàn của nó. Đề xuất (ticket mới, làn hub): thêm `min_review_ms` vào `TeamView`.
+- Không có nút "Trả về terminal" (Q1: terminal không treo); thẻ ghi "Cũng đang hỏi trong terminal của agent".
+- UI: `protocol.ts` viết tay, `store.ts` (reducer), `ws.ts` (`HubClient`, backoff 0,5–30 s, lấy lại token mỗi lần kết
+  nối), `hub.ts` (`invoke`; chạy UI riêng trong trình duyệt khi phát triển bằng `VITE_HUB_WS_URL`, `VITE_HUB_TOKEN` với
+  hub bản debug), `useNow` (timer 250 ms chỉ khi có yêu cầu đang chờ và trang đang hiện), `ApprovalCard`, `HandoffCard`,
+  `QueueList`, `views/LitePopup`; `?view=office` là chỗ giữ cho T13. Phông Be Vietnam Pro, JetBrains Mono qua
+  Fontsource (đóng gói vào bundle, không tải từ mạng).
+- `tauri.conf.json`: không cửa sổ nào lúc khởi động; CSP chặt (`connect-src` chỉ IPC và `ws://127.0.0.1:*`,
+  `ws://localhost:*`). Capability áp cho cửa sổ `popup`, `office`.
+- Chưa đo được trong container (không có tray thật, không có GPU): popup mở ≤300 ms và RSS sau khi đóng popup; số đo
+  hiện có ở `docs/BUDGET.md`, cần đo lại trên máy chuẩn Windows.
+
 ### T13 · ARC-34 · Văn phòng 2D
 
 `views/Office.tsx` trong cửa sổ `office` (mở từ menu tray, destroy khi đóng).
