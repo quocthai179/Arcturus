@@ -962,6 +962,15 @@ interface CharacterProps { mood: Mood; width?: number; hair?: string; outfit?: s
 
 **Test:** render đủ 5 mood (kiểm phần tử đặc trưng có mặt), `aria-label` đúng, màu prop được áp.
 
+**Đã làm ở T11**
+- `Character.tsx` + `Character.css`; xuất thêm `Mood`, `MOOD_LABELS`, `DEFAULT_PALETTE` (bảng màu đầu của phụ lục B,
+  dùng khi thiếu prop). `width` mặc định 120. T12 có thể chuyển `Mood` sang `protocol.ts`.
+- Phần vẽ có `data-part` (`eyes-<mood>`, `mouth-*`, `raised-hand`, `alert-badge`, `sparkles`, `typing-bubble`, `sleep-z`,
+  `sweat-drop`, `hair-*`, `outfit`, `headphones`) để test và UI sau này nhắm tới; svg có `data-mood`.
+- Màu chỉ nhận `#RRGGBB`, giá trị khác (rỗng, `url(…)`, tên màu) dùng màu mặc định: màu đi thẳng vào thuộc tính SVG.
+- Hiệu ứng: nhóm phụ kiện phóng lên 450 ms, một lần, chỉ khi **chuyển sang** `approval`/`done` (lần render đầu không
+  chạy, render lại cùng mood không chạy lại); `prefers-reduced-motion` tắt hẳn.
+
 ### T12 · ARC-33 · Tray và popup Lite
 
 **Tauri (`crates/app/src-tauri`)**

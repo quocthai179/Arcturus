@@ -1,0 +1,30 @@
+/* Nhân vật (docs/PLAN.md T11). Không có animation vô hạn: chỉ một hiệu ứng ngắn, chạy đúng một lần khi vừa chuyển
+   sang `approval` hoặc `done` (nhóm phụ kiện được dựng lại nhờ `key`). */
+.character {
+  display: block;
+  overflow: visible;
+}
+
+.character__pop {
+  transform-box: fill-box;
+  transform-origin: center bottom;
+  animation: character-pop 450ms ease-out 1 both;
+}
+
+@keyframes character-pop {
+  0% {
+    transform: scale(0.6);
+  }
+  60% {
+    transform: scale(1.12);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .character__pop {
+    animation: none;
+  }
+}
