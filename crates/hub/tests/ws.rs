@@ -750,22 +750,26 @@ async fn ws_closes_client_that_misses_pings() {
     t.stop().await;
 }
 
-/// Bộ đệm socket nhỏ, cố định cho test client treo: tắt auto-tuning của kernel (Linux loopback tự nâng tới ~4 MB gửi +
-/// ~6 MB nhận), để "client không đọc" làm lệnh ghi của hub bị chặn như nhau trên mọi hệ điều hành.
+/// Bộ đệm nhận nhỏ, cố định cho client treo: tắt auto-tuning phía nhận của kernel, để "client không đọc" làm lệnh ghi
+/// của hub bị chặn trên mọi hệ điều hành.
 const SMALL_SOCKET_BUFFER: u32 = 8 * 1024;
 
-#[tokio::test]
+/// Đợt dồn phải lớn hơn hẳn bộ đệm gửi tự điều chỉnh tối đa của Linux (`tcp_wmem` mặc định tới ~4 MB) cộng bộ đệm nhận
+/// của client treo, để lệnh ghi tới client treo chắc chắn bị chặn.
+const BURST_EVENTS: usize = 3000;
+
+// Đa luồng: client đối chứng phải được đọc kịp trong lúc hub và đợt dồn cùng chạy (ARC-45: trên runner CI 2 nhân với
+// runtime một luồng, client đối chứng không được lên lịch kịp và bị ngắt nhầm).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_disconnects_stalled_client() {
-    // Socket nghe với SO_SNDBUF nhỏ: socket được accept thừa hưởng giá trị này.
-    let sock = tokio::net::TcpSocket::new_v4().unwrap();
-    sock.set_send_buffer_size(SMALL_SOCKET_BUFFER).unwrap();
-    sock.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let listener = sock.listen(64).unwrap();
+    // Socket nghe KHÔNG đặt SO_SNDBUF nhỏ (ARC-45): socket được accept thừa hưởng giá trị đó, kể cả client đối chứng,
+    // làm client đang đọc cũng bị coi là treo trên Linux. Chỉ client treo dùng bộ đệm nhận nhỏ.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let t = T::start_on(
         listener,
         Box::new(AlwaysAsk),
         WsConfig {
-            write_timeout: Duration::from_millis(200),
+            write_timeout: Duration::from_secs(1),
             frames_capacity: 100_000,
             ..WsConfig::default()
         },
@@ -791,7 +795,7 @@ async fn ws_disconnects_stalled_client() {
     let reading = tokio::spawn(async move {
         let mut bytes = 0usize;
         while let Ok(Some(Ok(m))) =
-            tokio::time::timeout(Duration::from_millis(500), reader.next()).await
+            tokio::time::timeout(Duration::from_secs(2), reader.next()).await
         {
             if let Message::Text(s) = m {
                 bytes += s.len();
@@ -813,8 +817,8 @@ async fn ws_disconnects_stalled_client() {
     let cwd = format!("D:/{}", "d".repeat(4000));
     let core = t.core.clone();
     tokio::task::spawn_blocking(move || {
-        // ~6,6 MB cập nhật: gấp hàng trăm lần bộ đệm 8 KB cố định ở hai đầu.
-        for i in 0..1500 {
+        // ~13 MB cập nhật: gấp ba lần bộ đệm gửi tối đa của Linux.
+        for i in 0..BURST_EVENTS {
             let name = if (i / 100) % 2 == 0 {
                 "UserPromptSubmit"
             } else {
@@ -837,7 +841,7 @@ async fn ws_disconnects_stalled_client() {
     .expect("client treo phải bị ngắt");
     let (bytes, mut reader) = reading.await.unwrap();
     assert!(
-        bytes > 1024 * 1024,
+        bytes > 8 * 1024 * 1024,
         "đợt dồn phải lớn hơn nhiều so với bộ đệm socket: client đọc nhận {bytes} byte"
     );
     assert_eq!(t.ws.clients(), 1, "client đang đọc không bị ngắt");
