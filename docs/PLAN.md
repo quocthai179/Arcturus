@@ -784,6 +784,29 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - `full_channel_drops_events_never_approvals`
 - `survives_restart` (đóng, mở lại, dữ liệu còn)
 
+**Đã làm ở T6** (lệch so với trên, cần người duyệt khi review PR)
+- `hub_core::store`: `Store` (chủ thread ghi, `close` ghi hết rồi dừng), `StoreHandle` (clone được, không bao giờ chặn),
+  `StoreReader` (kết nối chỉ đọc, mở khi cần), `EventRing`. Một kênh duy nhất giữ thứ tự ghi (`allowed` rồi `cancelled` của
+  cùng id); thread ghi gom tới 256 lệnh mỗi transaction; lượt lỗi thì thử từng lệnh riêng.
+- Kênh không giới hạn cứng cho `approvals` (đã bị chặn bởi hàng đợi duyệt: tối đa 64 đang giữ); sự kiện bị bỏ khi đã có
+  1.024 sự kiện **hoặc** 4 MiB đang chờ (đếm số bị bỏ, warn lúc bắt đầu bỏ, info lúc thông lại).
+- `ApprovalStore` (trait của hub) thêm `record_event`; `ApprovalRecord`/`ApprovalStatus` chuyển sang `hub_core::store`;
+  `ApprovalRecord.detail` (bản ghi đầu của một id) mang phần thẻ người duyệt đã thấy: `command_original`/`command_normalized`
+  của `ApprovalView` (nội dung Edit/Write đã cắt), với lệnh trả về terminal là đầu + cuối lệnh. Xác nhận cho AutoAllow
+  gửi sau commit.
+- `latency_ms` = `decided_at − created_at` (tính ở thread ghi từ `created_at` đã lưu); `channel`: `ws` (người, đếm
+  ngược), `policy`, NULL (hết giờ, hủy). `risk` của dòng `handed_off` là đánh giá thật của lệnh (hub vẫn không quyết định).
+- Thời gian lưu UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` (độ dài cố định: so chuỗi đúng thứ tự). `raw_json` chỉ lưu khi JSON hook
+  gốc ≤ 256 KiB (đo trước không cấp phát), lớn hơn thì NULL; `event_json` luôn có.
+- `PRAGMA cache_size=-512` mỗi kết nối, `busy_timeout` 5 s; Unix: thư mục 0700, file 0600 (nhật ký có lệnh, đường dẫn).
+  Cơ sở dữ liệu phiên bản mới hơn hub (`user_version` > 1) → hub không khởi động.
+- Dọn TTL lúc mở và mỗi 6 giờ trong thread ghi (`recv_timeout`, không timer khác). `hub --db <file>`, mặc định
+  `<data_dir>/arcturus/arcturus.db`; mở lỗi thì hub không khởi động. Tắt hub: hủy yêu cầu đang chờ rồi `close` (bản ghi
+  `cancelled` được ghi trước khi thoát).
+- Ring buffer (ARC-27): `EventRing` 2.000 sự kiện **và** 2 MiB (sự kiện có `cwd`, id do agent gửi không bị chặn độ dài),
+  `Hub::recent_events(n)`; chưa có ai đọc (T19).
+- Đọc theo phiên sắp `ts, rowid` (cùng mili giây: thứ tự ghi).
+
 ### T7 · ARC-28 · Đối soát
 
 **Tạo:** `hub/src/reconcile.rs`.

@@ -7,12 +7,12 @@ use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
-use hub::approvals::NoStore;
 use hub::hub::Hub;
 use hub::record::{self, RecordConfig};
 use hub::{auth, hooks, server, ui_token, ws};
 use hub_core::config::Config;
 use hub_core::policy::danger::DangerConfig;
+use hub_core::store::{self, Store};
 use tracing_subscriber::fmt::writer::BoxMakeWriter;
 use tracing_subscriber::EnvFilter;
 
@@ -44,6 +44,10 @@ struct Cli {
     /// Nơi ghi token UI (sinh mới mỗi lần chạy) cho app đọc. Mặc định `<data_dir>/arcturus/ui-token`.
     #[arg(long, value_name = "FILE", conflicts_with = "record")]
     ui_token_file: Option<PathBuf>,
+
+    /// Cơ sở dữ liệu SQLite (sự kiện, nhật ký duyệt). Mặc định `<data_dir>/arcturus/arcturus.db`.
+    #[arg(long, value_name = "FILE", conflicts_with = "record")]
+    db: Option<PathBuf>,
 
     /// In token UI đúng một dòng ra stdout thay vì ghi file (cho app khởi động hub và đọc qua pipe, F6). Log chuyển
     /// sang stderr.
@@ -143,6 +147,14 @@ async fn main() -> anyhow::Result<()> {
         ui_token::deliver(&delivery, &ui_token, &mut std::io::stdout().lock())
             .with_context(|| format!("không trao được token UI ({ui_token_dest})"))?;
 
+        let db_path = match cli.db {
+            Some(p) => p,
+            None => dirs::data_dir()
+                .map(|d| store::default_path(&d))
+                .context("không tìm thấy thư mục dữ liệu người dùng; chỉ định --db")?,
+        };
+        let db = Store::open(&db_path, cfg.hub.event_ttl_days)
+            .with_context(|| format!("không mở được cơ sở dữ liệu {}", db_path.display()))?;
         let port = listener.local_addr().context("không đọc được cổng")?.port();
         // Luật danger biết cổng hub, file token UI và file cấu hình đang dùng (T8, F6 biện pháp B2).
         let danger = DangerConfig {
@@ -151,10 +163,11 @@ async fn main() -> anyhow::Result<()> {
                 ui_token::Delivery::File(p) => vec![absolute_display(p)],
                 ui_token::Delivery::Stdout => Vec::new(),
             },
-            state_paths: vec![cfg_path.display().to_string()],
+            state_paths: vec![cfg_path.display().to_string(), absolute_display(&db_path)],
             home: dirs::home_dir().map(|h| h.display().to_string()),
         };
-        let (hub, _tasks) = Hub::start_full(cfg, personas, hostname(), danger, Box::new(NoStore));
+        let (hub, _tasks) =
+            Hub::start_full(cfg, personas, hostname(), danger, Box::new(db.handle()));
         let (ui, ws_handle) = ws::router(hub.clone(), ui_token, port, ws::WsConfig::default());
         let app = hooks::router(hub.clone(), token).merge(ui);
         tracing::info!(
@@ -164,6 +177,7 @@ async fn main() -> anyhow::Result<()> {
             config = %cfg_path.display(),
             config_found = cfg_found,
             ui_token = %ui_token_dest,
+            db = %db_path.display(),
             "hub đang chạy"
         );
         server::serve_until(listener, app, async move {
@@ -173,6 +187,8 @@ async fn main() -> anyhow::Result<()> {
         })
         .await
         .context("server dừng do lỗi")?;
+        // Ghi nốt các bản ghi đang chờ (gồm `cancelled` của yêu cầu bị hủy khi tắt) rồi dừng thread ghi.
+        db.close();
     }
     tracing::info!("đã tắt");
     Ok(())

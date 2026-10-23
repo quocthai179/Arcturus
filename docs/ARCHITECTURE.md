@@ -126,12 +126,15 @@ trường nào có nhiều giá trị thì liệt kê các giá trị hợp lệ
 
 ## Bảng SQLite
 
-DDL chính xác: `docs/PLAN.md` §3.5. Migration đánh số bằng `PRAGMA user_version`.
+DDL chính xác: `docs/PLAN.md` §3.5. Migration đánh số bằng `PRAGMA user_version`. File `<data_dir>/arcturus/arcturus.db`
+(`hub --db`), WAL. Một thread ghi duy nhất (`hub_core::store`), thứ tự ghi đúng thứ tự gửi; sự kiện có thể bị bỏ khi
+kênh đầy, bản ghi duyệt thì không; AutoAllow chỉ trả `allow` sau khi bản ghi đã commit. Chi tiết: `docs/PLAN.md` T6.
 
 Migration v1:
 - `events(id, ts, session_id, kind, event_json, raw_json)` — append-only, xóa sau `event_ttl_days` (mặc định 30)
 - `approvals(request_id, session_id, agent_id, tool, command_original, command_normalized, risk, group_key, status,
-  decided_by, created_at, decided_at, latency_ms, channel)` — `status`: `pending | allowed | denied | timed_out | cancelled`
+  decided_by, created_at, decided_at, latency_ms, channel)` — `status`: `pending | allowed | denied | timed_out | cancelled |
+  handed_off`; `command_*` là đúng phần người duyệt thấy trên thẻ
 
 Migration v2 (T9, T10):
 - `batch_rules(group_key, opened_at, expires_at)`
