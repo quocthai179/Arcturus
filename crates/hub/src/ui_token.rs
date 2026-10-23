@@ -3,9 +3,33 @@
 //! Lý do: Bash tool của Claude Code thừa hưởng `ARCTURUS_TOKEN` (`docs/HOOK_FINDINGS.md` F6), nên agent nào cũng đọc
 //! được token của hook. Token UI do hub tự sinh mỗi lần chạy (không lấy từ biến môi trường), ghi vào file chỉ người dùng
 //! đọc được (`<data_dir>/arcturus/ui-token`); app Tauri đọc file đó. Không bao giờ log token.
+//!
+//! File vẫn đọc được bởi agent đã có quyền chạy mã dưới cùng người dùng (F6). `--ui-token-stdout` (T5d · ARC-44) trao
+//! token qua stdout cho tiến trình đã khởi động hub (app, T12), không ghi file nào.
 
-use std::io;
+use std::io::{self, Write};
 use std::path::{Path, PathBuf};
+
+/// Cách trao token UI cho app.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    /// Ghi file (mặc định): `--ui-token-file` hoặc [`default_path`].
+    File(PathBuf),
+    /// In đúng một dòng `<token>\n` ra stdout rồi flush; không ghi file.
+    Stdout,
+}
+
+/// Trao token theo `delivery`. `out` là stdout (tham số để test được).
+pub fn deliver(delivery: &Delivery, token: &str, out: &mut impl Write) -> io::Result<()> {
+    match delivery {
+        Delivery::File(path) => write(path, token),
+        Delivery::Stdout => {
+            out.write_all(token.as_bytes())?;
+            out.write_all(b"\n")?;
+            out.flush()
+        }
+    }
+}
 
 /// Số byte ngẫu nhiên (hex thành 64 ký tự).
 pub const UI_TOKEN_BYTES: usize = 32;
@@ -45,7 +69,6 @@ pub fn write(path: &Path, token: &str) -> io::Result<()> {
         Err(e) => return Err(e),
     }
     {
-        use std::io::Write;
         let mut opts = std::fs::OpenOptions::new();
         opts.write(true).create_new(true);
         #[cfg(unix)]
@@ -63,6 +86,13 @@ pub fn write(path: &Path, token: &str) -> io::Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deliver_stdout_writes_exactly_one_line() {
+        let mut out = Vec::new();
+        deliver(&Delivery::Stdout, "abc123", &mut out).unwrap();
+        assert_eq!(out, b"abc123\n");
+    }
 
     #[test]
     fn tokens_are_random_hex_and_strong() {

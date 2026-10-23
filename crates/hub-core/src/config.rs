@@ -15,6 +15,13 @@ pub const MAX_APPROVAL_TIMEOUT_SECS: u64 = 115;
 /// Ngưỡng "lệnh quá dài để duyệt trên thẻ" không vượt quá giới hạn body của hook (1 MB).
 pub const MAX_HANDOFF_THRESHOLD: usize = 1024 * 1024;
 
+/// Khoảng cho phép của `[hub] held_input_max_bytes` (T5c · ARC-43).
+pub const MIN_HELD_INPUT_MAX_BYTES: usize = 64 * 1024;
+pub const MAX_HELD_INPUT_MAX_BYTES: usize = 256 * 1024 * 1024;
+
+/// Trần của `[hub] min_review_ms` (T5d · ARC-44); `0` là tắt sàn thời gian duyệt.
+pub const MAX_MIN_REVIEW_MS: u64 = 10_000;
+
 #[derive(Deserialize, Clone, Debug, PartialEq, Default)]
 #[serde(deny_unknown_fields, default)]
 pub struct Config {
@@ -36,6 +43,12 @@ pub struct HubConfig {
     /// terminal (quy tắc bất biến 3, T5b).
     pub handoff_max_bytes: usize,
     pub handoff_max_lines: usize,
+    /// Trần tổng byte `tool_input` hub giữ cùng lúc khi chờ duyệt (quy tắc bất biến 6). Vượt thì yêu cầu mới nhận `{}`
+    /// và Claude Code hỏi trong terminal (T5c · ARC-43).
+    pub held_input_max_bytes: usize,
+    /// Sàn thời gian duyệt (ms): `allow` do người bấm tới sớm hơn chừng này kể từ lúc thẻ hiện bị giữ lại. `0` là tắt.
+    /// Biện pháp B4 cho F6 (T5d · ARC-44).
+    pub min_review_ms: u64,
 }
 
 #[derive(Deserialize, Clone, Debug, PartialEq)]
@@ -61,6 +74,8 @@ impl Default for HubConfig {
             event_ttl_days: 30,
             handoff_max_bytes: 4096,
             handoff_max_lines: 50,
+            held_input_max_bytes: 8 * 1024 * 1024,
+            min_review_ms: 1000,
         }
     }
 }
@@ -174,6 +189,26 @@ impl Config {
                     format!("{value} ngoài khoảng 1–{MAX_HANDOFF_THRESHOLD}"),
                 ));
             }
+        }
+        if !(MIN_HELD_INPUT_MAX_BYTES..=MAX_HELD_INPUT_MAX_BYTES)
+            .contains(&self.hub.held_input_max_bytes)
+        {
+            return Err(invalid(
+                "hub.held_input_max_bytes",
+                format!(
+                    "{} ngoài khoảng {MIN_HELD_INPUT_MAX_BYTES}–{MAX_HELD_INPUT_MAX_BYTES}",
+                    self.hub.held_input_max_bytes
+                ),
+            ));
+        }
+        if self.hub.min_review_ms > MAX_MIN_REVIEW_MS {
+            return Err(invalid(
+                "hub.min_review_ms",
+                format!(
+                    "{} ngoài khoảng 0–{MAX_MIN_REVIEW_MS}",
+                    self.hub.min_review_ms
+                ),
+            ));
         }
         for (field, value) in [
             (
@@ -292,6 +327,55 @@ mod tests {
                 assert!(message.contains("main_roster_mx"), "{message}");
             }
             other => panic!("cần lỗi Parse, có {other:?}"),
+        }
+    }
+
+    #[test]
+    fn min_review_ms_default_and_range() {
+        assert_eq!(Config::default().hub.min_review_ms, 1000);
+        assert_eq!(
+            parse("[hub]\nmin_review_ms = 0\n")
+                .unwrap()
+                .hub
+                .min_review_ms,
+            0
+        );
+        let err = parse(&format!(
+            "[hub]\nmin_review_ms = {}\n",
+            MAX_MIN_REVIEW_MS + 1
+        ))
+        .unwrap_err();
+        assert!(
+            matches!(&err, ConfigError::Invalid { field, .. } if field == "hub.min_review_ms"),
+            "{err}"
+        );
+    }
+
+    #[test]
+    fn held_input_max_bytes_default_and_range() {
+        assert_eq!(Config::default().hub.held_input_max_bytes, 8 * 1024 * 1024);
+        let cfg = parse(
+            "[hub]
+held_input_max_bytes = 1048576
+",
+        )
+        .unwrap();
+        assert_eq!(cfg.hub.held_input_max_bytes, 1024 * 1024);
+        for v in [
+            0,
+            MIN_HELD_INPUT_MAX_BYTES - 1,
+            MAX_HELD_INPUT_MAX_BYTES + 1,
+        ] {
+            let err = parse(&format!(
+                "[hub]
+held_input_max_bytes = {v}
+"
+            ))
+            .unwrap_err();
+            assert!(
+                matches!(&err, ConfigError::Invalid { field, .. } if field == "hub.held_input_max_bytes"),
+                "{v}: {err}"
+            );
         }
     }
 

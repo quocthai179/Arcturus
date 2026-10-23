@@ -25,6 +25,14 @@ use tokio_tungstenite::tungstenite::http::HeaderValue;
 use tokio_tungstenite::tungstenite::{Error as WsError, Message};
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+/// Cấu hình hàng đợi cho các test về hành vi khác: tắt sàn thời gian duyệt (đã có test riêng ở `tests/min_review.rs`).
+fn no_floor() -> ApprovalsConfig {
+    ApprovalsConfig {
+        min_review: Duration::ZERO,
+        ..ApprovalsConfig::default()
+    }
+}
+
 const HOOK: &str = "hook-token-0123456789abcdef-arcturus-t5b";
 const UI: &str = "ui-token-fedcba9876543210-arcturus-t5b-xyz";
 const WAIT: Duration = Duration::from_secs(5);
@@ -48,19 +56,20 @@ impl T {
 
     async fn start_with(policy: Box<dyn Policy>, wcfg: WsConfig) -> T {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        Self::start_on(listener, policy, wcfg).await
+        Self::start_on(listener, policy, wcfg, no_floor()).await
     }
 
     async fn start_on(
         listener: tokio::net::TcpListener,
         policy: Box<dyn Policy>,
         wcfg: WsConfig,
+        acfg: ApprovalsConfig,
     ) -> T {
         let (core, tasks) = Hub::start_with(
             Config::default(),
             PersonaBook::default(),
             "laptop".to_owned(),
-            ApprovalsConfig::default(),
+            acfg,
             policy,
             Box::new(NoStore),
         );
@@ -396,6 +405,43 @@ async fn ws_decide_resolves_pending_request() {
 }
 
 #[tokio::test]
+async fn ws_allow_too_fast_is_held_with_feed() {
+    // Sàn thời gian duyệt (T5d · ARC-44, F6 B4): allow tới ngay khi thẻ hiện bị giữ, client nhận Feed riêng.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let t = T::start_on(
+        listener,
+        Box::new(AlwaysAsk),
+        WsConfig::default(),
+        ApprovalsConfig {
+            min_review: Duration::from_secs(60),
+            ..ApprovalsConfig::default()
+        },
+    )
+    .await;
+    let (mut ws, _) = t.connect().await;
+    let h = t.permission(bash_permission("s1", "cargo test"));
+    let id = requested_id(&mut ws).await;
+    send(&mut ws, decide(&id, "allow", "user")).await;
+    assert_eq!(
+        next_of(&mut ws, &["feed"]).await["text"],
+        "Duyệt quá nhanh: xem lại thẻ rồi bấm lại"
+    );
+    assert!(
+        t.core.approvals.pending(&id).is_some(),
+        "yêu cầu phải còn chờ"
+    );
+    assert!(!h.is_finished());
+    // Deny không bị sàn chặn.
+    send(&mut ws, decide(&id, "deny", "user")).await;
+    let res = tokio::time::timeout(WAIT, h).await.unwrap().unwrap();
+    assert_eq!(
+        res.pointer("/hookSpecificOutput/decision/behavior"),
+        Some(&json!("deny"))
+    );
+    t.stop().await;
+}
+
+#[tokio::test]
 async fn ws_decide_errors_are_private_feeds() {
     let t = T::start().await;
     let (mut ws, _) = t.connect().await;
@@ -704,25 +750,30 @@ async fn ws_closes_client_that_misses_pings() {
     t.stop().await;
 }
 
-/// Bộ đệm socket nhỏ, cố định cho test client treo: tắt auto-tuning của kernel (Linux loopback tự nâng tới ~4 MB gửi +
-/// ~6 MB nhận), để "client không đọc" làm lệnh ghi của hub bị chặn như nhau trên mọi hệ điều hành.
+/// Bộ đệm nhận nhỏ, cố định cho client treo: tắt auto-tuning phía nhận của kernel, để "client không đọc" làm lệnh ghi
+/// của hub bị chặn trên mọi hệ điều hành.
 const SMALL_SOCKET_BUFFER: u32 = 8 * 1024;
 
-#[tokio::test]
+/// Đợt dồn phải lớn hơn hẳn bộ đệm gửi tự điều chỉnh tối đa của Linux (`tcp_wmem` mặc định tới ~4 MB) cộng bộ đệm nhận
+/// của client treo, để lệnh ghi tới client treo chắc chắn bị chặn.
+const BURST_EVENTS: usize = 3000;
+
+// Đa luồng: client đối chứng phải được đọc kịp trong lúc hub và đợt dồn cùng chạy (ARC-45: trên runner CI 2 nhân với
+// runtime một luồng, client đối chứng không được lên lịch kịp và bị ngắt nhầm).
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
 async fn ws_disconnects_stalled_client() {
-    // Socket nghe với SO_SNDBUF nhỏ: socket được accept thừa hưởng giá trị này.
-    let sock = tokio::net::TcpSocket::new_v4().unwrap();
-    sock.set_send_buffer_size(SMALL_SOCKET_BUFFER).unwrap();
-    sock.bind("127.0.0.1:0".parse().unwrap()).unwrap();
-    let listener = sock.listen(64).unwrap();
+    // Socket nghe KHÔNG đặt SO_SNDBUF nhỏ (ARC-45): socket được accept thừa hưởng giá trị đó, kể cả client đối chứng,
+    // làm client đang đọc cũng bị coi là treo trên Linux. Chỉ client treo dùng bộ đệm nhận nhỏ.
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let t = T::start_on(
         listener,
         Box::new(AlwaysAsk),
         WsConfig {
-            write_timeout: Duration::from_millis(200),
+            write_timeout: Duration::from_secs(1),
             frames_capacity: 100_000,
             ..WsConfig::default()
         },
+        no_floor(),
     )
     .await;
 
@@ -744,7 +795,7 @@ async fn ws_disconnects_stalled_client() {
     let reading = tokio::spawn(async move {
         let mut bytes = 0usize;
         while let Ok(Some(Ok(m))) =
-            tokio::time::timeout(Duration::from_millis(500), reader.next()).await
+            tokio::time::timeout(Duration::from_secs(2), reader.next()).await
         {
             if let Message::Text(s) = m {
                 bytes += s.len();
@@ -766,8 +817,8 @@ async fn ws_disconnects_stalled_client() {
     let cwd = format!("D:/{}", "d".repeat(4000));
     let core = t.core.clone();
     tokio::task::spawn_blocking(move || {
-        // ~6,6 MB cập nhật: gấp hàng trăm lần bộ đệm 8 KB cố định ở hai đầu.
-        for i in 0..1500 {
+        // ~13 MB cập nhật: gấp ba lần bộ đệm gửi tối đa của Linux.
+        for i in 0..BURST_EVENTS {
             let name = if (i / 100) % 2 == 0 {
                 "UserPromptSubmit"
             } else {
@@ -790,7 +841,7 @@ async fn ws_disconnects_stalled_client() {
     .expect("client treo phải bị ngắt");
     let (bytes, mut reader) = reading.await.unwrap();
     assert!(
-        bytes > 1024 * 1024,
+        bytes > 8 * 1024 * 1024,
         "đợt dồn phải lớn hơn nhiều so với bộ đệm socket: client đọc nhận {bytes} byte"
     );
     assert_eq!(t.ws.clients(), 1, "client đang đọc không bị ngắt");

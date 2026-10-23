@@ -28,6 +28,8 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | T3 · ARC-24 | hub | Luồng duyệt: `/hooks/permission` giữ request bằng oneshot, timeout 110 s trả `{}`, hủy khi SessionEnd | T2 | 3 | done |
 | T4 · ARC-25 | hub | State machine agent theo bảng trong ARCHITECTURE.md; persona từ `arcturus.toml` | T2 | 2 | done |
 | T5 · ARC-26 | hub | WebSocket `/ws`: snapshot + delta; viết `docs/PROTOCOL.md`; xác thực token; xử lý `TeamPause`/`TeamResume` phía hub; `GET /approvals/{id}/input` | T3, T4 | 2 | done |
+| T5c · ARC-43 | hub | Trần byte cho `tool_input` đang giữ (`held_input_max_bytes` 8 MiB), đặt chỗ trước khi đọc body, giới hạn độ dài trường | T5 | 1 | review |
+| T5d · ARC-44 | hub | F6: `--ui-token-stdout`, sàn thời gian duyệt `min_review_ms`, luật danger cho T8, ghi giới hạn bảo mật | T5c | 1 | review |
 | T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | todo |
 | T7 · ARC-28 | hub | Đối soát `claude agents --json` mỗi 30 s, dọn phiên chết | T4 | 1 | todo |
 | T8 · ARC-29 | policy | Danger list + chuẩn hóa lệnh (bỏ ký tự ẩn/bidi), tính `risk` | T2 | 2 | todo |
@@ -62,6 +64,14 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
   trong terminal".
 - T18: `hooks/arcturus-dogfood.json` phải đổi `SessionStart` sang hook `type: "command"` gọi `curl` (F1); hook http
   hiện tại sẽ lặng lẽ không gửi gì. Chế độ `auto` không sinh `PermissionRequest` (F2).
+
+**Ghi chú từ ARC-43/44** (audit `security-auditor` 2026-10-22)
+- T8: thêm luật danger `arcturus_ui_token` (PLAN T8, B2). File cấu hình nên chuyển khỏi thư mục làm việc trước T8/T10
+  (agent ghi được workspace thì sửa được `min_review_ms`, `held_input_max_bytes`).
+- T9: duyệt gộp/batch phải gọi `approvals::allow_gate` cho từng yêu cầu (sàn thời gian, đếm ngược, thẻ đã cắt).
+- T10: đếm ngược đi qua sàn `min_review_ms`; kiểm khi đọc cấu hình rằng đếm ngược ≥ sàn.
+- T12: app khởi động hub với `--ui-token-stdout`, đọc token từ dòng đầu stdout và **luôn đọc stderr** (pipe đầy thì hub
+  bị chặn); UI làm mờ nút Allow trong `min_review_ms` từ lúc hiện thẻ.
 
 ## Giai đoạn C — dogfood và mốc v0 (tuần 6)
 

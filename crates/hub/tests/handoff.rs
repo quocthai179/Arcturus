@@ -25,6 +25,14 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
+/// Cấu hình hàng đợi cho các test về hành vi khác: tắt sàn thời gian duyệt (đã có test riêng ở `tests/min_review.rs`).
+fn no_floor() -> ApprovalsConfig {
+    ApprovalsConfig {
+        min_review: Duration::ZERO,
+        ..ApprovalsConfig::default()
+    }
+}
+
 const TOKEN: &str = "test-token-0123456789abcdef-arcturus-t5b";
 const WAIT: Duration = Duration::from_secs(5);
 
@@ -67,7 +75,7 @@ struct T {
 
 impl T {
     async fn start() -> T {
-        Self::start_with(ApprovalsConfig::default()).await
+        Self::start_with(no_floor()).await
     }
 
     async fn start_with(acfg: ApprovalsConfig) -> T {
@@ -295,6 +303,7 @@ async fn threshold_boundaries_bytes_and_lines() {
 #[tokio::test]
 async fn threshold_comes_from_config() {
     let mut cfg = Config::default();
+    cfg.hub.min_review_ms = 0; // sàn thời gian duyệt có test riêng (tests/min_review.rs)
     cfg.hub.handoff_max_bytes = 10;
     let (core, tasks) = Hub::start(cfg, PersonaBook::default(), "laptop".to_owned());
     let mut t = T::serve(core, tasks).await;

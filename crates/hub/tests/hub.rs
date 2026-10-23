@@ -18,6 +18,14 @@ use serde_json::{json, Value};
 use tokio::sync::{broadcast, oneshot};
 use tokio::task::JoinHandle;
 
+/// Cấu hình hàng đợi cho các test về hành vi khác: tắt sàn thời gian duyệt (đã có test riêng ở `tests/min_review.rs`).
+fn no_floor() -> ApprovalsConfig {
+    ApprovalsConfig {
+        min_review: Duration::ZERO,
+        ..ApprovalsConfig::default()
+    }
+}
+
 const TOKEN: &str = "test-token-0123456789abcdef-arcturus-t5";
 const WAIT: Duration = Duration::from_secs(5);
 const CWD: &str = r"D:\code\Arcturus\.claude\worktrees\hub";
@@ -34,12 +42,7 @@ struct T {
 
 impl T {
     async fn start() -> T {
-        Self::start_with(
-            Config::default(),
-            ApprovalsConfig::default(),
-            Box::new(AlwaysAsk),
-        )
-        .await
+        Self::start_with(Config::default(), no_floor(), Box::new(AlwaysAsk)).await
     }
 
     async fn start_with(cfg: Config, acfg: ApprovalsConfig, policy: Box<dyn Policy>) -> T {
@@ -178,12 +181,7 @@ palette = { hair = "#1F1F24", outfit = "#4C8DF6", acc = "#9AA3B5" }
 
 #[tokio::test]
 async fn event_loop_applies_state_and_broadcasts() {
-    let mut t = T::start_with(
-        khoa_config(),
-        ApprovalsConfig::default(),
-        Box::new(AlwaysAsk),
-    )
-    .await;
+    let mut t = T::start_with(khoa_config(), no_floor(), Box::new(AlwaysAsk)).await;
     t.event(tool_hook(
         "PreToolUse",
         "s1",
@@ -202,12 +200,7 @@ async fn event_loop_applies_state_and_broadcasts() {
 
 #[tokio::test]
 async fn permission_sets_agent_approval_then_thinking() {
-    let mut t = T::start_with(
-        khoa_config(),
-        ApprovalsConfig::default(),
-        Box::new(AlwaysAsk),
-    )
-    .await;
+    let mut t = T::start_with(khoa_config(), no_floor(), Box::new(AlwaysAsk)).await;
     let h = t.permission(bash_permission("s1", "git push"));
     let a = t.agent("agt_s1", Mood::Approval).await;
     assert_eq!(a.activity, Activity::Waiting);
@@ -248,6 +241,7 @@ async fn permission_sets_agent_approval_then_thinking() {
 #[tokio::test]
 async fn timeout_keeps_agent_waiting_and_uses_configured_timeout() {
     let mut cfg = Config::default();
+    cfg.hub.min_review_ms = 0; // sàn thời gian duyệt có test riêng (tests/min_review.rs)
     cfg.hub.approval_timeout_secs = 1;
     let (core, tasks) = Hub::start(cfg, PersonaBook::default(), "laptop".to_owned());
     let mut t = T::serve(core, tasks).await;
@@ -345,12 +339,7 @@ impl Policy for Countdown {
 
 #[tokio::test]
 async fn pause_broadcasts_team_and_clears_countdown() {
-    let mut t = T::start_with(
-        Config::default(),
-        ApprovalsConfig::default(),
-        Box::new(Countdown),
-    )
-    .await;
+    let mut t = T::start_with(Config::default(), no_floor(), Box::new(Countdown)).await;
     let _h = t.permission(bash_permission("s1", "ls"));
     let card = t.requested().await;
     assert_eq!(card.countdown_ms, Some(30_000));
