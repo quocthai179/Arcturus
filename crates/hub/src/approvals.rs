@@ -4,7 +4,9 @@
 //! đã được store xác nhận ghi kiểm toán. Mọi nhánh khác (hết giờ, hủy, phiên kết thúc, client đóng kết nối, tắt hub,
 //! lỗi ghi) trả `{}` để Claude Code tiếp tục hỏi trong terminal.
 //!
-//! Phần chưa có được thay bằng kiểu tạm trong file này: [`Policy`] (T8), [`ApprovalStore`] (T6). Thông báo cho UI
+//! Policy là `hub_core::policy` (T8): hub luôn đánh giá yêu cầu bằng luật thật ([`hub_core::policy::assess`]) và lọc
+//! kết quả của policy được cắm qua [`enforce`], nên kể cả policy giả cũng không tự duyệt được lệnh Critical/High.
+//! Phần chưa có được thay bằng kiểu tạm trong file này: [`ApprovalStore`] (T6). Thông báo cho UI
 //! đi qua kênh broadcast `ServerMsg` chung của hub (T5): thẻ duyệt là `ApprovalView` đã cắt nội dung, `tool_input`
 //! đầy đủ chỉ nằm trong hàng đợi (lấy qua [`Approvals::tool_input`]). Trạng thái agent do `crate::hub` cập nhật.
 
@@ -15,6 +17,8 @@ use std::time::Duration;
 
 use hub_core::hook::HookInput;
 use hub_core::persona::fnv1a;
+use hub_core::policy::assess;
+use hub_core::policy::danger::{DangerConfig, DangerRules};
 pub use hub_core::protocol::DecideOrigin;
 use hub_core::protocol::{ApprovalView, HandoffView, ServerMsg};
 use hub_core::schema::{AgentId, DecidedBy, Decision, Event, EventKind, RequestId, Risk};
@@ -57,41 +61,19 @@ pub const DEFAULT_HANDOFF_MAX_LINES: usize = 50;
 pub const MAX_HANDOFFS: usize = 64;
 
 // ---------------------------------------------------------------------------------------------------------------
-// Policy tạm (T8 thay bằng `hub-core/src/policy/`)
+// Policy (`hub-core/src/policy/`, T8)
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Ngữ cảnh một yêu cầu duyệt, đưa cho policy.
-pub struct ApprovalCtx<'a> {
-    pub agent_id: &'a str,
-    pub tool: &'a str,
-    pub tool_input: &'a Value,
-    pub cwd: &'a str,
-}
+pub use hub_core::policy::{enforce, ApprovalCtx, Assessment, Policy, PolicyOutcome, RulesPolicy};
 
-/// Policy không có nhánh tự từ chối trong v0.
-#[derive(Clone, Debug, PartialEq)]
-pub enum PolicyOutcome {
-    AutoAllow {
-        reason: String,
-        risk: Risk,
-    },
-    AskUser {
-        risk: Risk,
-        countdown: Option<Duration>,
-    },
-}
-
-pub trait Policy: Send + Sync {
-    fn decide(&self, ctx: &ApprovalCtx<'_>) -> PolicyOutcome;
-}
-
-/// Policy của T3: luôn hỏi người.
+/// Policy chỉ hỏi người, với risk theo đánh giá (dùng trong test; hub chạy thật dùng [`RulesPolicy`], hiện cũng chưa có
+/// allowance nào tới T9/T10).
 pub struct AlwaysAsk;
 
 impl Policy for AlwaysAsk {
-    fn decide(&self, _ctx: &ApprovalCtx<'_>) -> PolicyOutcome {
+    fn decide(&self, _ctx: &ApprovalCtx<'_>, a: &Assessment) -> PolicyOutcome {
         PolicyOutcome::AskUser {
-            risk: Risk::Medium,
+            risk: a.risk,
             countdown: None,
         }
     }
@@ -159,7 +141,7 @@ impl ApprovalStore for NoStore {
 // Kiểu của luồng duyệt
 // ---------------------------------------------------------------------------------------------------------------
 
-/// Một yêu cầu đang chờ. T5 dựng `ApprovalView` từ đây (kèm normalize của T8).
+/// Một yêu cầu đang chờ. Thẻ `ApprovalView` dựng từ đây cùng đánh giá của policy (T8).
 #[derive(Clone, Debug, PartialEq)]
 pub struct PendingApproval {
     pub request_id: RequestId,
@@ -288,6 +270,8 @@ pub struct ApprovalsConfig {
     /// Ngưỡng trả về terminal (`[hub] handoff_max_bytes`, `handoff_max_lines`).
     pub handoff_max_bytes: usize,
     pub handoff_max_lines: usize,
+    /// Tham số luật danger (cổng hub, đường dẫn token/cấu hình/cơ sở dữ liệu, thư mục nhà).
+    pub danger: DangerConfig,
 }
 
 impl Default for ApprovalsConfig {
@@ -301,6 +285,10 @@ impl Default for ApprovalsConfig {
             min_review: DEFAULT_MIN_REVIEW,
             handoff_max_bytes: DEFAULT_HANDOFF_MAX_BYTES,
             handoff_max_lines: DEFAULT_HANDOFF_MAX_LINES,
+            danger: DangerConfig {
+                hub_port: Some(7878),
+                ..DangerConfig::default()
+            },
         }
     }
 }
@@ -443,6 +431,7 @@ fn view_size(v: &ApprovalView) -> usize {
 /// Dùng `std::sync::Mutex` (không giữ qua `.await`) để guard hủy trong `Drop` khóa được khi client đóng kết nối.
 pub struct Approvals {
     cfg: ApprovalsConfig,
+    rules: DangerRules,
     policy: Box<dyn Policy>,
     store: Box<dyn ApprovalStore>,
     inner: Mutex<Inner>,
@@ -458,6 +447,7 @@ impl Approvals {
         tx: broadcast::Sender<ServerMsg>,
     ) -> Self {
         Approvals {
+            rules: DangerRules::new(&cfg.danger),
             cfg,
             policy,
             store,
@@ -648,12 +638,19 @@ impl Approvals {
             return early;
         }
 
-        let outcome = self.policy.decide(&ApprovalCtx {
+        let ctx = ApprovalCtx {
             agent_id: &ev.agent.id,
             tool: &tool,
             tool_input: &tool_input,
             cwd: &cwd,
-        });
+        };
+        // Đánh giá bằng luật thật, rồi lọc kết quả policy qua `enforce` (bất biến 2: Critical/High không tự duyệt).
+        let assessment = assess(&ctx, &self.rules);
+        let outcome = enforce(self.policy.decide(&ctx, &assessment), &assessment);
+        if !assessment.hits.is_empty() {
+            let rules: Vec<&str> = assessment.hits.iter().map(|h| h.rule).collect();
+            tracing::info!(session = ?ev.session_id, tool = ?tool, ?rules, "yêu cầu thuộc vùng khóa: luôn hỏi người");
+        }
         let (risk, countdown) = match outcome {
             PolicyOutcome::AutoAllow { reason, risk } => {
                 // Lượt AutoAllow có id riêng: nếu rơi về hỏi người, bản ghi `allowed/policy` (có thể commit muộn)
@@ -684,8 +681,9 @@ impl Approvals {
             deadline_at: ev.ts + self.cfg.timeout,
             countdown,
         };
-        // Dựng thẻ (cắt, escape) ngoài khóa.
-        let mut view = approval_view(&info, agent_name);
+        // Dựng thẻ (cắt, escape, tô sáng) ngoài khóa.
+        let mut view = approval_view(&info, agent_name, &assessment);
+        drop(assessment);
         let held_bytes = input_bytes + view_size(&view);
         let rec = self.record_of(&info, ApprovalStatus::Pending, None);
         {

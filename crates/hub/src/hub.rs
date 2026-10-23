@@ -17,8 +17,10 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
+use hub_core::policy::danger::DangerConfig;
+
 use crate::approvals::{
-    AlwaysAsk, ApprovalStore, Approvals, ApprovalsConfig, NoStore, PermissionOutcome, Policy,
+    ApprovalStore, Approvals, ApprovalsConfig, NoStore, PermissionOutcome, Policy, RulesPolicy,
 };
 
 /// Sức chứa kênh broadcast cho UI (§4). Client chậm hơn thì nhận `Snapshot` mới (T5b).
@@ -48,23 +50,32 @@ pub struct HubTasks {
 }
 
 impl Hub {
-    /// Hub chạy thật: policy luôn hỏi người (T8 thay), chưa có store (T6 thay).
+    /// Hub với policy thật ([`RulesPolicy`]: danger list, chưa có batch/trust nên mọi yêu cầu hỏi người) và không có
+    /// store (mọi AutoAllow rơi về hỏi người). Luật danger biết cổng trong `cfg.hub.bind`.
     pub fn start(cfg: Config, personas: PersonaBook, host: String) -> (Arc<Hub>, HubTasks) {
-        let approvals_cfg = ApprovalsConfig {
-            timeout: Duration::from_secs(cfg.hub.approval_timeout_secs),
-            handoff_max_bytes: cfg.hub.handoff_max_bytes,
-            handoff_max_lines: cfg.hub.handoff_max_lines,
-            held_input_max_bytes: cfg.hub.held_input_max_bytes,
-            min_review: Duration::from_millis(cfg.hub.min_review_ms),
-            ..ApprovalsConfig::default()
+        let danger = DangerConfig {
+            hub_port: cfg.bind_addr().map(|a| a.port()),
+            ..DangerConfig::default()
         };
+        Self::start_full(cfg, personas, host, danger, Box::new(NoStore))
+    }
+
+    /// Hub chạy thật (`main.rs`): `danger` mang cổng đang nghe, đường dẫn token UI, cấu hình, cơ sở dữ liệu.
+    pub fn start_full(
+        cfg: Config,
+        personas: PersonaBook,
+        host: String,
+        danger: DangerConfig,
+        store: Box<dyn ApprovalStore>,
+    ) -> (Arc<Hub>, HubTasks) {
+        let approvals_cfg = approvals_config(&cfg, danger);
         Self::start_with(
             cfg,
             personas,
             host,
             approvals_cfg,
-            Box::new(AlwaysAsk),
-            Box::new(NoStore),
+            Box::new(RulesPolicy::new()),
+            store,
         )
     }
 
@@ -220,6 +231,19 @@ impl Hub {
     fn lock_state(&self) -> MutexGuard<'_, TeamState> {
         // Poison chỉ khi một thread panic lúc giữ khóa; mỗi thao tác trên TeamState là đơn bước nên dữ liệu vẫn dùng được.
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// Tham số luồng duyệt lấy từ `[hub]` của cấu hình.
+pub fn approvals_config(cfg: &Config, danger: DangerConfig) -> ApprovalsConfig {
+    ApprovalsConfig {
+        timeout: Duration::from_secs(cfg.hub.approval_timeout_secs),
+        handoff_max_bytes: cfg.hub.handoff_max_bytes,
+        handoff_max_lines: cfg.hub.handoff_max_lines,
+        held_input_max_bytes: cfg.hub.held_input_max_bytes,
+        min_review: Duration::from_millis(cfg.hub.min_review_ms),
+        danger,
+        ..ApprovalsConfig::default()
     }
 }
 

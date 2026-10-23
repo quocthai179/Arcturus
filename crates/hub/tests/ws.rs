@@ -218,7 +218,7 @@ async fn requested_id(ws: &mut Ws) -> String {
 struct Countdown(Duration);
 
 impl Policy for Countdown {
-    fn decide(&self, _ctx: &ApprovalCtx<'_>) -> PolicyOutcome {
+    fn decide(&self, _ctx: &ApprovalCtx<'_>, _a: &hub::approvals::Assessment) -> PolicyOutcome {
         PolicyOutcome::AskUser {
             risk: Risk::Low,
             countdown: Some(self.0),

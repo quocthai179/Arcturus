@@ -33,7 +33,7 @@ Agent dùng chung như `code-reviewer`, `security-auditor`, `qa-engineer` lấy 
 
 ```bash
 git clone <url-repo-arcturus> arcturus && cd arcturus
-cp arcturus.example.toml arcturus.toml
+mkdir -p ~/.config/arcturus && cp arcturus.example.toml ~/.config/arcturus/arcturus.toml   # Windows: %APPDATA%\arcturus\
 chmod +x scripts/start-lanes.sh
 claude
 > /next-task T0

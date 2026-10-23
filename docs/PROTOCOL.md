@@ -86,7 +86,14 @@ Quy tắc hiển thị thẻ duyệt (quy tắc bất biến 3):
 - Ký tự ẩn/điều khiển/bidi/khoảng trắng lạ đã được thay bằng `⟨U+XXXX⟩` (chuỗi lặp `⟨U+XXXX×N⟩`); có
   `"hidden_chars"` trong `suspicions` thì hiện cảnh báo rõ ràng.
 - `danger_spans`: `[start, end)` theo **chỉ số ký tự Unicode** trong `command_normalized`. Cắt bằng
-  `Array.from(s).slice(start, end).join('')`, không dùng `String.prototype.slice`.
+  `Array.from(s).slice(start, end).join('')`, không dùng `String.prototype.slice`. Mỗi khoảng là chỗ khớp một luật vùng
+  khóa (T8); có thể rỗng kể cả khi `risk` là `critical` (chỗ khớp nằm trong nội dung đã cắt, hoặc luật không có vị trí).
+  Ví dụ dùng cho test tô sáng: `echo "🚀 thư mục" && rm -rf đầu-ra` → `[[20,33]]` (`rm -rf đầu-ra`; theo byte UTF-8 là 26, theo UTF-16 là 21).
+- `risk` do hub tính (T8), không tin agent: `critical` là vùng khóa (luôn hỏi người, không bao giờ tự duyệt, không đếm
+  ngược), `high` có cờ nghi ngờ hoặc không phân tích được, `low` chỉ đọc/test/build trong workspace. `reversible`
+  hiện chỉ `true` khi `risk` là `low`.
+- `suspicions` (thứ tự cố định): `hidden_chars` (ký tự ẩn), `subshell` (`$(…)`, `` `…` ``, `<(…)`), `eval` (`eval`,
+  `source`, `.`, `iex`), `encoded` (`base64 -d`, `xxd -r`, `printf '\x…'`…). Có cờ nào thì `risk` ít nhất là `high`.
 - `truncated: true` (chỉ Edit/Write/MultiEdit/NotebookEdit): nội dung trên thẻ đã bị cắt. UI bắt người dùng mở bản đầy đủ
   (`GET /approvals/{request_id}/input`) trước khi cho bấm Allow; hub cũng giữ nguyên mọi `allow` cho thẻ này tới khi bản
   đầy đủ đã được lấy (trả `feed` "Cần mở bản đầy đủ trước khi duyệt"). `deny` không cần.

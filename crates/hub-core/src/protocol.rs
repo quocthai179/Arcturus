@@ -95,7 +95,8 @@ pub struct ApprovalView {
     /// `run_in_background`, `timeout`), giá trị dạng JSON đã hiện ký tự ẩn. Chúng đổi cách lệnh chạy nên UI phải hiện rõ
     /// trên thẻ, tách khỏi lệnh (agent không giả được). Tool khác: rỗng (JSON đầy đủ đã nằm trong `command_*`).
     pub tool_options: BTreeMap<String, String>,
-    /// Sau chuẩn hóa: ký tự ẩn/điều khiển/bidi hiện thành `⟨U+XXXX⟩` (T8 thay bằng normalize đầy đủ).
+    /// Dạng hiển thị: ký tự ẩn/điều khiển/bidi/khoảng trắng lạ hiện thành `⟨U+XXXX⟩`, mọi ký tự khác giữ nguyên
+    /// (`hub_core::policy::normalize::display`). Dạng bỏ ký tự ẩn chỉ dùng nội bộ để so luật (T8).
     pub command_normalized: String,
     /// `[start, end)` theo chỉ số ký tự Unicode trong `command_normalized` (§3.4).
     pub danger_spans: Vec<(usize, usize)>,

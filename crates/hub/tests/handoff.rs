@@ -40,7 +40,7 @@ const WAIT: Duration = Duration::from_secs(5);
 struct AutoAllowCounting(Arc<Mutex<usize>>);
 
 impl Policy for AutoAllowCounting {
-    fn decide(&self, _ctx: &ApprovalCtx<'_>) -> PolicyOutcome {
+    fn decide(&self, _ctx: &ApprovalCtx<'_>, _a: &hub::approvals::Assessment) -> PolicyOutcome {
         *self.0.lock().unwrap() += 1;
         PolicyOutcome::AutoAllow {
             reason: "test".to_owned(),
@@ -329,10 +329,11 @@ async fn edit_tools_are_never_handed_off() {
             "PermissionRequest",
             "s1",
             "Write",
-            &json!({ "file_path": "/a", "content": "c".repeat(20_000) }),
+            &json!({ "file_path": "notes.txt", "content": "c".repeat(20_000) }),
         ))
         .await;
-    // AutoAllow của policy giả: thẻ thường, có cắt nội dung; không phải handoff.
+    // AutoAllow của policy giả (ghi trong workspace là Medium, được tự duyệt): thẻ thường, có cắt nội dung; không phải
+    // handoff.
     assert_eq!(
         res.pointer("/hookSpecificOutput/decision/behavior"),
         Some(&json!("allow"))

@@ -5,6 +5,7 @@
 pub mod config;
 pub mod hook;
 pub mod persona;
+pub mod policy;
 pub mod protocol;
 pub mod schema;
 pub mod state;
