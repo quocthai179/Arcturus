@@ -10,9 +10,11 @@ GET ws://127.0.0.1:<cổng>/ws
 Authorization: Bearer <token UI>        # hoặc ?token=<token UI> khi không đặt được header (webview)
 ```
 
-- **Token UI** khác token của hook (`ARCTURUS_TOKEN`). Hub sinh token UI mới mỗi lần khởi động và ghi vào
-  `<data_dir>/arcturus/ui-token` (Windows: `%APPDATA%\arcturus\ui-token`; đổi bằng `--ui-token-file`). App đọc file này
-  mỗi lần (kết nối lại sau khi hub khởi động lại thì phải đọc lại). Token hook bị từ chối ở `/ws` (`401`).
+- **Token UI** khác token của hook (`ARCTURUS_TOKEN`). Hub sinh token UI mới mỗi lần khởi động. Khi app tự khởi động hub
+  (`--ui-token-stdout`, T12), token chỉ đi qua pipe tới app rồi tới webview qua `invoke('hub_info')`, không có file. Hub
+  chạy riêng thì ghi `<data_dir>/arcturus/ui-token` (Windows: `%APPDATA%\arcturus\ui-token`; đổi bằng
+  `--ui-token-file`) và app đọc file này (kết nối lại sau khi hub khởi động lại thì phải đọc lại). Token hook bị từ chối
+  ở `/ws` (`401`).
 - `Host` phải là `127.0.0.1:<cổng>`, `localhost:<cổng>` hoặc `[::1]:<cổng>`. `Origin`, nếu có, phải là một trong
   `http://tauri.localhost`, `https://tauri.localhost`, `tauri://localhost`; Vite dev (`http://127.0.0.1:5173`,
   `http://localhost:5173`) chỉ được nhận khi hub là bản debug. Sai → `403`.

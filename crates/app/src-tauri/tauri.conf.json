@@ -10,16 +10,9 @@
     "beforeBuildCommand": "pnpm -C ../../ui build"
   },
   "app": {
-    "windows": [
-      {
-        "label": "main",
-        "title": "Arcturus",
-        "width": 420,
-        "height": 600
-      }
-    ],
+    "windows": [],
     "security": {
-      "csp": null
+      "csp": "default-src 'self'; connect-src 'self' ipc: http://ipc.localhost ws://127.0.0.1:* ws://localhost:*; style-src 'self' 'unsafe-inline'; font-src 'self' data:; img-src 'self' data:"
     }
   },
   "bundle": {

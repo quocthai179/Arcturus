@@ -26,7 +26,10 @@
 └──────────────────────────────────────────────────────────────────────────────┘
 ```
 
-Hub là daemon riêng. Đóng app thì hub vẫn chạy và vẫn giữ hàng đợi. App chỉ là client.
+Hub là daemon riêng; app chỉ là client. Đóng popup hay văn phòng thì app vẫn sống trong tray, hub vẫn chạy và giữ hàng
+đợi. Nếu chưa có hub, app khởi động hub làm tiến trình con (`--ui-token-stdout --exit-on-stdin-close`, T12): token UI chỉ
+app biết, nên khi app thoát (menu "Thoát") hay crash, hub con tắt êm và trả `{}` cho mọi yêu cầu đang chờ (Claude Code hỏi
+trong terminal). Hub người dùng tự khởi động thì app chỉ kết nối (đọc file token), thoát app không tắt hub đó.
 
 ## Luồng duyệt (PermissionRequest)
 
@@ -171,8 +174,8 @@ tài khoản người dùng (lệnh đã allow sẵn trong settings, hoặc ngư
 - Bash tool thừa hưởng biến môi trường của tiến trình `claude`, nên đọc được `ARCTURUS_TOKEN` (token của hook). Vì vậy
   UI dùng token riêng (D1).
 - File token UI (`<data_dir>/arcturus/ui-token`) cũng đọc được bởi agent như vậy. Giảm rủi ro (T5d · ARC-44):
-  `--ui-token-stdout` để app (T12) nhận token qua pipe, không có file trên đĩa (B1, đã có; mặc định hub vẫn ghi file
-  tới khi T12 dùng chế độ này); luật danger `arcturus_ui_token` đưa mọi lệnh chạm token hay WebSocket của hub về
+  `--ui-token-stdout` để app nhận token qua pipe, không có file trên đĩa (B1; app T12 dùng chế độ này khi tự khởi
+  động hub; hub chạy riêng vẫn ghi file); luật danger `arcturus_ui_token` đưa mọi lệnh chạm token hay WebSocket của hub về
   Critical (B2, đã có ở T8 · ARC-29, cùng luật `arcturus_state` cho file cấu hình và cơ sở dữ liệu của hub); sàn thời gian duyệt `min_review_ms` chặn tự duyệt ngay khi thẻ vừa được
   phát, áp cho mọi allow kể cả đếm ngược (B4, đã có).
 - Còn lại: agent đọc được bộ nhớ của tiến trình app/hub cùng tài khoản, hoặc chờ quá sàn thời gian rồi gửi `decide`,

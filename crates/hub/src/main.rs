@@ -53,6 +53,11 @@ struct Cli {
     /// sang stderr.
     #[arg(long, conflicts_with_all = ["record", "ui_token_file"])]
     ui_token_stdout: bool,
+
+    /// Tắt êm (như Ctrl-C) khi stdin đóng. Dành cho app khởi động hub làm tiến trình con (T12): app thoát hay crash thì
+    /// pipe đóng, hub trả `{}` cho mọi yêu cầu đang chờ rồi thoát, không mồ côi giữ cổng với token UI không ai biết.
+    #[arg(long, conflicts_with = "record")]
+    exit_on_stdin_close: bool,
 }
 
 #[tokio::main]
@@ -69,6 +74,10 @@ async fn main() -> anyhow::Result<()> {
             EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info")),
         )
         .with_writer(writer)
+        // Không ghi được log (stderr/stdout gãy: app khởi động hub đã chết, terminal đã đóng) thì bỏ dòng log đó.
+        // Mặc định tracing-subscriber báo lỗi bằng `eprintln!`, mà `eprintln!` panic khi stderr gãy: panic giết task đang
+        // ghi log (từng giết future tắt hub, để yêu cầu đang giữ treo tới hết giờ thay vì nhận `{}`).
+        .log_internal_errors(false)
         .init();
 
     let token = auth::token_from_env(std::env::var(auth::TOKEN_ENV).ok())?;
@@ -180,8 +189,14 @@ async fn main() -> anyhow::Result<()> {
             db = %db_path.display(),
             "hub đang chạy"
         );
+        let watch_stdin = cli.exit_on_stdin_close;
         server::serve_until(listener, app, async move {
-            server::ctrl_c().await;
+            tokio::select! {
+                () = server::ctrl_c() => {}
+                () = server::stdin_closed(), if watch_stdin => {
+                    tracing::info!("stdin đã đóng (app thoát): tắt hub");
+                }
+            }
             hub.shutdown();
             ws_handle.shutdown();
         })

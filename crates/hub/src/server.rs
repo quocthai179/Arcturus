@@ -52,6 +52,19 @@ pub async fn serve_until(
 }
 
 /// Chờ Ctrl-C. Không cài được handler thì chờ mãi (tắt bằng cách giết process).
+/// Trả về khi stdin đóng (EOF hoặc lỗi đọc); dữ liệu đọc được bị bỏ (`--exit-on-stdin-close`).
+pub async fn stdin_closed() {
+    use tokio::io::AsyncReadExt;
+    let mut stdin = tokio::io::stdin();
+    let mut buf = [0u8; 256];
+    loop {
+        match stdin.read(&mut buf).await {
+            Ok(0) | Err(_) => return,
+            Ok(_) => {}
+        }
+    }
+}
+
 pub async fn ctrl_c() {
     if tokio::signal::ctrl_c().await.is_err() {
         std::future::pending::<()>().await;
