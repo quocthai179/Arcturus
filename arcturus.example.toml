@@ -1,4 +1,6 @@
-# Chép thành arcturus.toml (đã gitignore). Gán tên, vai trò, màu cho từng phiên theo đường dẫn làm việc.
+# Chép thành <config_dir>/arcturus/arcturus.toml (Linux ~/.config, macOS ~/Library/Application Support, Windows
+# %APPDATA%), ngoài thư mục làm việc của agent; hoặc chỉ định bằng `hub --config <file>`. Gán tên, vai trò, màu cho
+# từng phiên theo đường dẫn làm việc.
 # Phiên không khớp mẫu nào sẽ được đặt tên tự động.
 
 [hub]

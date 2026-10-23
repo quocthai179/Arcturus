@@ -329,7 +329,11 @@ async fn hidden_chars_flagged_on_card() {
 struct Countdown;
 
 impl Policy for Countdown {
-    fn decide(&self, _ctx: &hub::approvals::ApprovalCtx<'_>) -> PolicyOutcome {
+    fn decide(
+        &self,
+        _ctx: &hub::approvals::ApprovalCtx<'_>,
+        _a: &hub::approvals::Assessment,
+    ) -> PolicyOutcome {
         PolicyOutcome::AskUser {
             risk: Risk::Low,
             countdown: Some(Duration::from_secs(30)),

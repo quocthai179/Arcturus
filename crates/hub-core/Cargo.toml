@@ -8,6 +8,8 @@ publish.workspace = true
 
 [dependencies]
 globset = "0.4.20"
+regex = "1.13.1"
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 thiserror = "2.0.21"
@@ -15,6 +17,7 @@ time = { version = "0.3.55", features = ["serde", "formatting", "parsing", "macr
 toml = "1.1.8"
 tracing = "0.1.44"
 ulid = "3.0.0"
+unicode-general-category = "1.1.0"
 
 [lints]
 workspace = true

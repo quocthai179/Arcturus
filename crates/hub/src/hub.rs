@@ -12,13 +12,17 @@ use hub_core::config::Config;
 use hub_core::hook::{self, HookInput};
 use hub_core::persona::PersonaBook;
 use hub_core::protocol::{ServerMsg, TeamView};
+use hub_core::schema::Event;
 use hub_core::state::TeamState;
+use hub_core::store::EventRing;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
 
+use hub_core::policy::danger::DangerConfig;
+
 use crate::approvals::{
-    AlwaysAsk, ApprovalStore, Approvals, ApprovalsConfig, NoStore, PermissionOutcome, Policy,
+    ApprovalStore, Approvals, ApprovalsConfig, NoStore, PermissionOutcome, Policy, RulesPolicy,
 };
 
 /// Sức chứa kênh broadcast cho UI (§4). Client chậm hơn thì nhận `Snapshot` mới (T5b).
@@ -37,6 +41,8 @@ pub struct Hub {
     events: mpsc::Sender<HookInput>,
     /// Thời điểm cần `tick` sớm nhất (`TeamState::next_wakeup`); `None` thì task tick ngủ, không hẹn giờ.
     wake: watch::Sender<Option<OffsetDateTime>>,
+    /// Sự kiện gần nhất trong RAM (tối đa 2.000 / 2 MiB, T6). Khóa riêng, không giữ cùng khóa nào khác.
+    recent: Mutex<EventRing>,
     /// Khóa ngoài cùng cho thay đổi cờ đội (`set_paused`, `set_focus`); lấy trước khóa của `Approvals` và `state`.
     team: Mutex<()>,
 }
@@ -48,23 +54,33 @@ pub struct HubTasks {
 }
 
 impl Hub {
-    /// Hub chạy thật: policy luôn hỏi người (T8 thay), chưa có store (T6 thay).
+    /// Hub với policy thật ([`RulesPolicy`]: danger list, chưa có batch/trust nên mọi yêu cầu hỏi người) và không có
+    /// store (test; mọi AutoAllow rơi về hỏi người). Luật danger biết cổng trong `cfg.hub.bind`.
     pub fn start(cfg: Config, personas: PersonaBook, host: String) -> (Arc<Hub>, HubTasks) {
-        let approvals_cfg = ApprovalsConfig {
-            timeout: Duration::from_secs(cfg.hub.approval_timeout_secs),
-            handoff_max_bytes: cfg.hub.handoff_max_bytes,
-            handoff_max_lines: cfg.hub.handoff_max_lines,
-            held_input_max_bytes: cfg.hub.held_input_max_bytes,
-            min_review: Duration::from_millis(cfg.hub.min_review_ms),
-            ..ApprovalsConfig::default()
+        let danger = DangerConfig {
+            hub_port: cfg.bind_addr().map(|a| a.port()),
+            ..DangerConfig::default()
         };
+        Self::start_full(cfg, personas, host, danger, Box::new(NoStore))
+    }
+
+    /// Hub chạy thật (`main.rs`): `danger` mang cổng đang nghe, đường dẫn token UI, cấu hình, cơ sở dữ liệu; `store`
+    /// là writer SQLite (`hub_core::store::StoreHandle`).
+    pub fn start_full(
+        cfg: Config,
+        personas: PersonaBook,
+        host: String,
+        danger: DangerConfig,
+        store: Box<dyn ApprovalStore>,
+    ) -> (Arc<Hub>, HubTasks) {
+        let approvals_cfg = approvals_config(&cfg, danger);
         Self::start_with(
             cfg,
             personas,
             host,
             approvals_cfg,
-            Box::new(AlwaysAsk),
-            Box::new(NoStore),
+            Box::new(RulesPolicy::new()),
+            store,
         )
     }
 
@@ -89,6 +105,7 @@ impl Hub {
             tx,
             events,
             wake,
+            recent: Mutex::new(EventRing::default()),
             team: Mutex::new(()),
         });
         let tasks = HubTasks {
@@ -114,6 +131,7 @@ impl Hub {
     pub fn ingest(&self, input: &HookInput) {
         let now = OffsetDateTime::now_utc();
         let ev = hook::to_event(input, &self.host, now);
+        self.remember(&ev, &input.raw);
         self.approvals.on_event(&ev, input);
         let msgs = self.lock_state().apply(&ev, &self.personas, now);
         self.publish(msgs);
@@ -125,6 +143,8 @@ impl Hub {
     pub async fn permission(&self, input: HookInput) -> PermissionOutcome {
         let now = OffsetDateTime::now_utc();
         let ev = hook::to_event(&input, &self.host, now);
+        // Ghi trước khi giữ yêu cầu: `request` nhả JSON gốc ngay để không giữ nó suốt 110 s.
+        self.remember(&ev, &input.raw);
         let (msgs, name) = {
             let mut st = self.lock_state();
             let msgs = st.apply(&ev, &self.personas, now);
@@ -146,6 +166,23 @@ impl Hub {
         };
         self.publish(msgs);
         outcome
+    }
+
+    /// Lưu sự kiện vào store (không chặn, kênh đầy thì bỏ) và ring buffer.
+    fn remember(&self, ev: &Event, raw: &serde_json::Value) {
+        self.approvals.record_event(ev, raw);
+        self.recent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .push(ev.clone());
+    }
+
+    /// `n` sự kiện gần nhất trong RAM, cũ trước (T19 standup, gỡ lỗi).
+    pub fn recent_events(&self, n: usize) -> Vec<Event> {
+        self.recent
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .recent(n)
     }
 
     /// `TeamPause` / `TeamResume` (T5b nối với WebSocket): cờ duy nhất nằm trong `Approvals` (D3).
@@ -220,6 +257,19 @@ impl Hub {
     fn lock_state(&self) -> MutexGuard<'_, TeamState> {
         // Poison chỉ khi một thread panic lúc giữ khóa; mỗi thao tác trên TeamState là đơn bước nên dữ liệu vẫn dùng được.
         self.state.lock().unwrap_or_else(|e| e.into_inner())
+    }
+}
+
+/// Tham số luồng duyệt lấy từ `[hub]` của cấu hình.
+pub fn approvals_config(cfg: &Config, danger: DangerConfig) -> ApprovalsConfig {
+    ApprovalsConfig {
+        timeout: Duration::from_secs(cfg.hub.approval_timeout_secs),
+        handoff_max_bytes: cfg.hub.handoff_max_bytes,
+        handoff_max_lines: cfg.hub.handoff_max_lines,
+        held_input_max_bytes: cfg.hub.held_input_max_bytes,
+        min_review: Duration::from_millis(cfg.hub.min_review_ms),
+        danger,
+        ..ApprovalsConfig::default()
     }
 }
 

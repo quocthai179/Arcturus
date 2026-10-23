@@ -126,12 +126,15 @@ trường nào có nhiều giá trị thì liệt kê các giá trị hợp lệ
 
 ## Bảng SQLite
 
-DDL chính xác: `docs/PLAN.md` §3.5. Migration đánh số bằng `PRAGMA user_version`.
+DDL chính xác: `docs/PLAN.md` §3.5. Migration đánh số bằng `PRAGMA user_version`. File `<data_dir>/arcturus/arcturus.db`
+(`hub --db`), WAL. Một thread ghi duy nhất (`hub_core::store`), thứ tự ghi đúng thứ tự gửi; sự kiện có thể bị bỏ khi
+kênh đầy, bản ghi duyệt thì không; AutoAllow chỉ trả `allow` sau khi bản ghi đã commit. Chi tiết: `docs/PLAN.md` T6.
 
 Migration v1:
 - `events(id, ts, session_id, kind, event_json, raw_json)` — append-only, xóa sau `event_ttl_days` (mặc định 30)
 - `approvals(request_id, session_id, agent_id, tool, command_original, command_normalized, risk, group_key, status,
-  decided_by, created_at, decided_at, latency_ms, channel)` — `status`: `pending | allowed | denied | timed_out | cancelled`
+  decided_by, created_at, decided_at, latency_ms, channel)` — `status`: `pending | allowed | denied | timed_out | cancelled |
+  handed_off`; `command_*` là đúng phần người duyệt thấy trên thẻ
 
 Migration v2 (T9, T10):
 - `batch_rules(group_key, opened_at, expires_at)`
@@ -170,7 +173,7 @@ tài khoản người dùng (lệnh đã allow sẵn trong settings, hoặc ngư
 - File token UI (`<data_dir>/arcturus/ui-token`) cũng đọc được bởi agent như vậy. Giảm rủi ro (T5d · ARC-44):
   `--ui-token-stdout` để app (T12) nhận token qua pipe, không có file trên đĩa (B1, đã có; mặc định hub vẫn ghi file
   tới khi T12 dùng chế độ này); luật danger `arcturus_ui_token` đưa mọi lệnh chạm token hay WebSocket của hub về
-  Critical (B2, **dự kiến ở T8, chưa có**); sàn thời gian duyệt `min_review_ms` chặn tự duyệt ngay khi thẻ vừa được
+  Critical (B2, đã có ở T8 · ARC-29, cùng luật `arcturus_state` cho file cấu hình và cơ sở dữ liệu của hub); sàn thời gian duyệt `min_review_ms` chặn tự duyệt ngay khi thẻ vừa được
   phát, áp cho mọi allow kể cả đếm ngược (B4, đã có).
 - Còn lại: agent đọc được bộ nhớ của tiến trình app/hub cùng tài khoản, hoặc chờ quá sàn thời gian rồi gửi `decide`,
   vẫn có thể tự duyệt. Lớp bảo vệ thật là deny rule trong settings của Claude Code (hook allow không vượt được deny) và

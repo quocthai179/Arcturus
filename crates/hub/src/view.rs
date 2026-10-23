@@ -5,11 +5,17 @@
 //!   `new_string` của từng edit, giữ nguyên mảng và `replace_all`); bản đầy đủ lấy qua `GET /approvals/{id}/input`
 //!   (T5b). Tool khác (kể cả MCP có trường `content`) hiện đầy đủ.
 //! - `command_normalized`: ký tự vô hình hoặc giả khoảng trắng ([`is_hidden`]) hiện thành `⟨U+XXXX⟩` (chuỗi lặp:
-//!   `⟨U+XXXX×N⟩`). `Suspicion::HiddenChars` dựa trên mọi chuỗi trong `tool_input` gốc, không chỉ phần hiển thị.
-//!   T8 thay bằng normalize đầy đủ theo thuộc tính Unicode (subshell, eval, encoded, `danger_spans`, `risk`).
+//!   `⟨U+XXXX×N⟩`). Người duyệt thấy cả ký tự ẩn: dạng bỏ ký tự ẩn chỉ dùng nội bộ để so luật (T8).
+//! - `danger_spans`, `suspicions`, `risk`, `reversible` lấy từ đánh giá của policy (`hub_core::policy::assess`).
+//!   `danger_spans` là khoảng chỉ số ký tự Unicode trong `command_normalized` (§3.4); chỗ khớp nằm trong phần nội dung
+//!   đã cắt thì không có span (rủi ro vẫn là Critical).
 
 use std::collections::BTreeMap;
 
+use hub_core::policy::danger::{is_shell_tool, HitSpan};
+use hub_core::policy::normalize::{display, quick_suspicions, value_has_hidden, Display};
+pub use hub_core::policy::normalize::{escape_hidden, is_hidden};
+use hub_core::policy::Assessment;
 use hub_core::protocol::{ApprovalView, HandoffView, Suspicion};
 use serde_json::{Map, Value};
 use time::OffsetDateTime;
@@ -28,10 +34,16 @@ const TRUNCATED_TOOLS: [&str; 4] = ["Edit", "Write", "MultiEdit", "NotebookEdit"
 /// Trường nội dung bị cắt. Các trường khác (đường dẫn, cờ) giữ nguyên.
 const CONTENT_FIELDS: [&str; 4] = ["content", "old_string", "new_string", "new_source"];
 
-pub fn approval_view(p: &PendingApproval, agent_name: &str) -> ApprovalView {
+pub fn approval_view(p: &PendingApproval, agent_name: &str, a: &Assessment) -> ApprovalView {
     let (command_original, truncated) = command_text(&p.tool, &p.tool_input);
-    let (command_normalized, shown_hidden) = escape_hidden(&command_original);
-    let hidden = shown_hidden || value_has_hidden(&p.tool_input);
+    let shown = display(&command_original);
+    let danger_spans = danger_spans(&p.tool, &p.tool_input, &command_original, &shown, a);
+    let mut suspicions = a.suspicions.clone();
+    if (shown.found || value_has_hidden(&p.tool_input))
+        && !suspicions.contains(&Suspicion::HiddenChars)
+    {
+        suspicions.insert(0, Suspicion::HiddenChars);
+    }
     ApprovalView {
         request_id: p.request_id.clone(),
         agent_id: p.agent_id.clone(),
@@ -39,16 +51,12 @@ pub fn approval_view(p: &PendingApproval, agent_name: &str) -> ApprovalView {
         tool: p.tool.clone(),
         tool_options: tool_options(&p.tool, &p.tool_input),
         command_original,
-        command_normalized,
-        danger_spans: Vec::new(),
-        suspicions: if hidden {
-            vec![Suspicion::HiddenChars]
-        } else {
-            Vec::new()
-        },
+        command_normalized: shown.text,
+        danger_spans,
+        suspicions,
         truncated,
         risk: p.risk,
-        reversible: false,
+        reversible: a.reversible,
         group_key: p.tool.clone(),
         created_at: p.created_at,
         deadline_at: p.deadline_at,
@@ -56,6 +64,48 @@ pub fn approval_view(p: &PendingApproval, agent_name: &str) -> ApprovalView {
             .countdown
             .map(|c| u64::try_from(c.as_millis()).unwrap_or(u64::MAX)),
     }
+}
+
+/// Vị trí tô sáng trên thẻ cho mọi luật danger đã khớp, theo chỉ số ký tự trong `command_normalized`, sắp xếp, không
+/// trùng.
+fn danger_spans(
+    tool: &str,
+    tool_input: &Value,
+    card: &str,
+    shown: &Display,
+    a: &Assessment,
+) -> Vec<(usize, usize)> {
+    // Lệnh shell hiện nguyên văn: span theo lệnh dùng thẳng. Tool khác hiện JSON: tìm chuỗi đã mã hóa JSON.
+    let plain_command =
+        is_shell_tool(tool) && tool_input.get("command").is_some_and(Value::is_string);
+    let mut out = Vec::new();
+    for span in a.hits.iter().flat_map(|h| &h.spans) {
+        match span {
+            HitSpan::Command(r) if plain_command => out.extend(shown.span(r.clone())),
+            HitSpan::Command(_) => {}
+            HitSpan::Text(t) if !t.is_empty() => {
+                let needle = if plain_command {
+                    t.clone()
+                } else {
+                    let enc = serde_json::to_string(t).unwrap_or_default();
+                    enc.get(1..enc.len().saturating_sub(1))
+                        .unwrap_or_default()
+                        .to_owned()
+                };
+                if needle.is_empty() {
+                    continue;
+                }
+                for (byte, _) in card.match_indices(&needle).take(8) {
+                    let start = card[..byte].chars().count();
+                    out.extend(shown.span(start..start + needle.chars().count()));
+                }
+            }
+            HitSpan::Text(_) => {}
+        }
+    }
+    out.sort_unstable();
+    out.dedup();
+    out
 }
 
 /// Nội dung thẻ sẽ hiện đầy đủ (không cắt) cho tool này, để đo ngưỡng "quá dài". `None` với Edit/Write/MultiEdit/
@@ -113,7 +163,11 @@ pub fn handoff_view(
             text.chars().skip(total - PREVIEW_CHARS).collect(),
         )
     };
-    let hidden = text.chars().any(is_hidden) || value_has_hidden(&p.tool_input);
+    // Cờ trên lệnh ĐẦY ĐỦ, tính thẳng trên chữ (lệnh có thể tới 1 MB: không tách từ).
+    let mut suspicions = quick_suspicions(text);
+    if value_has_hidden(&p.tool_input) && !suspicions.contains(&Suspicion::HiddenChars) {
+        suspicions.insert(0, Suspicion::HiddenChars);
+    }
     let who = if agent_name.is_empty() {
         "agent"
     } else {
@@ -128,11 +182,7 @@ pub fn handoff_view(
         lines: text.lines().count(),
         preview_head: escape_hidden(&head).0,
         preview_tail: escape_hidden(&tail).0,
-        suspicions: if hidden {
-            vec![Suspicion::HiddenChars]
-        } else {
-            Vec::new()
-        },
+        suspicions,
         tool_options: tool_options(&p.tool, &p.tool_input),
         message: format!(
             "Lệnh quá dài để duyệt ở đây — hãy mở terminal của {who} để xem đủ và quyết định."
@@ -144,7 +194,7 @@ pub fn handoff_view(
 /// Bash: các trường ngoài `command`/`description` (đổi cách lệnh chạy: `dangerouslyDisableSandbox`, `run_in_background`,
 /// `timeout`…), giá trị JSON đã hiện ký tự ẩn. Tool khác: rỗng. Khóa có ký tự ẩn cũng được escape.
 pub fn tool_options(tool: &str, tool_input: &Value) -> BTreeMap<String, String> {
-    if tool != "Bash" {
+    if !is_shell_tool(tool) {
         return BTreeMap::new();
     }
     // `command` không phải chuỗi thì cả `tool_input` đã hiện dạng JSON trong `command_*`.
@@ -164,7 +214,7 @@ pub fn tool_options(tool: &str, tool_input: &Value) -> BTreeMap<String, String> 
 
 /// `tool_input` dạng chuỗi cho thẻ duyệt, và có cắt trường nội dung nào không.
 pub fn command_text(tool: &str, tool_input: &Value) -> (String, bool) {
-    if tool == "Bash" {
+    if is_shell_tool(tool) {
         if let Some(cmd) = tool_input.get("command").and_then(Value::as_str) {
             return (cmd.to_owned(), false);
         }
@@ -199,105 +249,97 @@ fn truncate_fields(obj: &mut Map<String, Value>, truncated: &mut bool) {
     }
 }
 
-/// Có ký tự ẩn trong bất kỳ khóa hay chuỗi nào của `v` (trước khi serde đổi ký tự điều khiển thành `\uXXXX`).
-fn value_has_hidden(v: &Value) -> bool {
-    match v {
-        Value::String(s) => s.chars().any(is_hidden),
-        Value::Array(a) => a.iter().any(value_has_hidden),
-        Value::Object(o) => o
-            .iter()
-            .any(|(k, v)| k.chars().any(is_hidden) || value_has_hidden(v)),
-        _ => false,
-    }
-}
-
-/// Thay ký tự ẩn bằng `⟨U+XXXX⟩`, chuỗi lặp cùng ký tự thành `⟨U+XXXX×N⟩` (không phình gấp 12 lần). Trả `true`
-/// nếu có thay.
-pub fn escape_hidden(s: &str) -> (String, bool) {
-    let mut out = String::with_capacity(s.len());
-    let mut found = false;
-    let mut chars = s.chars().peekable();
-    while let Some(c) = chars.next() {
-        if !is_hidden(c) {
-            out.push(c);
-            continue;
-        }
-        found = true;
-        let mut run = 1usize;
-        while chars.next_if_eq(&c).is_some() {
-            run += 1;
-        }
-        if run == 1 {
-            out.push_str(&format!("⟨U+{:04X}⟩", u32::from(c)));
-        } else {
-            out.push_str(&format!("⟨U+{:04X}×{run}⟩", u32::from(c)));
-        }
-    }
-    (out, found)
-}
-
-/// Ký tự không hiện ra (hoặc trông như khoảng trắng nhưng shell không tách từ) trên thẻ duyệt.
-///
-/// Gồm: Cc (trừ `\n`, `\t`); toàn bộ Default_Ignorable_Code_Point; các Cf khác; Zl/Zp; Co (vùng riêng); khoảng trắng
-/// không phải ASCII (Zs trừ U+0020) và U+2800. Chưa gồm Cn (chưa gán): cần bảng Unicode, để T8.
-pub fn is_hidden(c: char) -> bool {
-    matches!(
-        c,
-        '\u{0000}'..='\u{0008}'
-            | '\u{000B}'..='\u{001F}'
-            | '\u{007F}'..='\u{009F}'
-            // Default_Ignorable_Code_Point (DerivedCoreProperties)
-            | '\u{00AD}'
-            | '\u{034F}'
-            | '\u{061C}'
-            | '\u{115F}'..='\u{1160}'
-            | '\u{17B4}'..='\u{17B5}'
-            | '\u{180B}'..='\u{180F}'
-            | '\u{200B}'..='\u{200F}'
-            | '\u{202A}'..='\u{202E}'
-            | '\u{2060}'..='\u{206F}'
-            | '\u{3164}'
-            | '\u{FE00}'..='\u{FE0F}'
-            | '\u{FEFF}'
-            | '\u{FFA0}'
-            | '\u{FFF0}'..='\u{FFF8}'
-            | '\u{1BCA0}'..='\u{1BCA3}'
-            | '\u{1D173}'..='\u{1D17A}'
-            | '\u{E0000}'..='\u{E0FFF}'
-            // Cf khác (Arabic/Syriac format, interlinear annotation, Egyptian hieroglyph format, Kaithi/Brahmi)
-            | '\u{0600}'..='\u{0605}'
-            | '\u{06DD}'
-            | '\u{070F}'
-            | '\u{0890}'..='\u{0891}'
-            | '\u{08E2}'
-            | '\u{FFF9}'..='\u{FFFB}'
-            | '\u{110BD}'
-            | '\u{110CD}'
-            | '\u{13430}'..='\u{1343F}'
-            // Zl, Zp
-            | '\u{2028}'..='\u{2029}'
-            // Co
-            | '\u{E000}'..='\u{F8FF}'
-            | '\u{F0000}'..='\u{FFFFD}'
-            | '\u{100000}'..='\u{10FFFD}'
-            // Zs ngoài U+0020, và braille blank
-            | '\u{00A0}'
-            | '\u{1680}'
-            | '\u{2000}'..='\u{200A}'
-            | '\u{202F}'
-            | '\u{205F}'
-            | '\u{3000}'
-            | '\u{2800}'
-    )
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
+    use hub_core::policy::danger::{DangerConfig, DangerRules};
+    use hub_core::policy::{assess, ApprovalCtx};
     use hub_core::schema::Risk;
     use serde_json::json;
     use std::time::Duration;
     use time::macros::datetime;
+
+    fn view_of(p: &PendingApproval, agent_name: &str) -> ApprovalView {
+        let rules = DangerRules::new(&DangerConfig {
+            hub_port: Some(7878),
+            ..DangerConfig::default()
+        });
+        let a = assess(
+            &ApprovalCtx {
+                agent_id: &p.agent_id,
+                tool: &p.tool,
+                tool_input: &p.tool_input,
+                cwd: &p.cwd,
+            },
+            &rules,
+        );
+        // Như luồng thật với policy hỏi người: risk của yêu cầu là risk đã đánh giá.
+        let mut p = p.clone();
+        p.risk = a.risk;
+        approval_view(&p, agent_name, &a)
+    }
+
+    fn span_text(v: &ApprovalView) -> Vec<String> {
+        v.danger_spans
+            .iter()
+            .map(|&(s, e)| v.command_normalized.chars().skip(s).take(e - s).collect())
+            .collect()
+    }
+
+    #[test]
+    fn danger_spans_are_char_indices_with_non_ascii() {
+        // Chuỗi dùng lại ở test tô sáng phía UI (T12).
+        let cmd = "echo \"🚀 thư mục\" && rm -rf đầu-ra";
+        let v = view_of(&pending("Bash", json!({ "command": cmd })), "K");
+        assert_eq!(v.risk, Risk::Critical);
+        assert!(!v.reversible);
+        let start = cmd.chars().position(|c| c == 'r').unwrap();
+        assert_eq!(
+            v.danger_spans,
+            vec![(start, start + "rm -rf đầu-ra".chars().count())]
+        );
+        assert_eq!(span_text(&v), vec!["rm -rf đầu-ra"]);
+        // Byte và UTF-16 lệch với chỉ số ký tự ở chuỗi này.
+        assert_ne!(cmd.find("rm").unwrap(), start);
+        assert_ne!(cmd[..cmd.find("rm").unwrap()].encode_utf16().count(), start);
+    }
+
+    #[test]
+    fn danger_span_covers_hidden_marker() {
+        let v = view_of(
+            &pending("Bash", json!({ "command": "ls && r\u{200B}m -rf x" })),
+            "K",
+        );
+        assert_eq!(v.command_normalized, "ls && r⟨U+200B⟩m -rf x");
+        assert_eq!(span_text(&v), vec!["r⟨U+200B⟩m -rf x"]);
+        assert_eq!(v.suspicions, vec![Suspicion::HiddenChars]);
+    }
+
+    #[test]
+    fn danger_span_in_json_card() {
+        let v = view_of(
+            &pending(
+                "Write",
+                json!({ "file_path": "C:\\Windows\\x.txt", "content": "a" }),
+            ),
+            "K",
+        );
+        assert_eq!(v.risk, Risk::Critical);
+        assert_eq!(span_text(&v), vec!["C:\\\\Windows\\\\x.txt"]);
+        let v = view_of(
+            &pending("Read", json!({ "file_path": "D:/code/.env" })),
+            "K",
+        );
+        assert_eq!(span_text(&v), vec!["D:/code/.env"]);
+        // Không khớp luật: không có span, risk theo phân loại.
+        let v = view_of(
+            &pending("Read", json!({ "file_path": "D:/code/a.rs" })),
+            "K",
+        );
+        assert!(v.danger_spans.is_empty());
+        assert_eq!(v.risk, Risk::Low);
+        assert!(v.reversible);
+    }
 
     fn pending(tool: &str, input: Value) -> PendingApproval {
         PendingApproval {
@@ -322,7 +364,7 @@ mod tests {
             "dangerouslyDisableSandbox": true, "run_in_background": true, "timeout": 600000,
             "x\u{200B}": "a\u{202E}b",
         });
-        let v = approval_view(&pending("Bash", input.clone()), "K");
+        let v = view_of(&pending("Bash", input.clone()), "K");
         assert_eq!(v.command_normalized, "ls");
         assert_eq!(
             v.tool_options,
@@ -343,7 +385,7 @@ mod tests {
         );
         assert_eq!(h.tool_options.len(), 4);
         // Chỉ `command` + `description`: không có tùy chọn; tool khác: rỗng (JSON đầy đủ đã hiện).
-        assert!(approval_view(
+        assert!(view_of(
             &pending("Bash", json!({ "command": "ls", "description": "d" })),
             "K"
         )
@@ -356,7 +398,7 @@ mod tests {
     #[test]
     fn bash_command_is_never_truncated() {
         let long = format!("echo {}", "x".repeat(10_000));
-        let v = approval_view(
+        let v = view_of(
             &pending("Bash", json!({ "command": long, "description": "d" })),
             "Khoa",
         );
@@ -430,7 +472,7 @@ mod tests {
     #[test]
     fn hidden_chars_escaped_and_flagged() {
         let cmd = "echo safe\u{202E}fdp.exe\u{200B} && ls\tx\nnext";
-        let v = approval_view(&pending("Bash", json!({ "command": cmd })), "Khoa");
+        let v = view_of(&pending("Bash", json!({ "command": cmd })), "Khoa");
         assert_eq!(v.command_original, cmd, "bản gốc giữ nguyên");
         assert_eq!(
             v.command_normalized,
@@ -523,7 +565,7 @@ mod tests {
     #[test]
     fn hidden_chars_in_json_tools_are_flagged() {
         // Serde đổi ký tự điều khiển thành `\u001b` (ASCII) trong bản hiển thị, nhưng vẫn phải gắn cờ (finding 7).
-        let v = approval_view(
+        let v = view_of(
             &pending(
                 "Write",
                 json!({ "file_path": "/a", "content": "x\u{1b}[2Jy" }),
@@ -533,9 +575,9 @@ mod tests {
         assert!(!v.command_normalized.contains('\u{1b}'));
         assert_eq!(v.suspicions, vec![Suspicion::HiddenChars]);
         // Ký tự ẩn trong khóa JSON cũng tính.
-        let v = approval_view(&pending("mcp__x", json!({ "pa\u{200B}th": "/a" })), "K");
+        let v = view_of(&pending("mcp__x", json!({ "pa\u{200B}th": "/a" })), "K");
         assert_eq!(v.suspicions, vec![Suspicion::HiddenChars]);
-        let v = approval_view(&pending("Read", json!({ "file_path": "/a" })), "K");
+        let v = view_of(&pending("Read", json!({ "file_path": "/a" })), "K");
         assert!(v.suspicions.is_empty());
     }
 
@@ -602,6 +644,6 @@ mod tests {
     fn countdown_in_millis() {
         let mut p = pending("Bash", json!({ "command": "ls" }));
         p.countdown = Some(Duration::from_secs(5));
-        assert_eq!(approval_view(&p, "K").countdown_ms, Some(5000));
+        assert_eq!(view_of(&p, "K").countdown_ms, Some(5000));
     }
 }

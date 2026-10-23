@@ -6,7 +6,7 @@ Tài liệu cho người (bạn, trưởng nhóm). Claude đọc CLAUDE.md; bạ
 
 ```bash
 git clone <url-repo-arcturus> arcturus && cd arcturus
-cp arcturus.example.toml arcturus.toml   # gán persona cho từng làn (đã gitignore)
+mkdir -p ~/.config/arcturus && cp arcturus.example.toml ~/.config/arcturus/arcturus.toml   # persona từng làn; Windows: %APPDATA%\arcturus\
 claude            # chạy một lần để chấp nhận workspace trust
 ```
 

@@ -784,6 +784,29 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 - `full_channel_drops_events_never_approvals`
 - `survives_restart` (đóng, mở lại, dữ liệu còn)
 
+**Đã làm ở T6** (lệch so với trên, cần người duyệt khi review PR)
+- `hub_core::store`: `Store` (chủ thread ghi, `close` ghi hết rồi dừng), `StoreHandle` (clone được, không bao giờ chặn),
+  `StoreReader` (kết nối chỉ đọc, mở khi cần), `EventRing`. Một kênh duy nhất giữ thứ tự ghi (`allowed` rồi `cancelled` của
+  cùng id); thread ghi gom tới 256 lệnh mỗi transaction; lượt lỗi thì thử từng lệnh riêng.
+- Kênh không giới hạn cứng cho `approvals` (đã bị chặn bởi hàng đợi duyệt: tối đa 64 đang giữ); sự kiện bị bỏ khi đã có
+  1.024 sự kiện **hoặc** 4 MiB đang chờ (đếm số bị bỏ, warn lúc bắt đầu bỏ, info lúc thông lại).
+- `ApprovalStore` (trait của hub) thêm `record_event`; `ApprovalRecord`/`ApprovalStatus` chuyển sang `hub_core::store`;
+  `ApprovalRecord.detail` (bản ghi đầu của một id) mang phần thẻ người duyệt đã thấy: `command_original`/`command_normalized`
+  của `ApprovalView` (nội dung Edit/Write đã cắt), với lệnh trả về terminal là đầu + cuối lệnh. Xác nhận cho AutoAllow
+  gửi sau commit.
+- `latency_ms` = `decided_at − created_at` (tính ở thread ghi từ `created_at` đã lưu); `channel`: `ws` (người, đếm
+  ngược), `policy`, NULL (hết giờ, hủy). `risk` của dòng `handed_off` là đánh giá thật của lệnh (hub vẫn không quyết định).
+- Thời gian lưu UTC `YYYY-MM-DDTHH:MM:SS.mmmZ` (độ dài cố định: so chuỗi đúng thứ tự). `raw_json` chỉ lưu khi JSON hook
+  gốc ≤ 256 KiB (đo trước không cấp phát), lớn hơn thì NULL; `event_json` luôn có.
+- `PRAGMA cache_size=-512` mỗi kết nối, `busy_timeout` 5 s; Unix: thư mục 0700, file 0600 (nhật ký có lệnh, đường dẫn).
+  Cơ sở dữ liệu phiên bản mới hơn hub (`user_version` > 1) → hub không khởi động.
+- Dọn TTL lúc mở và mỗi 6 giờ trong thread ghi (`recv_timeout`, không timer khác). `hub --db <file>`, mặc định
+  `<data_dir>/arcturus/arcturus.db`; mở lỗi thì hub không khởi động. Tắt hub: hủy yêu cầu đang chờ rồi `close` (bản ghi
+  `cancelled` được ghi trước khi thoát).
+- Ring buffer (ARC-27): `EventRing` 2.000 sự kiện **và** 2 MiB (sự kiện có `cwd`, id do agent gửi không bị chặn độ dài),
+  `Hub::recent_events(n)`; chưa có ai đọc (T19).
+- Đọc theo phiên sắp `ts, rowid` (cùng mili giây: thứ tự ghi).
+
 ### T7 · ARC-28 · Đối soát
 
 **Tạo:** `hub/src/reconcile.rs`.
@@ -852,6 +875,50 @@ qua toàn bộ bảng mẫu × mọi trust grant giả và batch rule giả).
 `danger_spans_are_char_indices_with_non_ascii` (ví dụ `echo "🚀 thư mục" && rm -rf đầu-ra`: ký tự tiếng Việt và
 ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte, theo UTF-16 và theo ký tự đều khác nhau; test khẳng
 định span theo ký tự). T12 dùng lại đúng chuỗi này cho test tô sáng phía UI.
+
+**Đã làm ở T8** (lệch so với trên, cần người duyệt khi review PR)
+- Hai dạng của lệnh: `command_normalized` trên thẻ vẫn là dạng **hiển thị** của T5a (ký tự ẩn hiện `⟨U+XXXX⟩`, không bỏ),
+  để người duyệt thấy chúng (bất biến 3); dạng bỏ ký tự ẩn/gộp khoảng trắng của bước 1–2 chỉ dùng nội bộ để so luật.
+  `danger_spans` đổi từ dạng so khớp → chỉ số ký tự lệnh gốc → dạng hiển thị (`normalize::Display::span`).
+- `Normalized.segments` là `Segment` (từ đã bỏ nháy/`\`, vị trí byte, độ sâu) thay vì `String`; thêm `invocations` (bỏ
+  gán biến, từ khóa, lệnh bọc `sudo`/`env`/`xargs`/`timeout`…, cộng `find -exec`), `unparsed`, `too_long`. Nội dung trong
+  dấu nháy được phân tích lại tới độ sâu 4 (`bash -c "…"`, `ssh host '…'`) **chỉ cho luật danger**; rủi ro chỉ tính lệnh
+  ở độ sâu 0 (`git commit -m "fix bug"` không phải lệnh `fix`).
+- Bảng ký tự ẩn chuyển từ `hub/src/view.rs` sang `hub_core::policy::normalize`, thêm Cf, Co, Cn đầy đủ theo
+  `unicode-general-category` (Unicode 16; thư viện mới, lý do: mục còn mở ở T5a). Khoảng trắng Unicode, tab, Zl/Zp, Hangul
+  filler → dấu cách khi so; Cc/Cf/Co/Cn/DI khác → bỏ.
+- Luật mở rộng (bất biến 2 cho phép): PowerShell `Remove-Item -Recurse -Force`, cmd `rmdir /s /q`, `find -delete`;
+  `git push --mirror/--delete/--prune`, refspec `:ref`, cụm cờ ngắn có `f`/`d`; `git clean -f` (không cần `d`);
+  `dropdb`; tên bí mật thêm `.netrc`, `.git-credentials`, `.pgpass`, `.npmrc`, `.pypirc`, `*.p12`, `*.pfx`, `*.keystore`,
+  `.gnupg/`, `.docker/config.json`, `.kube/config`, glob khớp chúng (`cat .e*`); bí mật xét ở **mọi** đối số Bash (cả `cp
+  .env`, `--env-file=.env`) và đường dẫn của mọi tool trừ Glob; `write_outside_workspace` cho Bash (`>`, `>>`, `&>`, `tee`,
+  `cp`/`mv`/`install`/`ln`/`rsync` đích, `dd of=`), so theo chữ sau `~`/`$HOME`/`$PWD`/`..`, đường dẫn Git Bash `/c/…`,
+  không phân biệt hoa thường trên Windows; biến lạ (`$OUT`) là ngoài workspace; `outbound_network`: host lấy từ URL,
+  `user@host`, `host:path`, proxy `-x`, jump `-J`; không tìm được host (`curl $URL`) là ngoài máy; `pipe_to_shell` gồm
+  `bash <(curl …)`, `sh -c "$(curl …)"`, `eval "$(curl …)"`, `irm | iex`, và cả tải về localhost; `privilege` thêm
+  setuid/setgid, `doas`, `pkexec`, `runas`; `sql_destructive` chạy cả trên chuỗi của tool MCP (không trên nội dung
+  Edit/Write).
+- `arcturus_ui_token` (B2) và luật mới `arcturus_state`: chuỗi con (bỏ ký tự ẩn, không phân biệt hoa thường, `\` = `/`)
+  `arcturus/ui-token`, `ui-token` (có biên), `<host loopback>:<cổng hub>`, URL loopback tới `/ws`, `/approvals/`,
+  `/hooks/` (cổng bất kỳ, kể cả biến), file `--ui-token-file`, `arcturus/arcturus.toml`, `arcturus/arcturus.db`, file cấu
+  hình đang dùng; glob trong lệnh khớp các file đó (`~/.local/share/arc*/ui*`, `find -name 'ui-tok*'`). Xét trên mọi chuỗi
+  của mọi tool, kể cả nội dung Write (script ghi ra rồi chạy sau). Luật `unanalyzed`: lệnh dài hơn 64 KiB không tách từ
+  (chỉ chạm khi nới `handoff_max_bytes`) là Critical.
+- Rủi ro: High thêm "tên lệnh là biến", mã viết thẳng (`python -c`, `node -e`, `bash -c`, `pwsh -c`…), `npx`/`pnpm dlx`/
+  `uvx`/`go run`; "không phân tích được" (nháy chưa đóng, lệnh rỗng) là High theo ARC-29. Low: thêm `git status/log/diff/
+  show/…`, `cargo fmt --check`, `eslint`/`ruff check` không `--fix`; ghi bằng chuyển hướng hay đối số đường dẫn ngoài
+  workspace → không còn Low. Read/Grep/Glob trong workspace là Low, ngoài là Medium; Edit/Write trong workspace là
+  Medium; WebFetch, Task, tool MCP là Medium (tool MCP có trường `command`/`cmd`/`script` thì xét trường đó như lệnh).
+  Ký tự ẩn ở bất kỳ trường nào → `hidden_chars`, ít nhất High.
+- `Policy` (trait) chuyển vào `hub_core::policy`: `decide(&ctx, &Assessment)`; `assess` (thuần) tách khỏi `decide`.
+  `enforce` là bất biến chung: risk không thấp hơn đánh giá, tự duyệt chỉ tới Medium (Critical **và High** không bao giờ),
+  đếm ngược chỉ khi `reversible`. Hub gọi `enforce` cho mọi kết quả, kể cả policy giả trong test.
+  `RulesPolicy` = danger list → các `Allowance` (T9 batch, T10 trust cắm vào) → hỏi người; T8 chưa có allowance nào.
+- Thẻ "duyệt trong terminal": `suspicions` tính bằng `quick_suspicions` (regex trên chữ, không tách từ, lệnh tới 1 MB).
+- `hub --config` mặc định `<config_dir>/arcturus/arcturus.toml` thay vì `./arcturus.toml` (mục P3 ở T5b, ghi chú
+  ARC-43/44 trong `.squad/TASKS.md`); thẻ PowerShell hiện `command` nguyên văn như Bash.
+- Đã biết, chưa làm: so đường dẫn theo chữ (không theo symlink); WebFetch tới host ngoài là Medium (không thuộc bảng
+  `outbound_network` vốn chỉ cho lệnh); `python -c "shutil.rmtree('/')"` chỉ là High (mã thông dịch không được phân tích).
 
 ### T9 · ARC-30 · Gom nhóm và batch rule
 
