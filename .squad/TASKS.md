@@ -30,9 +30,9 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | T5 · ARC-26 | hub | WebSocket `/ws`: snapshot + delta; viết `docs/PROTOCOL.md`; xác thực token; xử lý `TeamPause`/`TeamResume` phía hub; `GET /approvals/{id}/input` | T3, T4 | 2 | done |
 | T5c · ARC-43 | hub | Trần byte cho `tool_input` đang giữ (`held_input_max_bytes` 8 MiB), đặt chỗ trước khi đọc body, giới hạn độ dài trường | T5 | 1 | review |
 | T5d · ARC-44 | hub | F6: `--ui-token-stdout`, sàn thời gian duyệt `min_review_ms`, luật danger cho T8, ghi giới hạn bảo mật | T5c | 1 | review |
-| T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | todo |
+| T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | review |
 | T7 · ARC-28 | hub | Đối soát `claude agents --json` mỗi 30 s, dọn phiên chết | T4 | 1 | todo |
-| T8 · ARC-29 | policy | Danger list + chuẩn hóa lệnh (bỏ ký tự ẩn/bidi), tính `risk` | T2 | 2 | todo |
+| T8 · ARC-29 | policy | Danger list + chuẩn hóa lệnh (bỏ ký tự ẩn/bidi), tính `risk` | T2 | 2 | review |
 | T9 · ARC-30 | policy | Batch rule ("cho phép mẫu X trong N phút") + gom yêu cầu giống nhau | T8 | 2 | todo |
 | T10 · ARC-31 | policy | Trust grant cơ bản: đếm chuỗi duyệt liên tiếp, đề xuất nâng mức, tự hạ khi bị deny/hoàn tác | T8, T6 | 3 | todo |
 | T11 · ARC-32 | ui | Component nhân vật SVG (mood × palette), port từ mockup | T0 | 1 | todo |
@@ -73,6 +73,16 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - T12: app khởi động hub với `--ui-token-stdout`, đọc token từ dòng đầu stdout và **luôn đọc stderr** (pipe đầy thì hub
   bị chặn); UI làm mờ nút Allow trong `min_review_ms` từ lúc hiện thẻ.
 
+**Ghi chú từ T6/T8** (chi tiết ở `docs/PLAN.md` "Đã làm ở T6", "Đã làm ở T8")
+- T9/T10: cắm vào `RulesPolicy::with(Box<dyn Allowance>)`; mọi kết quả đi qua `policy::enforce` (Critical và High không bao
+  giờ tự duyệt, đếm ngược chỉ khi `reversible`). `ApprovalCtx` chưa có `subject` (tên persona): T10 thêm. Migration v2
+  thêm vào `MIGRATIONS` trong `store.rs`. Đọc DB bằng `StoreReader` (kết nối riêng), ghi chỉ qua `StoreHandle`.
+- T12: thẻ duyệt có `danger_spans` thật (chuỗi mẫu `echo "🚀 thư mục" && rm -rf đầu-ra` → `[[20,33]]`), `suspicions`
+  đủ 4 loại, `risk`, `reversible`.
+- T19: `Hub::recent_events(n)` (ring 2.000 sự kiện) và bảng `events`/`approvals`.
+- Hub mặc định đọc `<config_dir>/arcturus/arcturus.toml` và ghi `<data_dir>/arcturus/arcturus.db`; mọi lệnh chạm hai file
+  này hoặc token UI là Critical (`arcturus_state`, `arcturus_ui_token`).
+
 ## Giai đoạn C — dogfood và mốc v0 (tuần 6)
 
 | ID · YouTrack | Làn | Task | Phụ thuộc | Ước lượng | Trạng thái |
@@ -102,3 +112,5 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - 2026-10-22 · hub · T4/ARC-25 state machine và persona (nhánh `arc-25-state-persona`, commit `b8e8563`, rebase lên main sau khi PR T3 merge): `hub-core/src/state.rs` (`TeamState::apply/tick/next_wakeup` theo §3.6, tạo agent từ sự kiện đầu tiên, chỉ gửi khi thay đổi nhìn thấy được), `persona.rs` (globset, Windows, thư mục cha, tên sao nhả lại khi xóa, FNV-1a), `config.rs` (`arcturus.toml`, lỗi kèm số dòng, khóa lạ là lỗi, timeout 1–115 s, bind loopback, màu `#RRGGBB`), `protocol.rs` (phần T4: `AgentView`, `Palette`, `AgentUpdated`/`AgentRemoved`). §3.1 thêm `Event.cwd`, `AgentRef.agent_type` (Option, không tăng `v`, đã duyệt); 11 snapshot cập nhật. 56 test đơn vị + 1 test phát lại 64 fixture, workspace xanh, clippy/fmt sạch; thử cố ý làm hỏng 2 chỗ thì test đỏ. Không đo ngân sách: binary hub chưa dùng state (nối vào hub sau khi PR T3 merge). · Vướng: chưa nối vào `crates/hub` (vòng sự kiện, bước 3 `/hooks/permission`, `Config` thay `--approval-timeout`, `tick` theo `next_wakeup`, đồng bộ `paused`).
 - 2026-10-22 · hub · T5/ARC-26 (T5a PR #3 đã merge; T5b nhánh `arc-26b-websocket-ws`): lệnh quá dài trả về terminal (bất biến 3 mới), `/ws` + token UI riêng (F6), `/approvals/{id}/input`, `docs/PROTOCOL.md`; audit T5b không có mức cao, đã sửa F2, F3, F5–F8. Budget 78fbde3: idle 11,1 MB, 20 phiên + 2 client WS 13,3 MB, CPU idle 0%, p99 1,49 ms. · Vướng: 64 Write ~1 MB giữ cùng lúc lên 93 MB (có trần, vượt 40 MB) — cần trần byte cho tool_input đang giữ; F1 (token UI đọc được bởi agent có quyền chạy mã) chờ người quyết; 1964793 chưa đo lại.
 - 2026-10-22 · main · Đóng T0–T5 (PR #1–#4 đã merge): bảng task chuyển `done`; CLAUDE.md ghi kết quả Q1b đã kiểm chứng ở T3; xóa 9 nhánh local đã merge và 4 worktree `arc-24…26b`. · Vướng: hai điểm treo từ T5b (trần byte `tool_input` đang giữ: 93 MB > 40 MB; F6 token đọc được bởi agent) chưa có ticket.
+- 2026-10-23 · policy · T8/ARC-29 (nhánh `claude/dreamy-davinci-oue6io`, commit `2bd289e`): `hub-core/src/policy/` (normalize, danger, risk, `Policy`/`assess`/`enforce`/`RulesPolicy`/`Allowance`); 9 luật PLAN + mở rộng + `arcturus_ui_token` (B2) + `arcturus_state` + `unanalyzed`; hub dùng đánh giá thật cho thẻ (`danger_spans`, `suspicions`, `risk`, `reversible`) và lọc mọi policy qua `enforce`; `--config` mặc định ở thư mục cấu hình người dùng. 41 test policy + test tích hợp hub. · Vướng: chưa có security audit riêng cho T8; các điểm lệch cần duyệt ở PLAN "Đã làm ở T8" (WebFetch ra ngoài là Medium; `python -c` chỉ High).
+- 2026-10-23 · hub · T6/ARC-27 (cùng nhánh, commit `699e221`): `hub-core/src/store.rs` (SQLite WAL, một thread ghi, ack sau commit, bỏ events khi đầy, TTL 6 giờ, `StoreReader`, `EventRing`), hub ghi mọi sự kiện và quyết định, `--db`. 11 test store + 5 test tích hợp. Budget (container Linux, so với main cùng máy): idle 8,9 MB (main 6,0), 20 phiên 14,4 MB (main 7,1), CPU idle 0%, p99 ingest 2,71 ms; stress 64 × 1 MB đỉnh 35,6 MB (main 27,3). · Vướng: `ws_disconnects_stalled_client` (ARC-45) vẫn chập chờn trên Linux, cả trên main 3cf195d (1/5 lượt): client đọc bị tụt kênh broadcast nên nhận dưới 8 MB; đề xuất ticket mới dưới story T5. Chưa đo trên máy chuẩn Windows.
