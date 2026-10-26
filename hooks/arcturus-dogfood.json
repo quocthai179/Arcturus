@@ -1,5 +1,5 @@
 {
-  "_comment": "Gộp phần 'hooks' này vào ~/.claude/settings.json khi hub đã chạy (từ task T18). Cần biến môi trường ARCTURUS_TOKEN. Gỡ bỏ: xóa phần này. Hub tắt cũng an toàn: hook lỗi là lỗi không chặn.",
+  "_comment": "Cài bằng scripts/dogfood-install.sh (gộp có sao lưu vào ~/.claude/settings.json), gỡ bằng scripts/dogfood-uninstall.sh; hướng dẫn ở docs/DOGFOOD.md. Cần biến môi trường ARCTURUS_TOKEN lúc chạy claude. Hub tắt cũng an toàn: hook lỗi là lỗi không chặn. SessionStart dùng hook command + curl vì hook http không chạy cho SessionStart (docs/HOOK_FINDINGS.md F1).",
   "hooks": {
     "PermissionRequest": [
       {
@@ -15,7 +15,15 @@
       }
     ],
     "SessionStart": [
-      { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7878/hooks/event", "timeout": 3, "headers": { "Authorization": "Bearer $ARCTURUS_TOKEN" }, "allowedEnvVars": ["ARCTURUS_TOKEN"] } ] }
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "curl -s -m 3 -o /dev/null -X POST -H \"Authorization: Bearer $ARCTURUS_TOKEN\" -H \"Content-Type: application/json\" --data-binary @- http://127.0.0.1:7878/hooks/event || true",
+            "timeout": 5
+          }
+        ]
+      }
     ],
     "UserPromptSubmit": [
       { "hooks": [ { "type": "http", "url": "http://127.0.0.1:7878/hooks/event", "timeout": 3, "headers": { "Authorization": "Bearer $ARCTURUS_TOKEN" }, "allowedEnvVars": ["ARCTURUS_TOKEN"] } ] }

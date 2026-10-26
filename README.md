@@ -23,7 +23,8 @@ duyệt, rồi duyệt/từ chối từ một chỗ. Mỗi agent là một nhân
 | `.claude/skills/hook-lab/` | `/hook-lab Q1` | Chạy thực nghiệm hook |
 | `.claude/skills/budget-check/` | `/budget-check` | Đo và so ngân sách |
 | `.claude/skills/milestone-gate/` | `/milestone-gate v0` | Cổng chất lượng trước khi phát hành |
-| `hooks/arcturus-dogfood.json` | Bạn | Hook để Claude Code đẩy sự kiện vào hub (dùng từ T18) |
+| `hooks/arcturus-dogfood.json` | Bạn | Hook để Claude Code đẩy sự kiện vào hub |
+| `scripts/dogfood-install.sh`, `dogfood-uninstall.sh` | Bạn | Gộp/gỡ hook trong `~/.claude/settings.json` (có sao lưu); hướng dẫn: `docs/DOGFOOD.md` |
 | `scripts/start-lanes.sh` | Bạn | Mở 4 phiên song song trong tmux, mỗi phiên một worktree |
 | `arcturus.example.toml` | Bạn | Gán tên, vai trò, màu nhân vật theo worktree |
 

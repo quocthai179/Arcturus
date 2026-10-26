@@ -68,12 +68,17 @@ Bật plan mode (Shift+Tab) cho các task đụng luồng duyệt, policy, bảo
 
 ## 3. Giai đoạn C — dogfood (từ khi T5 xong)
 
-1. Chạy hub: `cargo run -p hub --release`.
-2. Gộp `hooks/arcturus-dogfood.json` vào `~/.claude/settings.json` (phần `hooks`).
-3. Từ đây, các phiên đang build Arcturus được chính Arcturus quản lý.
+Hướng dẫn đầy đủ: `docs/DOGFOOD.md`.
+
+1. Đặt `ARCTURUS_TOKEN` (cùng giá trị cho app/hub và cho `claude`), chạy app: `pnpm -C crates/app tauri dev` (app tự khởi
+   động hub).
+2. `./scripts/dogfood-install.sh` (thêm `--dry-run` để xem trước): gộp `hooks/arcturus-dogfood.json` vào
+   `~/.claude/settings.json`, có sao lưu, không đụng khóa nào khác.
+3. Mở phiên Claude Code mới. Từ đây, các phiên đang build Arcturus được chính Arcturus quản lý.
 4. Gặp chỗ khó chịu nào khi dùng thì ghi ngay vào `.squad/TASKS.md` mục "Dogfood".
 
-Gỡ bỏ: xóa phần `hooks` đó. Hub tắt cũng không sao: hook lỗi là lỗi không chặn, Claude Code hỏi như bình thường.
+Gỡ bỏ: `./scripts/dogfood-uninstall.sh`. Hub tắt cũng không sao: hook lỗi là lỗi không chặn, Claude Code hỏi như bình
+thường (chưa kiểm chứng trên máy thật cho lỗi kết nối và hết giờ: `docs/DOGFOOD.md` mục 6, T17).
 
 ## 4. Mốc v0 (tuần 6)
 
