@@ -12,7 +12,7 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use hub_core::hook::HookInput;
@@ -20,8 +20,9 @@ use hub_core::persona::fnv1a;
 use hub_core::policy::assess;
 use hub_core::policy::danger::{DangerConfig, DangerRules};
 use hub_core::policy::group::group_key;
+use hub_core::policy::trust::{self, TrustBook, TrustEvent};
 pub use hub_core::protocol::DecideOrigin;
-use hub_core::protocol::{ApprovalView, HandoffView, ServerMsg};
+use hub_core::protocol::{ApprovalView, HandoffView, ServerMsg, TrustSuggestionView};
 use hub_core::schema::{AgentId, DecidedBy, Decision, Event, EventKind, RequestId, Risk};
 use hub_core::store::{BatchRow, EventRecord, StoreHandle};
 use serde_json::{json, Value};
@@ -118,6 +119,9 @@ pub trait ApprovalStore: Send + Sync {
 
     /// Xóa batch rule của một nhóm (T9). Không chặn.
     fn batch_delete(&self, _group_key: &str) {}
+
+    /// Lưu các thay đổi trust (grant, chuỗi duyệt, nhật ký; T10). Không chặn.
+    fn trust_update(&self, _update: &trust::Update) {}
 }
 
 /// Không ghi gì (test, hoặc khi không cần lưu): mọi AutoAllow rơi về hỏi người vì không có xác nhận ghi.
@@ -153,6 +157,18 @@ impl ApprovalStore for StoreHandle {
 
     fn batch_delete(&self, group_key: &str) {
         StoreHandle::batch_delete(self, group_key);
+    }
+
+    fn trust_update(&self, update: &trust::Update) {
+        for g in &update.grants {
+            self.trust_grant(g.clone());
+        }
+        for st in &update.streaks {
+            self.trust_streak(st.clone());
+        }
+        for e in &update.log {
+            StoreHandle::trust_log(self, e.clone());
+        }
     }
 }
 
@@ -468,6 +484,8 @@ pub struct Approvals {
     store: Box<dyn ApprovalStore>,
     inner: Mutex<Inner>,
     tx: broadcast::Sender<ServerMsg>,
+    /// Chuỗi duyệt và grant (T10). Cùng bộ với allowance của `RulesPolicy`.
+    trust: Arc<TrustBook>,
 }
 
 impl Approvals {
@@ -478,6 +496,18 @@ impl Approvals {
         store: Box<dyn ApprovalStore>,
         tx: broadcast::Sender<ServerMsg>,
     ) -> Self {
+        let trust = Arc::new(TrustBook::new(&hub_core::config::TrustConfig::default()));
+        Self::with_trust(cfg, policy, store, tx, trust)
+    }
+
+    /// Như [`Approvals::new`], với bộ trust do hub cấp (cùng bộ đã cắm vào policy).
+    pub fn with_trust(
+        cfg: ApprovalsConfig,
+        policy: Box<dyn Policy>,
+        store: Box<dyn ApprovalStore>,
+        tx: broadcast::Sender<ServerMsg>,
+        trust: Arc<TrustBook>,
+    ) -> Self {
         Approvals {
             rules: DangerRules::new(&cfg.danger),
             cfg,
@@ -485,6 +515,7 @@ impl Approvals {
             store,
             inner: Mutex::new(Inner::default()),
             tx,
+            trust,
         }
     }
 
@@ -672,6 +703,7 @@ impl Approvals {
 
         let ctx = ApprovalCtx {
             agent_id: &ev.agent.id,
+            subject: agent_name,
             tool: &tool,
             tool_input: &tool_input,
             cwd: &cwd,
@@ -863,6 +895,7 @@ impl Approvals {
         let risk = assess(
             &ApprovalCtx {
                 agent_id: &ev.agent.id,
+                subject: agent_name,
                 tool: &tool,
                 tool_input: &tool_input,
                 cwd: &cwd,
@@ -1015,6 +1048,32 @@ impl Approvals {
         ok
     }
 
+    pub fn trust(&self) -> &Arc<TrustBook> {
+        &self.trust
+    }
+
+    /// Lưu các thay đổi trust và báo cho UI: đề xuất mới (`Suggestion`), hạ mức/thu hồi (`Feed`).
+    pub fn apply_trust(&self, update: trust::Update) {
+        if update.is_empty() {
+            return;
+        }
+        self.store.trust_update(&update);
+        for event in update.events {
+            let msg = match event {
+                TrustEvent::Suggest(s) => ServerMsg::Suggestion {
+                    suggestion: TrustSuggestionView::from(&s),
+                },
+                TrustEvent::Demoted { subject, pattern, to, .. } => feed(format!(
+                    "{subject}: hạ quyền tự chạy \"{pattern}\" xuống mức {to} (hỏi kèm đếm ngược) vì bạn từ chối"
+                )),
+                TrustEvent::Revoked { subject, pattern, .. } => feed(format!(
+                    "{subject}: đã thu hồi quyền tự chạy \"{pattern}\" vì bạn từ chối"
+                )),
+            };
+            let _ = self.tx.send(msg);
+        }
+    }
+
     /// Lưu hoặc xóa batch rule ở store (T9). Hub gọi sau khi đổi bộ nhớ.
     pub fn batch_set(&self, row: BatchRow) {
         self.store.batch_set(row);
@@ -1103,6 +1162,12 @@ impl Approvals {
             Decision::Allow => ApprovalStatus::Allowed,
             Decision::Deny => ApprovalStatus::Denied,
         };
+        // Chủ thể và nhóm của quyết định, cho chuỗi duyệt của người (T10).
+        let trust_key = (
+            entry.view.agent_name.clone(),
+            entry.view.group_key.clone(),
+            entry.view.risk,
+        );
         let Entry { info, reply, .. } = entry;
         match reply.send(Decided {
             decision,
@@ -1117,6 +1182,12 @@ impl Approvals {
                     decision: Some(decision),
                     decided_by: by,
                 });
+                // Chỉ quyết định của **người** được đếm (đếm ngược, policy, batch thì không): chuỗi phải phản ánh việc người
+                // đã xem và đồng ý.
+                if by == DecidedBy::User {
+                    let (name, key, risk) = trust_key;
+                    self.apply_trust(self.trust.record(&name, &key, decision, risk));
+                }
                 DecideResult::Resolved
             }
             // Handler đã đi (không xảy ra khi guard chạy đúng): coi như hủy.
@@ -1351,6 +1422,14 @@ impl Drop for CancelOnDrop<'_> {
             self.approvals
                 .finish(entry, ApprovalStatus::Cancelled, DecidedBy::Cancelled, None);
         }
+    }
+}
+
+/// `Feed` cho mọi client (dựng tại đây để dùng chung với hub).
+fn feed(text: String) -> ServerMsg {
+    ServerMsg::Feed {
+        text,
+        ts: OffsetDateTime::now_utc(),
     }
 }
 

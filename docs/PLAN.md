@@ -970,6 +970,26 @@ ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte,
 `deny_under_grant_demotes`, `grant_expires`, `critical_ignores_grant` (dùng lại bảng của T8),
 `level5_no_countdown_while_paused`, `level5_no_countdown_when_not_reversible`.
 
+**Đã làm ở T10**
+- `hub-core/src/policy/trust.rs` (thuần, đồng hồ thay được): `TrustBook` với `record`, `report_incident`, `answer`, `restore`,
+  `grant_level`, và `Allowance`: mức 6 → `AutoAllow{reason: "trust:<id>"}`, mức 5 → `Countdown(10 s)`; chỉ tới Medium (Critical/High không
+  bao giờ; `enforce` lọc lại). `subject` là tên persona (`ApprovalCtx.subject`, hub truyền `agent_name`), `pattern` là `group_key` (T9).
+- Chuỗi chỉ đếm quyết định của **người** (`decided_by = user`) cho yêu cầu risk ≤ Medium và khóa không ghép; duyệt do đếm ngược/policy/
+  batch không đếm. Chuỗi cũ hơn `streak_window_days` bắt đầu lại (đặc tả chỉ nói "trong cửa sổ", không nói chuỗi chậm thì sao).
+  Đề xuất: đủ ngưỡng, không sự cố trong cửa sổ, chưa có mức 6, chưa có đề xuất chờ, không bị từ chối trong 7 ngày; từ chối chỉ nhớ
+  trong bộ nhớ (mất khi khởi động lại, tránh thêm cột vào hợp đồng §3.5). Mức 5 chỉ tạo ra bằng hạ mức (6 → 5 khi bị từ chối); từ
+  chối nữa thu hồi. `report_incident(subject, pattern)` có sẵn cho bước hoàn tác sau này.
+- Giao thức: `ServerMsg::Suggestion{TrustSuggestionView}` (hub dựng `text` bằng template, hiện ký tự ẩn); hub gửi lại các đề xuất đang
+  chờ ngay sau mỗi `Snapshot`; `SuggestionAnswer` hết "chưa hỗ trợ". Hạ mức/thu hồi/cấp quyền báo bằng `Feed` broadcast.
+- Store: migration **v3** (`trust_grants`, `streaks`, `trust_log` đúng §3.5); `StoreReader::trust_grants/streaks/trust_log`; hub nạp lại
+  khi khởi động (grant hết hạn/đã thu hồi/mức lạ bị bỏ).
+- Hub: `Automation {batch, trust}` + `Automation::policy()` (batch trước, trust sau); `Hub::start_with_batch` nhận `Automation`.
+- UI: `SuggestionList` ở popup và Văn phòng ("Cho phép"/"Để sau"), store giữ `suggestions`, `suggestion_answer` một thông điệp.
+- Test: 12 (`trust.rs`) + 2 (store, protocol) đơn vị, 9 tích hợp (`hub/tests/trust.rs`: ngưỡng và phát một lần, chỉ người đếm, cấp grant mức 6
+  chỉ cho đúng persona/nhóm, từ chối 7 ngày, hạ 6→5→thu hồi kèm `trust_log`, đếm ngược mức 5 và đội tạm dừng, Critical/High bỏ qua
+  grant, sống qua khởi động lại, qua WebSocket) và 5 UI.
+- Chưa làm: UI thu hồi grant thủ công và danh sách grant; hoàn tác tự động (chờ đo được); `declined_until` bền vững.
+
 ### T11 · ARC-32 · Component nhân vật
 
 `ui/src/components/Character.tsx`:

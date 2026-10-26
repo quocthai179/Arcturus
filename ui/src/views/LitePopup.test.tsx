@@ -250,6 +250,39 @@ describe('LitePopupView', () => {
     expect(sent).toEqual([{ t: 'team_pause' }, { t: 'focus_set', on: true }]);
   });
 
+  it('suggestion_card_answers_with_one_message_and_disappears', () => {
+    const sug = {
+      id: 'sug_1',
+      subject: 'Khoa',
+      pattern: 'Bash:npm test',
+      level: 6,
+      approved_in_row: 20,
+      window_days: 7,
+      grant_days: 30,
+      text: 'Khoa đã được bạn duyệt 20 lần liên tiếp. Cho phép tự chạy?',
+      created_at: '2026-10-27T10:00:00Z',
+    };
+    const { sent } = popup(stateWith([], { suggestions: [sug] }));
+    expect(screen.getByText(/Khoa đã được bạn duyệt 20 lần liên tiếp/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: 'Cho phép' }));
+    expect(sent).toEqual([{ t: 'suggestion_answer', id: 'sug_1', accept: true }]);
+    expect(screen.queryByText(/Khoa đã được bạn duyệt 20 lần liên tiếp/)).toBeNull();
+  });
+
+  it('suggestion_card_stays_when_not_connected_and_reports_it', () => {
+    const sug = {
+      id: 'sug_1', subject: 'Khoa', pattern: 'Bash:npm test', level: 6, approved_in_row: 20, window_days: 7,
+      grant_days: 30, text: 'Đề xuất thử', created_at: '2026-10-27T10:00:00Z',
+    };
+    const send = vi.fn(() => false);
+    render(
+      <LitePopupView state={stateWith([], { suggestions: [sug] })} send={send} loadFull={() => Promise.resolve('{}')} minReviewMs={0} />,
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Để sau' }));
+    expect(screen.getByText('Đề xuất thử')).toBeTruthy();
+    expect(screen.getByText('Chưa kết nối hub, chưa gửi được')).toBeTruthy();
+  });
+
   it('handoff_cards_have_no_decision_buttons', () => {
     popup(stateWith([], { handoffs: [handoff()] }));
     expect(screen.getByText('Duyệt trong terminal')).toBeTruthy();

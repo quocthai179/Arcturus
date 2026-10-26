@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { Character } from '../components/Character';
 import { QueueList } from '../components/QueueList';
+import { SuggestionList } from '../components/SuggestionList';
 import { TeamControls } from '../components/TeamControls';
 import { approvalInput } from '../hub';
 import type { ClientMsg } from '../protocol';
@@ -20,7 +21,7 @@ export interface LitePopupViewProps {
 
 export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupViewProps) {
   const { queue, handoffs, agents, team, feed } = state;
-  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf } =
+  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf, suggestions, answerSuggestion } =
     useApprovalQueue(state, send, minReviewMs);
 
   // Thẻ được chọn (↑/↓) phải nằm trong vùng nhìn thấy: Enter chỉ duyệt thẻ người dùng đang thấy.
@@ -104,6 +105,8 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
           {lastFeed.text}
         </p>
       )}
+
+      <SuggestionList suggestions={suggestions} onAnswer={answerSuggestion} />
 
       <QueueList
         queue={queue}

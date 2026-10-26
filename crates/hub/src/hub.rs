@@ -12,6 +12,9 @@ use hub_core::config::Config;
 use hub_core::hook::{self, HookInput};
 use hub_core::persona::PersonaBook;
 use hub_core::policy::batch::{BatchError, BatchRule, BatchRules};
+use hub_core::policy::trust::{
+    Answered, Streak, TrustBook, TrustError, TrustGrant, TrustSuggestion,
+};
 use hub_core::protocol::{ServerMsg, TeamView};
 use hub_core::schema::Event;
 use hub_core::state::TeamState;
@@ -31,6 +34,30 @@ pub const BROADCAST_CAPACITY: usize = 256;
 
 /// Sức chứa hàng đợi `/hooks/event` (§3.5).
 pub const EVENT_QUEUE: usize = 1024;
+
+/// Hai nguồn tự duyệt của policy thật: batch rule (T9) và trust grant (T10). Cùng bộ được cắm vào `RulesPolicy` và đưa vào
+/// hub để lệnh WebSocket thao tác.
+#[derive(Clone)]
+pub struct Automation {
+    pub batch: Arc<BatchRules>,
+    pub trust: Arc<TrustBook>,
+}
+
+impl Automation {
+    pub fn new(trust_cfg: &hub_core::config::TrustConfig) -> Self {
+        Automation {
+            batch: Arc::new(BatchRules::new()),
+            trust: Arc::new(TrustBook::new(trust_cfg)),
+        }
+    }
+
+    /// `RulesPolicy` với cả hai nguồn: batch rule trước, trust grant sau.
+    pub fn policy(&self) -> RulesPolicy {
+        RulesPolicy::new()
+            .with(Box::new(self.batch.clone()))
+            .with(Box::new(self.trust.clone()))
+    }
+}
 
 pub struct Hub {
     pub cfg: Config,
@@ -77,8 +104,8 @@ impl Hub {
         store: Box<dyn ApprovalStore>,
     ) -> (Arc<Hub>, HubTasks) {
         let approvals_cfg = approvals_config(&cfg, danger);
-        let batch = Arc::new(BatchRules::new());
-        let policy = RulesPolicy::new().with(Box::new(batch.clone()));
+        let auto = Automation::new(&cfg.trust);
+        let policy = auto.policy();
         Self::start_with_batch(
             cfg,
             personas,
@@ -86,7 +113,7 @@ impl Hub {
             approvals_cfg,
             Box::new(policy),
             store,
-            batch,
+            auto,
         )
     }
 
@@ -100,6 +127,7 @@ impl Hub {
         policy: Box<dyn Policy>,
         store: Box<dyn ApprovalStore>,
     ) -> (Arc<Hub>, HubTasks) {
+        let trust_cfg = cfg.trust.clone();
         Self::start_with_batch(
             cfg,
             personas,
@@ -107,7 +135,7 @@ impl Hub {
             approvals_cfg,
             policy,
             store,
-            Arc::new(BatchRules::new()),
+            Automation::new(&trust_cfg),
         )
     }
 
@@ -119,13 +147,14 @@ impl Hub {
         approvals_cfg: ApprovalsConfig,
         policy: Box<dyn Policy>,
         store: Box<dyn ApprovalStore>,
-        batch: Arc<BatchRules>,
+        auto: Automation,
     ) -> (Arc<Hub>, HubTasks) {
+        let Automation { batch, trust } = auto;
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (events, events_rx) = mpsc::channel(EVENT_QUEUE);
         let (wake, wake_rx) = watch::channel(None);
         let hub = Arc::new(Hub {
-            approvals: Approvals::new(approvals_cfg, policy, store, tx.clone()),
+            approvals: Approvals::with_trust(approvals_cfg, policy, store, tx.clone(), trust),
             cfg,
             host,
             personas,
@@ -146,6 +175,35 @@ impl Hub {
 
     pub fn batch(&self) -> &Arc<BatchRules> {
         &self.batch
+    }
+
+    pub fn trust(&self) -> &Arc<TrustBook> {
+        self.approvals.trust()
+    }
+
+    /// Đề xuất nâng mức đang chờ trả lời (gửi cho client mới sau `Snapshot`).
+    pub fn pending_suggestions(&self) -> Vec<TrustSuggestion> {
+        self.approvals.trust().pending_suggestions()
+    }
+
+    /// `SuggestionAnswer` (T10): chấp nhận thì cấp grant mức 6 và báo mọi client; từ chối thì không đề xuất lại 7 ngày.
+    pub fn trust_answer(&self, suggestion_id: &str, accept: bool) -> Result<Answered, TrustError> {
+        let (answered, update) = self.approvals.trust().answer(suggestion_id, accept)?;
+        self.approvals.apply_trust(update);
+        if let Answered::Granted(g) = &answered {
+            tracing::info!(subject = ?g.subject, pattern = ?g.pattern, grant = %g.id, "trust grant mức 6 được cấp");
+            let days = (g.expires_at - g.granted_at).whole_days();
+            self.broadcast_feed(format!(
+                "Đã cho phép {} tự chạy \"{}\" trong {days} ngày (chỉ rủi ro thấp/vừa)",
+                g.subject, g.pattern
+            ));
+        }
+        Ok(answered)
+    }
+
+    /// Nạp lại grant và chuỗi duyệt đã lưu khi khởi động. Trả số grant nạp được.
+    pub fn restore_trust(&self, grants: Vec<TrustGrant>, streaks: Vec<Streak>) -> usize {
+        self.approvals.trust().restore(grants, streaks)
     }
 
     /// `BatchOpen` (T9): mở hoặc gia hạn quy tắc cho `group_key` trong `minutes` phút. Lưu vào store, hẹn một lần để báo khi

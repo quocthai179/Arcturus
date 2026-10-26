@@ -48,6 +48,34 @@ describe('store', () => {
     expect(s.queue.map((a) => a.countdown_ms)).toEqual([null, null]);
   });
 
+  it('suggestions_upsert_by_id_and_snapshot_clears_stale_ones', () => {
+    const sug = (id: string, text = 'x') => ({
+      id,
+      subject: 'Khoa',
+      pattern: 'Bash:npm test',
+      level: 6,
+      approved_in_row: 20,
+      window_days: 7,
+      grant_days: 30,
+      text,
+      created_at: '2026-10-27T10:00:00Z',
+    });
+    let s = applyServer(initialState, snapshot());
+    s = applyServer(s, { t: 'suggestion', suggestion: sug('sug_1') });
+    s = applyServer(s, { t: 'suggestion', suggestion: sug('sug_2') });
+    s = applyServer(s, { t: 'suggestion', suggestion: sug('sug_1', 'mới hơn') });
+    expect(s.suggestions.map((x) => [x.id, x.text])).toEqual([
+      ['sug_1', 'mới hơn'],
+      ['sug_2', 'x'],
+    ]);
+    // Kết nối lại: snapshot xóa danh sách cũ, hub gửi lại các đề xuất còn chờ ngay sau đó.
+    s = applyServer(s, snapshot());
+    expect(s.suggestions).toEqual([]);
+    expect(parseServerMsg(JSON.stringify({ t: 'suggestion', suggestion: sug('sug_9') }))).not.toBeNull();
+    expect(parseServerMsg(JSON.stringify({ t: 'suggestion', suggestion: { id: 5 } }))).toBeNull();
+    expect(parseServerMsg(JSON.stringify({ t: 'suggestion' }))).toBeNull();
+  });
+
   it('deltas_upsert_and_remove_by_id', () => {
     let s = applyServer(initialState, snapshot());
     s = applyServer(s, { t: 'approval_requested', approval: approval({ request_id: 'req_2', created_at: '2026-10-23T09:00:05Z' }) });

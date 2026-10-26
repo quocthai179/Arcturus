@@ -201,6 +201,7 @@ mod tests {
     fn decide(policy: &RulesPolicy, tool: &str, input: &Value) -> PolicyOutcome {
         let ctx = ApprovalCtx {
             agent_id: "agt_s",
+            subject: "Khoa",
             tool,
             tool_input: input,
             cwd: "/home/u/proj",

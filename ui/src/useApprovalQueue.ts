@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { allowGate, type Gate } from './components/ApprovalCard';
 import type { GroupAction } from './components/QueueList';
 import { countdownEndsAt } from './countdown';
-import type { ApprovalView, ClientMsg, Decision } from './protocol';
+import type { ApprovalView, ClientMsg, Decision, TrustSuggestionView } from './protocol';
 import type { HubState } from './store';
 import { useNow } from './useNow';
 
@@ -79,6 +79,22 @@ export function useApprovalQueue(state: HubState, send: (msg: ClientMsg) => bool
     [send],
   );
 
+  // Đề xuất nâng mức tin cậy (T10): trả lời bằng một thông điệp; thẻ biến mất ngay ở cửa sổ này (hub chỉ báo cho client khác
+  // qua Feed), nên giữ danh sách id đã trả lời cục bộ.
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
+  const suggestions = useMemo<TrustSuggestionView[]>(
+    () => state.suggestions.filter((s) => !answered.has(s.id)),
+    [state.suggestions, answered],
+  );
+  const answerSuggestion = useCallback(
+    (id: string, accept: boolean) => {
+      const ok = send({ t: 'suggestion_answer', id, accept });
+      setNotice(ok ? null : 'Chưa kết nối hub, chưa gửi được');
+      if (ok) setAnswered((prev) => new Set(prev).add(id));
+    },
+    [send],
+  );
+
   // Đếm ngược phủ quyết (T14). Mốc hết giờ tính từ lúc thẻ hiện; đội tạm dừng thì không có đồng hồ nào.
   const paused = state.team.paused;
   const countdownOf = useCallback(
@@ -102,5 +118,17 @@ export function useApprovalQueue(state: HubState, send: (msg: ClientMsg) => bool
     }
   }, [queue, connected, countdownOf, send]);
 
-  return { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf };
+  return {
+    now,
+    selected,
+    setSelectedId,
+    gateOf,
+    decide,
+    decideGroup,
+    setReviewed,
+    notice,
+    countdownOf,
+    suggestions,
+    answerSuggestion,
+  };
 }

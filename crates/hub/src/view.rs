@@ -268,6 +268,7 @@ mod tests {
         let a = assess(
             &ApprovalCtx {
                 agent_id: &p.agent_id,
+                subject: "",
                 tool: &p.tool,
                 tool_input: &p.tool_input,
                 cwd: &p.cwd,

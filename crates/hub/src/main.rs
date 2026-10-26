@@ -177,6 +177,19 @@ async fn main() -> anyhow::Result<()> {
         };
         let (hub, _tasks) =
             Hub::start_full(cfg, personas, hostname(), danger, Box::new(db.handle()));
+        // Nạp lại grant và chuỗi duyệt từ lần chạy trước (T10). Lỗi đọc chỉ làm mất quyền tự chạy (an toàn: hỏi người).
+        match store::StoreReader::open(&db_path).and_then(|r| {
+            let now = time::OffsetDateTime::now_utc();
+            Ok((r.trust_grants(now)?, r.streaks()?))
+        }) {
+            Ok((grants, streaks)) => {
+                let n = hub.restore_trust(grants, streaks);
+                if n > 0 {
+                    tracing::info!(n, "đã nạp lại trust grant");
+                }
+            }
+            Err(err) => tracing::warn!(%err, "không nạp lại được trust grant"),
+        }
         // Nạp lại batch rule còn hạn từ lần chạy trước (T9). Lỗi đọc chỉ làm mất quy tắc (an toàn: mọi thứ hỏi người).
         match store::StoreReader::open(&db_path)
             .and_then(|r| r.batch_rules(time::OffsetDateTime::now_utc()))
