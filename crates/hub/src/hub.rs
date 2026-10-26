@@ -224,6 +224,11 @@ impl Hub {
         self.lock_state().views()
     }
 
+    /// Phiên đang giữ kèm sự kiện gần nhất (đối soát, T7).
+    pub fn sessions(&self) -> Vec<(String, OffsetDateTime)> {
+        self.lock_state().sessions()
+    }
+
     /// Tắt hub: trả `{}` cho mọi yêu cầu đang chờ.
     pub fn shutdown(&self) -> usize {
         self.approvals.shutdown()

@@ -818,6 +818,24 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 **Test:** dùng trait `AgentLister` để giả lập: `removes_session_missing_twice`, `keeps_session_missing_once`,
 `command_failure_removes_nothing`.
 
+**Đã làm ở T7**
+- `hub/src/reconcile.rs`: trait `AgentLister` (`impl Future` thay cho `async fn` trong trait để có `Send`), `ClaudeAgents`
+  (`claude agents --json`, `kill_on_drop`, timeout 5 giây, đầu ra ≤1 MiB, không cửa sổ console trên Windows), `parse_agents`
+  (chịu lỗi: phần tử thiếu/sai kiểu `sessionId` bị bỏ qua, không phải mảng thì không kết luận), `Reconciler` (bộ đếm thuần),
+  `tick` và `spawn` (mỗi `reconcile_interval_secs`, giữ `Weak<Hub>` nên dừng khi hub bị drop). `main` khởi động task.
+- **Không polling thường trực**: nếu hub không giữ phiên nào thì không chạy `claude` (quy tắc bất biến 6); mỗi lần chạy ≈270 ms
+  ở một tiến trình riêng, không tính vào RSS của hub.
+- **Lệch/làm chặt so với đặc tả**: (1) "vắng hai lần liên tiếp" tính trên hai lần quan sát **thành công**: lệnh lỗi hay hết giờ
+  xóa bộ đếm (đặc tả chỉ nói bỏ qua lần đó); (2) chỉ dọn phiên đã **im lặng ≥ 2 chu kỳ** (không có sự kiện hook), vì phiên chạy
+  một lệnh dài không bắn sự kiện, và chưa biết (Q8) phiên `-p`/nền có được liệt kê không; dọn nhầm là fail-safe (yêu cầu đang
+  giữ trả `{}`, agent hiện lại ở sự kiện kế tiếp) nhưng gây nhiễu.
+- Dọn bằng cách đưa một `SessionEnd` giả (`reason: "reconcile"`) vào `Hub::ingest`: cùng đường với `SessionEnd` thật (hủy yêu cầu
+  đang chờ → `ApprovalResolved(cancelled)` trước `AgentRemoved`, xóa agent con, ghi sự kiện).
+- `TeamState::sessions()`: phiên suy từ id agent gốc; thời điểm sự kiện gần nhất là max của phiên và mọi agent con.
+- Test: 7 đơn vị (`reconcile.rs`: đếm, đứt chuỗi khi lỗi, hoạt động gần đây, parse chịu lỗi, thiếu chương trình) và 6 tích hợp
+  (`hub/tests/reconcile.rs`: dọn như SessionEnd thật gồm hủy yêu cầu và thứ tự thông điệp, lỗi không xóa gì, agent con, hoạt
+  động gần đây, hub rỗng không chạy lister, task theo chu kỳ và dừng khi hub drop). Có thêm test `#[ignore]` chạy `claude` thật.
+
 ### T8 · ARC-29 · Danger list, chuẩn hóa, rủi ro
 
 **`normalize.rs`**

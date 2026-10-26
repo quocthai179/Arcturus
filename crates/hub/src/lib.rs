@@ -8,6 +8,7 @@ pub mod approvals;
 pub mod auth;
 pub mod hooks;
 pub mod hub;
+pub mod reconcile;
 pub mod record;
 pub mod server;
 pub mod ui_token;
