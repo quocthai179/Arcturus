@@ -7,5 +7,5 @@ export default defineConfig({
   clearScreen: false,
   server: { port: 5173, strictPort: true, host: '127.0.0.1' },
   build: { outDir: 'dist', target: 'es2022' },
-  test: { environment: 'jsdom' },
+  test: { environment: 'jsdom', setupFiles: ['src/test/setup.ts'] },
 });

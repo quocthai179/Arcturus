@@ -27,6 +27,8 @@ export interface GateInput {
   minReviewMs: number;
   /** Đã mở bản đầy đủ (bắt buộc với thẻ `truncated`). */
   reviewed: boolean;
+  /** Danh sách vừa mất một thẻ (thẻ bên dưới trượt lên): chưa cho Đồng ý trước thời điểm này (ms). */
+  calmUntil?: number | undefined;
 }
 
 export interface Gate {
@@ -42,6 +44,9 @@ export interface Gate {
 export function allowGate(a: ApprovalView, g: GateInput): Gate {
   if (!g.connected) return { ok: false, reason: 'Mất kết nối hub' };
   if (a.truncated && !g.reviewed) return { ok: false, reason: 'Cần mở bản đầy đủ trước khi duyệt' };
+  if (g.calmUntil !== undefined && g.now < g.calmUntil) {
+    return { ok: false, reason: 'Danh sách vừa đổi, xem lại thẻ rồi hãy duyệt' };
+  }
   if (g.shownAt === undefined) return { ok: false, reason: 'Xem kỹ lệnh trước khi duyệt' };
   const left = g.minReviewMs - Math.max(0, g.now - g.shownAt);
   if (left > 0) return { ok: false, reason: `Xem kỹ lệnh trước khi duyệt (${Math.ceil(left / 1000)} s)` };
@@ -188,7 +193,7 @@ export function ApprovalCard({
           </button>
           {full.kind === 'ok' && (
             <pre className="command command--full" aria-label="Bản đầy đủ">
-              {full.text}
+              {revealHidden(full.text)}
             </pre>
           )}
           {full.kind === 'error' && <p className="error">{full.text}</p>}

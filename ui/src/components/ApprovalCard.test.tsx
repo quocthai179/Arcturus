@@ -87,6 +87,18 @@ describe('ApprovalCard', () => {
     expect(onReviewed).toHaveBeenCalledTimes(1);
   });
 
+  it('view_full_reveals_hidden_and_bidi_chars_as_codes', async () => {
+    // Hub trả tool_input thô: U+202E (đảo chiều chữ) và U+200B (rộng 0) không được hiện nguyên trên thẻ.
+    const raw = '{\n  "command": "echo a‮b​c"\n}';
+    const loadFull = vi.fn(() => Promise.resolve(raw));
+    card(approval({ tool: 'Write', truncated: true }), OPEN, { loadFull });
+    fireEvent.click(screen.getByRole('button', { name: 'Xem đầy đủ' }));
+    await waitFor(() => expect(screen.getByLabelText('Bản đầy đủ')).toBeTruthy());
+    const text = screen.getByLabelText('Bản đầy đủ').textContent ?? '';
+    expect(text).toBe('{\n  "command": "echo a⟨U+202E⟩b⟨U+200B⟩c"\n}');
+    expect(text.includes('‮') || text.includes('​')).toBe(false);
+  });
+
   it('view_full_error_is_shown_and_not_reviewed', async () => {
     const loadFull = vi.fn(() => Promise.reject(new Error('Yêu cầu đã hết hạn')));
     const { onReviewed } = card(approval({ truncated: true }), OPEN, { loadFull });
@@ -150,6 +162,13 @@ describe('allowGate', () => {
     expect(allowGate(approval(), { ...base, now: 1999 }).ok).toBe(false);
     expect(allowGate(approval(), { ...base, now: 2000 })).toEqual({ ok: true, reason: null });
     expect(allowGate(approval(), { ...base, shownAt: undefined, now: 9999 }).ok).toBe(false);
+  });
+
+  it('blocked_while_list_is_settling', () => {
+    const g = { ...base, now: 5000, calmUntil: 5500 };
+    expect(allowGate(approval(), g).ok).toBe(false);
+    expect(allowGate(approval(), { ...g, now: 5500 }).ok).toBe(true);
+    expect(allowGate(approval(), { ...g, calmUntil: undefined }).ok).toBe(true);
   });
 
   it('truncated_requires_review_and_connection_required', () => {
