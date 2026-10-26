@@ -1,7 +1,7 @@
 // Popup Lite (docs/PLAN.md T12): hàng đợi duyệt, duyệt/từ chối, duyệt gộp, phím tắt trong popup (↑/↓ chọn, Enter đồng
 // ý, Esc từ chối). Đóng popup thì app hủy cả webview, nên không có gì cần dọn ngoài socket.
 import { useEffect, useRef } from 'react';
-import { Character } from '../components/Character';
+import { AgentAvatar } from '../components/AgentAvatar';
 import { QueueList } from '../components/QueueList';
 import { TeamControls } from '../components/TeamControls';
 import { approvalInput } from '../hub';
@@ -124,14 +124,7 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
         <section className="team" aria-label="Đội">
           {teamAgents.map((a) => (
             <div key={a.id} className="team__member">
-              <Character
-                mood={a.mood}
-                width={28}
-                hair={a.palette.hair}
-                outfit={a.palette.outfit}
-                acc={a.palette.acc}
-                label={a.name}
-              />
+              <AgentAvatar mood={a.mood} palette={a.palette} size={28} label={a.name} />
               <span className="team__name">{a.name}</span>
               <span className="muted team__act">{a.act_text}</span>
             </div>

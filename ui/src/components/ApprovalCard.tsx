@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import type { AgentView, ApprovalView, Decision, Risk, Suspicion } from '../protocol';
 import { revealHidden, splitSpans } from '../text';
-import { Character } from './Character';
+import { AgentAvatar } from './AgentAvatar';
 
 export const RISK_LABELS: Record<Risk, string> = {
   low: 'Rủi ro thấp',
@@ -110,12 +110,10 @@ export function ApprovalCard({
       onClick={onSelect}
     >
       <header className="card__head">
-        <Character
+        <AgentAvatar
           mood="approval"
-          width={40}
-          {...(agent !== undefined
-            ? { hair: agent.palette.hair, outfit: agent.palette.outfit, acc: agent.palette.acc }
-            : {})}
+          palette={agent?.palette}
+          size={40}
           label={`${a.agent_name} đang xin duyệt`}
         />
         <div className="card__who">
