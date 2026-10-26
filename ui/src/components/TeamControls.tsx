@@ -15,7 +15,11 @@ export interface TeamControlsProps {
 
 export function TeamControls({ team, connected, send }: TeamControlsProps) {
   const [failed, setFailed] = useState(false);
-  const run = (msg: ClientMsg) => setFailed(!send(msg));
+  // Bỏ focus khỏi nút vừa bấm: nếu không, Enter (phím Đồng ý của popup) sẽ bấm lại nút này thay vì duyệt thẻ.
+  const run = (msg: ClientMsg, button: HTMLButtonElement) => {
+    setFailed(!send(msg));
+    button.blur();
+  };
   return (
     <div className="team-controls">
       <button
@@ -24,7 +28,7 @@ export function TeamControls({ team, connected, send }: TeamControlsProps) {
         aria-pressed={team.paused}
         title={PAUSE_TOOLTIP}
         disabled={!connected}
-        onClick={() => run(team.paused ? { t: 'team_resume' } : { t: 'team_pause' })}
+        onClick={(e) => run(team.paused ? { t: 'team_resume' } : { t: 'team_pause' }, e.currentTarget)}
       >
         {team.paused ? 'Tiếp tục cả đội' : 'Tạm dừng cả đội'}
       </button>
@@ -34,7 +38,7 @@ export function TeamControls({ team, connected, send }: TeamControlsProps) {
         aria-pressed={team.focus}
         title={FOCUS_TOOLTIP}
         disabled={!connected}
-        onClick={() => run({ t: 'focus_set', on: !team.focus })}
+        onClick={(e) => run({ t: 'focus_set', on: !team.focus }, e.currentTarget)}
       >
         Giờ tập trung{team.focus ? ': bật' : ''}
       </button>
