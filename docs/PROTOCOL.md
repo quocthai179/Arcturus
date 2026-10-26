@@ -200,3 +200,19 @@ Authorization: Bearer <token UI>        # chỉ header, không nhận ?token=
 - Route không có CORS. Webview gọi `fetch` kèm header `Authorization` sẽ bị preflight chặn: app gọi qua phía Rust của
   Tauri (T12), không thêm CORS dễ dãi.
 - `404`: không còn chờ, không tồn tại, hoặc là `handoff_id`. `401`: thiếu/sai token UI. `403`: `Host`/`Origin` sai.
+
+```
+GET /standup?hours=24
+Authorization: Bearer <token UI>        # chỉ header; hours 1..=168, mặc định 24
+```
+
+- `200`, `application/json`, `nosniff`, `no-store` (có tiêu đề commit và lệnh test của người dùng): standup của `hours` giờ gần
+  nhất, **không LLM** (quy tắc bất biến 5). Số liệu đếm từ sự kiện đã lưu trong SQLite, `git log` chạy trong các `cwd` của
+  persona (tối đa 5 thư mục, 3 giây mỗi thư mục, bỏ merge), văn bản sinh từ template tiếng Việt cố định.
+- Hình dạng: `{"since","until","text","personas":[{"name","turns_done","commits":[…≤5],"commit_count","tests_passed",
+  "tests_failed","pending","repeated_errors":[{"tool","what","count"}]}]}`. `repeated_errors`: cùng một lỗi công cụ ≥3 lần.
+  `tests_*`: lệnh Bash khớp bộ chạy test phổ biến (`PostToolUse` = đạt, `PostToolUseFailure` = lỗi). `pending`: yêu cầu duyệt
+  đang chờ lúc gọi.
+- Mọi chuỗi (tên, lệnh, tiêu đề commit) là dữ liệu không tin cậy: ký tự ẩn hiện thành `⟨U+XXXX⟩`, gộp khoảng trắng, cắt 120
+  ký tự. UI hiển thị như văn bản thuần.
+- `400`: `hours` ngoài khoảng hoặc không phải số. `401`/`403` như các route UI khác. `503`: hub chạy không có cơ sở dữ liệu.

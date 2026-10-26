@@ -10,6 +10,7 @@ pub mod hooks;
 pub mod hub;
 pub mod record;
 pub mod server;
+pub mod standup;
 pub mod ui_token;
 pub mod view;
 pub mod ws;
