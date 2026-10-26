@@ -1,15 +1,11 @@
-// Một bundle cho mọi cửa sổ của app: `?view=office` là văn phòng 2D (T13), mặc định là popup Lite (T12).
+// Một bundle cho mọi cửa sổ: Office (T13) và popup Lite (T12).
+import { Office } from './views/Office';
 import { LitePopup } from './views/LitePopup';
 
 export function App() {
   const view = new URLSearchParams(window.location.search).get('view');
   if (view === 'office') {
-    return (
-      <main className="popup">
-        <h1>Văn phòng</h1>
-        <p className="muted">Văn phòng 2D sẽ có ở T13.</p>
-      </main>
-    );
+    return <Office />;
   }
   return <LitePopup />;
 }

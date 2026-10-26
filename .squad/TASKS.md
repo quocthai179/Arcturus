@@ -28,16 +28,16 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | T3 · ARC-24 | hub | Luồng duyệt: `/hooks/permission` giữ request bằng oneshot, timeout 110 s trả `{}`, hủy khi SessionEnd | T2 | 3 | done |
 | T4 · ARC-25 | hub | State machine agent theo bảng trong ARCHITECTURE.md; persona từ `arcturus.toml` | T2 | 2 | done |
 | T5 · ARC-26 | hub | WebSocket `/ws`: snapshot + delta; viết `docs/PROTOCOL.md`; xác thực token; xử lý `TeamPause`/`TeamResume` phía hub; `GET /approvals/{id}/input` | T3, T4 | 2 | done |
-| T5c · ARC-43 | hub | Trần byte cho `tool_input` đang giữ (`held_input_max_bytes` 8 MiB), đặt chỗ trước khi đọc body, giới hạn độ dài trường | T5 | 1 | review |
-| T5d · ARC-44 | hub | F6: `--ui-token-stdout`, sàn thời gian duyệt `min_review_ms`, luật danger cho T8, ghi giới hạn bảo mật | T5c | 1 | review |
-| T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | review |
+| T5c · ARC-43 | hub | Trần byte cho `tool_input` đang giữ (`held_input_max_bytes` 8 MiB), đặt chỗ trước khi đọc body, giới hạn độ dài trường | T5 | 1 | done |
+| T5d · ARC-44 | hub | F6: `--ui-token-stdout`, sàn thời gian duyệt `min_review_ms`, luật danger cho T8, ghi giới hạn bảo mật | T5c | 1 | done |
+| T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | done |
 | T7 · ARC-28 | hub | Đối soát `claude agents --json` mỗi 30 s, dọn phiên chết | T4 | 1 | todo |
-| T8 · ARC-29 | policy | Danger list + chuẩn hóa lệnh (bỏ ký tự ẩn/bidi), tính `risk` | T2 | 2 | review |
+| T8 · ARC-29 | policy | Danger list + chuẩn hóa lệnh (bỏ ký tự ẩn/bidi), tính `risk` | T2 | 2 | done |
 | T9 · ARC-30 | policy | Batch rule ("cho phép mẫu X trong N phút") + gom yêu cầu giống nhau | T8 | 2 | todo |
 | T10 · ARC-31 | policy | Trust grant cơ bản: đếm chuỗi duyệt liên tiếp, đề xuất nâng mức, tự hạ khi bị deny/hoàn tác | T8, T6 | 3 | todo |
-| T11 · ARC-32 | ui | Component nhân vật SVG (mood × palette), port từ mockup | T0 | 1 | review |
-| T12 · ARC-33 | ui | Tray + badge số người giơ tay; popup Lite (hàng đợi, duyệt/từ chối, duyệt gộp) | T5, T11 | 3 | review |
-| T13 · ARC-34 | ui | Văn phòng 2D: lưới bàn, trạng thái, "phòng hỗ trợ" gom agent rảnh (đội hình chính ≤5) | T5, T11 | 3 | todo |
+| T11 · ARC-32 | ui | Component nhân vật SVG (mood × palette), port từ mockup | T0 | 1 | done |
+| T12 · ARC-33 | ui | Tray + badge số người giơ tay; popup Lite (hàng đợi, duyệt/từ chối, duyệt gộp) | T5, T11 | 3 | done |
+| T13 · ARC-34 | ui | Văn phòng 2D: lưới bàn, trạng thái, "phòng hỗ trợ" gom agent rảnh (đội hình chính ≤5) | T5, T11 | 3 | review |
 | T14 · ARC-35 | ui | Nút "Tạm dừng cả đội" (chỉ UI, hub ở T5), "Giờ tập trung"; đếm ngược phủ quyết cho yêu cầu đảo ngược được | T12 | 2 | todo |
 | T15 · ARC-36 | lab | `tools/replay`: phát lại fixture với số phiên/tốc độ tùy chọn | T2 | 1 | todo |
 | T16 · ARC-37 | lab | Kịch bản đo ngân sách + bảng lịch sử trong BUDGET.md; chạy trên máy yếu | T15, T5 | 1 | todo |
@@ -87,7 +87,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 
 | ID · YouTrack | Làn | Task | Phụ thuộc | Ước lượng | Trạng thái |
 |---|---|---|---|---|---|
-| T18 · ARC-39 | lab | `hooks/arcturus-dogfood.json` + hướng dẫn cài/gỡ; bật dogfood | T5, T12 | 1 | todo |
+| T18 · ARC-39 | lab | `hooks/arcturus-dogfood.json` + hướng dẫn cài/gỡ; bật dogfood | T5, T12 | 1 | review |
 | T19 · ARC-40 | hub | Standup sinh từ template (sự kiện + git log), 0 token | T6 | 2 | todo |
 | T20 · ARC-41 | lab | Đo chỉ số: thời gian xử lý trung bình mỗi yêu cầu, thời gian agent tự chạy; so trước/sau | T18 | 1 | todo |
 | T21 · ARC-42 | main | `/milestone-gate v0` | tất cả | 1 | todo |
@@ -116,3 +116,6 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - 2026-10-23 · hub · T6/ARC-27 (cùng nhánh, commit `699e221`): `hub-core/src/store.rs` (SQLite WAL, một thread ghi, ack sau commit, bỏ events khi đầy, TTL 6 giờ, `StoreReader`, `EventRing`), hub ghi mọi sự kiện và quyết định, `--db`. 11 test store + 5 test tích hợp. Budget (container Linux, so với main cùng máy): idle 8,9 MB (main 6,0), 20 phiên 14,4 MB (main 7,1), CPU idle 0%, p99 ingest 2,71 ms; stress 64 × 1 MB đỉnh 35,6 MB (main 27,3). · Vướng: `ws_disconnects_stalled_client` (ARC-45) vẫn chập chờn trên Linux, cả trên main 3cf195d (1/5 lượt): client đọc bị tụt kênh broadcast nên nhận dưới 8 MB; đề xuất ticket mới dưới story T5. Chưa đo trên máy chuẩn Windows.
 - 2026-10-23 · ui · T11/ARC-32 (nhánh `claude/dreamy-davinci-oue6io`): `ui/src/components/Character.tsx` theo phụ lục A (5 mood render có điều kiện, không dùng opacity), `role="img"` + `aria-label` theo mood, màu chỉ nhận `#RRGGBB`, hiệu ứng 450 ms một lần khi chuyển sang approval/done, tắt khi `prefers-reduced-motion`. 17 test mới (tổng UI 18), typecheck và `vite build` sạch; đã soát hình 5 mood × 3 bảng màu bằng ảnh chụp Chromium. · Vướng: không.
 - 2026-10-23 · ui · T12/ARC-33 (cùng nhánh): app Tauri tray + popup Lite (`crates/app/src-tauri/src/{main,tray,hub_proc,link,http}.rs`), UI `protocol.ts`/`store.ts`/`ws.ts`/`hub.ts`, `ApprovalCard`, `HandoffCard`, `QueueList`, `views/LitePopup`; hub `--exit-on-stdin-close`. Sửa lỗi hub: stderr gãy làm tracing-subscriber panic, giết future tắt hub (`log_internal_errors(false)`, test hồi quy). UI 52 test, app 10 test, hub thêm 2 test; E2E với hub thật: Enter duyệt / Esc từ chối ra đúng JSON cho hook, thẻ cắt chặn Enter; app bị kill thì hub tắt êm và trả `{}`. · Vướng: chưa đo được popup ≤300 ms và RSS app trên máy chuẩn (container không có tray thật, không GPU: app tray 100 MB RSS, heap 20 MB); UI dùng hằng `min_review_ms` 1.000 ms, đề xuất ticket thêm giá trị này vào `TeamView`.
+- 2026-10-23 · main · Đóng T5c, T5d, T6, T8, T11, T12 (PR #6–#10 đã merge): bảng task chuyển `done`. · Vướng: ARC-27/29/32/33/43/44 trên YouTrack chờ người chuyển `Done`; T12 còn phải đo popup ≤300 ms và RSS app trên máy chuẩn Windows.
+- 2026-10-26 · lab · T18/ARC-39 (nhánh `claude/dreamy-davinci-oue6io`): `hooks/arcturus-dogfood.json` (SessionStart đổi sang hook command + curl, F1), `scripts/dogfood-install.sh`/`dogfood-uninstall.sh`/`dogfood-lib.sh` (gộp/gỡ bằng jq, có sao lưu, `--dry-run`, `--port`, `--settings`, giữ hook người dùng), `scripts/test-dogfood.sh` (54 kiểm tra, kiểm đột biến bắt 10/11, đột biến còn lại tương đương), job CI `scripts`, `docs/DOGFOOD.md`. Đã chạy lệnh SessionStart đã cài với hub thật: đúng token vào DB; hub tắt, sai, thiếu token đều im lặng. · Vướng: chưa thử với Claude Code thật (container không đăng nhập): các hook http khi hub lỗi/hết giờ vẫn là mục T17. Người dùng cần tự chạy `dogfood-install.sh` trên máy mình và làm các phép thử ở `docs/DOGFOOD.md` mục 5–6.
+- 2026-10-26 · ui · T13/ARC-34: Office + AgentDesk, sắp mood/thời gian, phòng hỗ trợ chỉ gom idle vượt roster_max (không giấu agent đang hoạt động hoặc agent con); chọn agent cuộn/focus thẻ; dùng chung kết nối và điều kiện duyệt với popup. Test UI/build và Chromium với hub thật: Allow/Deny, handoff, 7 agent/roster 3, mobile 390px, xóa agent. Profiler sau mô phỏng Page Visibility hidden 1,2 s: 0 Paint/FireAnimationFrame/TimerFire. · Vướng: chưa đo CPU/RSS và vòng đời webview/ẩn cửa sổ trên Tauri Windows thật; chi tiết docs/OFFICE.md.

@@ -1,6 +1,6 @@
 // Thẻ duyệt (docs/PLAN.md T12, quy tắc bất biến 3). Cơ sở duyệt là `command_normalized` hiện ĐẦY ĐỦ (không rút gọn,
 // không cắt bằng CSS), render bằng text node. Mọi chuỗi từ agent là dữ liệu không tin cậy.
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import type { AgentView, ApprovalView, Decision, Risk, Suspicion } from '../protocol';
 import { revealHidden, splitSpans } from '../text';
 import { Character } from './Character';
@@ -82,12 +82,6 @@ export function ApprovalCard({
 }: ApprovalCardProps) {
   const [showOriginal, setShowOriginal] = useState(false);
   const [full, setFull] = useState<FullState>({ kind: 'none' });
-  const root = useRef<HTMLElement>(null);
-
-  // Thẻ được chọn (↑/↓) phải nằm trong vùng nhìn thấy: Enter chỉ duyệt thẻ người dùng đang thấy.
-  useEffect(() => {
-    if (selected) root.current?.scrollIntoView({ block: 'nearest' });
-  }, [selected]);
   const pieces = splitSpans(a.command_normalized, a.danger_spans);
   const secondsLeft = Math.max(0, Math.ceil((Date.parse(a.deadline_at) - now) / 1000));
   const options = Object.entries(a.tool_options);
@@ -105,11 +99,11 @@ export function ApprovalCard({
 
   return (
     <article
-      ref={root}
       className={`card risk-${a.risk}${selected ? ' card--selected' : ''}`}
       aria-label={`Yêu cầu của ${a.agent_name}: ${a.tool}`}
       aria-current={selected ? 'true' : undefined}
       data-request-id={a.request_id}
+      tabIndex={-1}
       onClick={onSelect}
     >
       <header className="card__head">

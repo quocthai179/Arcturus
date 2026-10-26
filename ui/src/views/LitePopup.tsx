@@ -1,20 +1,14 @@
 // Popup Lite (docs/PLAN.md T12): hàng đợi duyệt, duyệt/từ chối, duyệt gộp, phím tắt trong popup (↑/↓ chọn, Enter đồng
 // ý, Esc từ chối). Đóng popup thì app hủy cả webview, nên không có gì cần dọn ngoài socket.
-import { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
-import { allowGate, type Gate } from '../components/ApprovalCard';
+import { useEffect, useRef } from 'react';
 import { Character } from '../components/Character';
-import { QueueList, type GroupAction } from '../components/QueueList';
-import { approvalInput, connectionInfo } from '../hub';
-import type { ApprovalView, ClientMsg, Decision } from '../protocol';
-import { initialState, reducer, type HubState } from '../store';
-import { useNow } from '../useNow';
-import { HubClient } from '../ws';
-
-/** Bằng mặc định `min_review_ms` của hub (`[hub]` trong arcturus.toml). Hub vẫn tự giữ allow sớm hơn sàn của nó. */
-export const DEFAULT_MIN_REVIEW_MS = 1000;
-
-/** Sau khi một thẻ rời hàng đợi (thẻ dưới trượt lên dưới con trỏ/phím), chưa cho Đồng ý chừng này để người dùng kịp thấy. */
-export const LIST_SETTLE_MS = 500;
+import { QueueList } from '../components/QueueList';
+import { approvalInput } from '../hub';
+import type { ClientMsg } from '../protocol';
+import type { HubState } from '../store';
+import { DEFAULT_MIN_REVIEW_MS, useApprovalQueue } from '../useApprovalQueue';
+import { useHubConnection } from '../useHubConnection';
+export { DEFAULT_MIN_REVIEW_MS, LIST_SETTLE_MS } from '../useApprovalQueue';
 
 export interface LitePopupViewProps {
   state: HubState;
@@ -25,76 +19,17 @@ export interface LitePopupViewProps {
 
 export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupViewProps) {
   const { queue, handoffs, agents, team, feed } = state;
-  const connected = state.connection === 'open' && state.synced;
-  const now = useNow(queue.length > 0);
+  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice } =
+    useApprovalQueue(state, send, minReviewMs);
 
-  // Lúc mỗi thẻ được hiện (sàn thời gian tính từ đây, kể cả thẻ tới qua snapshot) và thẻ đã mở bản đầy đủ.
-  const [shownAt, setShownAt] = useState<Record<string, number>>({});
-  const [reviewed, setReviewed] = useState<Record<string, true>>({});
-  const [selectedId, setSelectedId] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
-
+  // Thẻ được chọn (↑/↓) phải nằm trong vùng nhìn thấy: Enter chỉ duyệt thẻ người dùng đang thấy.
+  const root = useRef<HTMLElement>(null);
+  const selectedId = selected?.request_id;
   useEffect(() => {
-    setShownAt((prev) => {
-      const next: Record<string, number> = {};
-      const t = Date.now();
-      for (const a of queue) next[a.request_id] = prev[a.request_id] ?? t;
-      return next;
-    });
-  }, [queue]);
-
-  const selected = useMemo<ApprovalView | undefined>(
-    () => queue.find((a) => a.request_id === selectedId) ?? queue[0],
-    [queue, selectedId],
-  );
-
-  // Thẻ biến mất khỏi hàng đợi thì thẻ sau trượt lên: khóa Đồng ý một lúc (phím Enter/click kịp lúc không rơi vào thẻ mới).
-  const idsKey = queue.map((a) => a.request_id).join(',');
-  const [seen, setSeen] = useState({ key: idsKey, ids: queue.map((a) => a.request_id) });
-  const [calmUntil, setCalmUntil] = useState(0);
-  if (seen.key !== idsKey) {
-    const ids = queue.map((a) => a.request_id);
-    if (seen.ids.some((id) => !ids.includes(id))) setCalmUntil(Date.now() + LIST_SETTLE_MS);
-    setSeen({ key: idsKey, ids });
-  }
-
-  const gateOf = useCallback(
-    (a: ApprovalView): Gate =>
-      allowGate(a, {
-        connected,
-        shownAt: shownAt[a.request_id],
-        now: Math.max(now, Date.now()),
-        minReviewMs,
-        reviewed: reviewed[a.request_id] === true,
-        calmUntil,
-      }),
-    [connected, shownAt, now, minReviewMs, reviewed, calmUntil],
-  );
-
-  const decide = useCallback(
-    (requestId: string, decision: Decision): boolean => {
-      const ok = send({ t: 'decide', request_id: requestId, decision, origin: 'user' });
-      setNotice(ok ? null : 'Chưa kết nối hub, chưa gửi được');
-      return ok;
-    },
-    [send],
-  );
-
-  const decideGroup = useCallback(
-    (g: GroupAction) => {
-      // T9 chưa có `decide_group` ở hub: gửi từng `decide`, hub vẫn kiểm điều kiện cho từng yêu cầu (allow_gate).
-      // Dừng ở lần gửi lỗi đầu tiên và nói rõ đã gửi được bao nhiêu (không để thông báo của lần cuối che mất).
-      let sent = 0;
-      for (const a of g.items) {
-        if (!decide(a.request_id, 'allow')) {
-          setNotice(`Mới gửi ${sent}/${g.items.length} yêu cầu, mất kết nối hub. Kiểm tra lại hàng đợi.`);
-          return;
-        }
-        sent += 1;
-      }
-    },
-    [decide],
-  );
+    // So thuộc tính dữ liệu trực tiếp: id là dữ liệu, không ghép vào selector.
+    const cards = root.current?.querySelectorAll<HTMLElement>('[data-request-id]') ?? [];
+    [...cards].find((el) => el.dataset.requestId === selectedId)?.scrollIntoView({ block: 'nearest' });
+  }, [selectedId]);
 
   // Phím tắt chỉ trong popup (cửa sổ riêng, không đăng ký phím toàn cục).
   const latest = useRef({ queue, selected, gateOf, decide });
@@ -144,7 +79,7 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
   const teamAgents = Object.values(agents).filter((a) => a.parent_id === null);
 
   return (
-    <main className="popup">
+    <main className="popup" ref={root}>
       <header className="popup__head">
         <h1>Arcturus</h1>
         <span className="muted" role="status">
@@ -202,21 +137,6 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
 }
 
 export function LitePopup({ minReviewMs = DEFAULT_MIN_REVIEW_MS }: { minReviewMs?: number }) {
-  const [state, dispatch] = useReducer(reducer, initialState);
-  const client = useRef<HubClient | null>(null);
-  useEffect(() => {
-    const c = new HubClient({
-      connection: connectionInfo,
-      onMessage: (msg) => dispatch({ type: 'server', msg }),
-      onStatus: (status, error) => dispatch({ type: 'connection', status, error }),
-    });
-    client.current = c;
-    c.start();
-    return () => {
-      c.stop();
-      client.current = null;
-    };
-  }, []);
-  const send = useCallback((msg: ClientMsg) => client.current?.send(msg) ?? false, []);
+  const { state, send } = useHubConnection();
   return <LitePopupView state={state} send={send} loadFull={approvalInput} minReviewMs={minReviewMs} />;
 }

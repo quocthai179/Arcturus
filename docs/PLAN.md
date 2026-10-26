@@ -1046,6 +1046,12 @@ nhóm Critical không có nút duyệt gộp; `hidden_chars` hiện nhãn cảnh
 
 **Test:** gom phòng hỗ trợ đúng (không gom agent đang làm), thứ tự sắp xếp, bấm agent đang giơ tay cuộn tới thẻ duyệt.
 
+**Đã triển khai ở T13:** `views/Office`, `components/AgentDesk`, `officeRoster`; Office và popup dùng chung
+`useHubConnection`/`useApprovalQueue`. Thứ tự trong nhóm: `last_event_at` mới nhất trước, id phá hòa.
+Agent không rảnh (kể cả agent con) luôn có bàn riêng; chỉ phần idle vượt `roster_max` vào phòng hỗ trợ.
+Chọn agent chuyển focus/cuộn đến yêu cầu cũ nhất hoặc thẻ handoff. Page Visibility dừng timer UI và hiệu ứng CSS.
+Chi tiết thao tác, kiểm tra và giới hạn xác minh desktop: `docs/OFFICE.md`.
+
 ### T14 · ARC-35 · Lệnh cho cả đội
 
 - Nút "Tạm dừng cả đội" → `TeamPause` (phần hub đã làm ở T3 và T5). Hub v0 **không** chặn agent (chưa có cơ chế
@@ -1086,6 +1092,27 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
 - `hooks/arcturus-dogfood.json` hoàn chỉnh; `scripts/dogfood-install.sh` và `dogfood-uninstall.sh` gộp/gỡ khối `hooks`
   trong `~/.claude/settings.json` **có sao lưu** (`settings.json.bak-<ts>`), dùng `jq`; không đụng các khóa khác.
 - `docs/DOGFOOD.md`: các bước, cách gỡ, cách kiểm tra hub tắt vẫn an toàn.
+
+**Đã làm ở T18**
+- `hooks/arcturus-dogfood.json`: `SessionStart` đổi từ hook `http` sang hook `command` + `curl` (hook http không chạy cho
+  `SessionStart`, F1). Lệnh in ra stdout/stderr **không gì cả** và luôn thoát 0 (`-s -o /dev/null … || true`): stdout của
+  hook `SessionStart` được đưa vào ngữ cảnh của Claude. Đã chạy lệnh đã cài với hub thật: đúng token thì `session.started`
+  vào DB; hub tắt, sai hay thiếu token thì im lặng, thoát 0 trong 0,01 s và không có gì được lưu. `_comment` trỏ tới script.
+- `scripts/dogfood-install.sh`, `dogfood-uninstall.sh`, `dogfood-lib.sh` (dùng chung): ngoài đặc tả ("gộp/gỡ khối `hooks`,
+  có sao lưu, `jq`"), thêm `--settings FILE`, `--port N` (viết lại `127.0.0.1:7878`), `--dry-run` (in khác biệt, không ghi,
+  không sao lưu), `CLAUDE_CONFIG_DIR`. Gộp **vào cuối mảng** của từng sự kiện (hook của người dùng đứng trước, không bị ghi
+  đè); nhận diện hook của Arcturus theo đích `http://127.0.0.1:<cổng>/hooks/(event|permission)` (không thêm khóa lạ vào
+  settings, vì Claude Code có thể từ chối); cài lại không nhân đôi, nội dung không đổi thì không ghi, không sao lưu; JSON
+  hỏng hay `hooks` sai hình dạng thì dừng, không ghi; ghi bằng `>` để giữ symlink (dotfiles) và quyền file; ghi lỗi thì
+  khôi phục từ bản sao lưu; gỡ chỉ bỏ mục/khóa trở nên rỗng vì việc gỡ.
+- `scripts/test-dogfood.sh` (54 kiểm tra, chỉ dùng thư mục tạm, `HOME`/`CLAUDE_CONFIG_DIR` trỏ vào đó nên không đụng
+  `~/.claude` thật) + job CI `scripts` (`shellcheck -x scripts/*.sh`, test). Kiểm đột biến: làm hỏng bản sao của script/hook
+  (strip no-op, không sao lưu, ghi đè hook người dùng, bỏ đổi cổng, dry-run vẫn ghi, ghi qua `mv`, `SessionStart` về http,
+  đích ngoài localhost, token cứng, timeout 600) thì test đỏ.
+- `docs/DOGFOOD.md`: chuẩn bị, token, chạy app, cài, kiểm tra nối đúng, kiểm tra hub tắt vẫn an toàn, gỡ, giới hạn (F2, F6,
+  lệnh quá dài, nhật ký SQLite chứa lệnh), cách ghi lại.
+- **Chưa kiểm chứng** (cần máy có Claude Code đăng nhập; T17): các hook `http` ở trạng thái lỗi kết nối/hết giờ/non-2xx
+  của Claude Code thật. Container này không có đăng nhập Claude, nên chỉ kiểm được phía hub và lệnh `curl`.
 
 ### T19 · ARC-40 · Standup
 

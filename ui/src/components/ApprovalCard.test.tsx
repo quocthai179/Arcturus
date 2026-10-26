@@ -99,34 +99,6 @@ describe('ApprovalCard', () => {
     expect(text.includes('‮') || text.includes('​')).toBe(false);
   });
 
-  it('selected_card_is_scrolled_into_view', () => {
-    const scrolled: Element[] = [];
-    const original = Element.prototype.scrollIntoView;
-    Element.prototype.scrollIntoView = function (this: Element) {
-      scrolled.push(this);
-    };
-    try {
-      const { rerender, container } = card(approval(), OPEN, { selected: false });
-      expect(scrolled).toHaveLength(0);
-      rerender(
-        <ApprovalCard
-          approval={approval()}
-          agent={agent()}
-          selected
-          gate={OPEN}
-          now={Date.parse('2026-10-23T09:00:00Z')}
-          onSelect={() => {}}
-          onDecide={() => {}}
-          loadFull={() => Promise.resolve('{}')}
-          onReviewed={() => {}}
-        />,
-      );
-      expect(scrolled).toEqual([container.querySelector('article')]);
-    } finally {
-      Element.prototype.scrollIntoView = original;
-    }
-  });
-
   it('view_full_error_is_shown_and_not_reviewed', async () => {
     const loadFull = vi.fn(() => Promise.reject(new Error('Yêu cầu đã hết hạn')));
     const { onReviewed } = card(approval({ truncated: true }), OPEN, { loadFull });
