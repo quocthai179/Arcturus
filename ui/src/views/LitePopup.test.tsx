@@ -1,11 +1,16 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalView, ClientMsg } from '../protocol';
 import { applyServer, initialState, type HubState } from '../store';
 import { approval, handoff, snapshot } from '../test/fixtures';
-import { LitePopupView } from './LitePopup';
+import { LIST_SETTLE_MS, LitePopupView } from './LitePopup';
 
-afterEach(cleanup);
+const noScroll = Element.prototype.scrollIntoView;
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+  Element.prototype.scrollIntoView = noScroll;
+});
 
 function stateWith(queue: ApprovalView[], extra: Partial<HubState> = {}): HubState {
   return { ...applyServer(initialState, snapshot({ queue })), connection: 'open', ...extra };
@@ -45,6 +50,64 @@ describe('LitePopupView', () => {
     ]);
   });
 
+  it('held_enter_or_escape_decides_only_once', () => {
+    const { sent } = popup(stateWith(THREE));
+    fireEvent.keyDown(window, { key: 'Enter', repeat: true });
+    fireEvent.keyDown(window, { key: 'Escape', repeat: true });
+    expect(sent).toEqual([]);
+    fireEvent.keyDown(window, { key: 'Enter' });
+    fireEvent.keyDown(window, { key: 'Enter', repeat: true });
+    expect(sent).toEqual([{ t: 'decide', request_id: 'req_1', decision: 'allow', origin: 'user' }]);
+  });
+
+  it('allow_blocked_briefly_after_a_card_leaves_the_queue', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    const sent: ClientMsg[] = [];
+    const send = (m: ClientMsg) => (sent.push(m), true);
+    const view = (queue: ApprovalView[]) => (
+      <LitePopupView state={stateWith(queue)} send={send} loadFull={() => Promise.resolve('{}')} minReviewMs={0} />
+    );
+    const r = render(view(THREE));
+    act(() => void vi.advanceTimersByTime(1000));
+    // req_1 được xử lý ở nơi khác (terminal): req_2 trượt lên đúng chỗ con trỏ/phím đang nhắm.
+    r.rerender(view(THREE.slice(1)));
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(sent).toEqual([]);
+    for (const b of screen.getAllByRole('button', { name: /Đồng ý/ })) {
+      expect((b as HTMLButtonElement).disabled).toBe(true);
+    }
+    // Từ chối vẫn được; sau LIST_SETTLE_MS thì Đồng ý mở lại.
+    act(() => void vi.advanceTimersByTime(LIST_SETTLE_MS + 50));
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(sent).toEqual([{ t: 'decide', request_id: 'req_2', decision: 'allow', origin: 'user' }]);
+  });
+
+  it('new_card_appended_does_not_block_allow', () => {
+    vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+    const sent: ClientMsg[] = [];
+    const send = (m: ClientMsg) => (sent.push(m), true);
+    const view = (queue: ApprovalView[]) => (
+      <LitePopupView state={stateWith(queue)} send={send} loadFull={() => Promise.resolve('{}')} minReviewMs={0} />
+    );
+    const r = render(view(THREE.slice(0, 2)));
+    act(() => void vi.advanceTimersByTime(1000));
+    r.rerender(view(THREE));
+    fireEvent.keyDown(window, { key: 'Enter' });
+    expect(sent).toHaveLength(1);
+  });
+
+  it('arrow_selection_scrolls_card_into_view', () => {
+    const scrolled: (string | undefined)[] = [];
+    Element.prototype.scrollIntoView = function (this: Element) {
+      scrolled.push((this as HTMLElement).dataset.requestId);
+    };
+    popup(stateWith(THREE));
+    scrolled.length = 0;
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    fireEvent.keyDown(window, { key: 'ArrowDown' });
+    expect(scrolled).toEqual(['req_2', 'req_3']);
+  });
+
   it('enter_does_nothing_before_min_review', () => {
     const { sent } = popup(stateWith(THREE), 60_000);
     fireEvent.keyDown(window, { key: 'Enter' });
@@ -71,6 +134,21 @@ describe('LitePopupView', () => {
       { t: 'decide', request_id: 'req_a', decision: 'allow', origin: 'user' },
       { t: 'decide', request_id: 'req_b', decision: 'allow', origin: 'user' },
     ]);
+  });
+
+  it('group_button_reports_partial_send_when_connection_drops', () => {
+    const queue = ['a', 'b', 'c'].map((s, i) =>
+      approval({ request_id: `req_${s}`, group_key: 'Bash:npm test', risk: 'low', created_at: `2026-10-23T09:00:0${i}Z` }),
+    );
+    const sent: ClientMsg[] = [];
+    const send = vi.fn((m: ClientMsg) => {
+      sent.push(m);
+      return sent.length <= 1; // lần gửi thứ hai trở đi: socket đã đứt
+    });
+    render(<LitePopupView state={stateWith(queue)} send={send} loadFull={() => Promise.resolve('{}')} minReviewMs={0} />);
+    fireEvent.click(screen.getByRole('button', { name: /Duyệt cả 3/ }));
+    expect(send).toHaveBeenCalledTimes(2); // dừng ở lần lỗi đầu tiên, không thử nốt yêu cầu thứ ba
+    expect(screen.getByText(/Mới gửi 1\/3 yêu cầu/)).toBeTruthy();
   });
 
   it('critical_group_has_no_batch_button', () => {

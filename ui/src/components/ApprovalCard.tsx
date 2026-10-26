@@ -1,6 +1,6 @@
 // Thẻ duyệt (docs/PLAN.md T12, quy tắc bất biến 3). Cơ sở duyệt là `command_normalized` hiện ĐẦY ĐỦ (không rút gọn,
 // không cắt bằng CSS), render bằng text node. Mọi chuỗi từ agent là dữ liệu không tin cậy.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { AgentView, ApprovalView, Decision, Risk, Suspicion } from '../protocol';
 import { revealHidden, splitSpans } from '../text';
 import { Character } from './Character';
@@ -27,6 +27,8 @@ export interface GateInput {
   minReviewMs: number;
   /** Đã mở bản đầy đủ (bắt buộc với thẻ `truncated`). */
   reviewed: boolean;
+  /** Danh sách vừa mất một thẻ (thẻ bên dưới trượt lên): chưa cho Đồng ý trước thời điểm này (ms). */
+  calmUntil?: number | undefined;
 }
 
 export interface Gate {
@@ -42,6 +44,9 @@ export interface Gate {
 export function allowGate(a: ApprovalView, g: GateInput): Gate {
   if (!g.connected) return { ok: false, reason: 'Mất kết nối hub' };
   if (a.truncated && !g.reviewed) return { ok: false, reason: 'Cần mở bản đầy đủ trước khi duyệt' };
+  if (g.calmUntil !== undefined && g.now < g.calmUntil) {
+    return { ok: false, reason: 'Danh sách vừa đổi, xem lại thẻ rồi hãy duyệt' };
+  }
   if (g.shownAt === undefined) return { ok: false, reason: 'Xem kỹ lệnh trước khi duyệt' };
   const left = g.minReviewMs - Math.max(0, g.now - g.shownAt);
   if (left > 0) return { ok: false, reason: `Xem kỹ lệnh trước khi duyệt (${Math.ceil(left / 1000)} s)` };
@@ -77,6 +82,12 @@ export function ApprovalCard({
 }: ApprovalCardProps) {
   const [showOriginal, setShowOriginal] = useState(false);
   const [full, setFull] = useState<FullState>({ kind: 'none' });
+  const root = useRef<HTMLElement>(null);
+
+  // Thẻ được chọn (↑/↓) phải nằm trong vùng nhìn thấy: Enter chỉ duyệt thẻ người dùng đang thấy.
+  useEffect(() => {
+    if (selected) root.current?.scrollIntoView({ block: 'nearest' });
+  }, [selected]);
   const pieces = splitSpans(a.command_normalized, a.danger_spans);
   const secondsLeft = Math.max(0, Math.ceil((Date.parse(a.deadline_at) - now) / 1000));
   const options = Object.entries(a.tool_options);
@@ -94,6 +105,7 @@ export function ApprovalCard({
 
   return (
     <article
+      ref={root}
       className={`card risk-${a.risk}${selected ? ' card--selected' : ''}`}
       aria-label={`Yêu cầu của ${a.agent_name}: ${a.tool}`}
       aria-current={selected ? 'true' : undefined}
@@ -184,7 +196,7 @@ export function ApprovalCard({
           </button>
           {full.kind === 'ok' && (
             <pre className="command command--full" aria-label="Bản đầy đủ">
-              {full.text}
+              {revealHidden(full.text)}
             </pre>
           )}
           {full.kind === 'error' && <p className="error">{full.text}</p>}
