@@ -1057,9 +1057,13 @@ Chi tiết thao tác, kiểm tra và giới hạn xác minh desktop: `docs/OFFIC
 - Nút "Tạm dừng cả đội" → `TeamPause` (phần hub đã làm ở T3 và T5). Hub v0 **không** chặn agent (chưa có cơ chế
   dừng Claude Code từ ngoài một cách an toàn) — chỉ: (a) mọi `AutoAllow` bị tắt khi paused, (b) UI hiển thị trạng thái
   "đã tạm dừng". Ghi rõ giới hạn này trong UI tooltip và `docs/ARCHITECTURE.md`.
-- "Giờ tập trung" → `FocusSet{on}`: UI ẩn badge/âm báo cho yêu cầu risk Low/Medium; High/Critical vẫn báo.
+- "Giờ tập trung" → `FocusSet{on}`: ẩn **chấm báo và thông báo** (badge tray, tooltip; âm báo khi có, v0 chưa có) cho yêu cầu
+  risk Low/Medium; High/Critical vẫn báo. **Không ẩn thẻ** trong popup/Office: yêu cầu đang chờ luôn hiện khi người dùng
+  mở cửa sổ, vì ẩn thẻ là giấu lệnh đang chặn agent. Hub không đổi hành vi duyệt.
 - Đếm ngược phủ quyết: hiển thị khi `ApprovalView.countdown_ms` có giá trị (hub chỉ gửi cho yêu cầu reversible, T10
-  mức 5). Hết giờ: UI gửi `Decide{Allow, origin: Countdown}`. Nút "Dừng lại" gửi Deny, "Chạy ngay" gửi Allow, cả hai
+  mức 5). Đồng hồ chạy tới `max(created_at, lúc thẻ hiện) + countdown_ms` (thẻ tới UI muộn qua `Snapshot` không tự chạy
+  ngay khi vừa hiện; hub vẫn chỉ nhận khi `now ≥ created_at + countdown_ms`). Hết giờ: UI gửi
+  `Decide{Allow, origin: Countdown}` đúng một lần, chỉ khi đã kết nối và trang đang hiện. Nút "Dừng lại" gửi Deny, "Chạy ngay" gửi Allow, cả hai
   `origin: User`. Không bao giờ hiển thị cho Critical/High.
 - Nhận `TeamUpdated{paused: true}`: reducer xóa `countdown_ms` của mọi yêu cầu trong store và dừng mọi đồng hồ ngay
   (hub vẫn chặn ở phía mình, §3.4). Tiếp tục (resume) không khởi động lại đếm ngược cho yêu cầu cũ.
@@ -1074,12 +1078,11 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
   không dừng được Claude Code. Nút tắt khi chưa kết nối; gửi lỗi thì báo.
 - Giờ tập trung chỉ đổi **chấm báo và tooltip của tray** (`link.rs` đếm theo `risk`: Low/Medium ẩn, High/Critical, `risk`
   thiếu hoặc lạ, và thẻ "duyệt trong terminal" luôn báo; tooltip nói có bao nhiêu yêu cầu đang bị ẩn). Thẻ trong popup và
-  Office **không bị ẩn**: ẩn thẻ chờ duyệt thì người mở popup không thấy lệnh đang chặn agent. v0 chưa có âm báo. Thêm
+  Office **không bị ẩn** (đã chốt trong đặc tả ở trên; v0 chưa có âm báo). Thêm
   mục menu tray "Bật/Tắt giờ tập trung".
 - Đếm ngược (`countdown.ts`, `useApprovalQueue`): chỉ hiện và chạy khi `countdown_ms` có giá trị **và** `reversible` **và**
   risk Low/Medium **và** đội không tạm dừng (UI tự kiểm lại, không tin hub một mình). Mốc hết giờ tính từ
-  `max(created_at, lúc thẻ hiện) + countdown_ms`: thẻ tới muộn qua snapshot không tự chạy ngay khi vừa hiện (lệch nhẹ so
-  với đặc tả "hết giờ → gửi", chỉ làm đồng hồ dài hơn, không bao giờ ngắn hơn điều kiện hub). Hết giờ gửi
+  `max(created_at, lúc thẻ hiện) + countdown_ms` (xem đặc tả: không bao giờ ngắn hơn điều kiện hub). Hết giờ gửi
   `decide{allow, origin: countdown}` đúng một lần cho mỗi yêu cầu, chỉ khi đã kết nối và trang đang hiện. "Dừng lại"
   (`deny`) và "Chạy ngay" (`allow`, vẫn qua `allowGate`) gửi `origin: user`.
 - Reducer: `team_updated{paused: true}`, `snapshot` đang tạm dừng và `approval_requested` khi tạm dừng đều đặt

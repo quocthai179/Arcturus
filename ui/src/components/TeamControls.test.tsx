@@ -56,6 +56,17 @@ describe('TeamControls', () => {
     expect(send).not.toHaveBeenCalled();
   });
 
+  it('buttons_release_focus_so_enter_still_approves_cards', () => {
+    controls();
+    for (const name of ['Tạm dừng cả đội', /Giờ tập trung/]) {
+      const b = screen.getByRole('button', { name });
+      b.focus();
+      expect(document.activeElement).toBe(b);
+      fireEvent.click(b);
+      expect(document.activeElement).not.toBe(b);
+    }
+  });
+
   it('shows_error_when_send_fails', () => {
     controls(TEAM, true, false);
     fireEvent.click(screen.getByRole('button', { name: 'Tạm dừng cả đội' }));
