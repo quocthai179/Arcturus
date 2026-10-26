@@ -40,6 +40,8 @@ export interface QueueListProps {
   onDecideGroup: (group: GroupAction) => void;
   loadFull: (requestId: string) => Promise<string>;
   onReviewed: (requestId: string) => void;
+  /** Đếm ngược còn lại (ms) của một yêu cầu, `null` khi không có (T14). */
+  countdownOf: (a: ApprovalView) => number | null;
 }
 
 export function QueueList(p: QueueListProps) {
@@ -70,6 +72,7 @@ export function QueueList(p: QueueListProps) {
               agent={p.agents[a.agent_id]}
               selected={a.request_id === p.selectedId}
               gate={p.gateOf(a)}
+              countdownLeftMs={p.countdownOf(a)}
               now={p.now}
               onSelect={() => p.onSelect(a.request_id)}
               onDecide={(d) => p.onDecide(a.request_id, d)}

@@ -1,7 +1,8 @@
 // Chung cho popup và Office: mọi quyết định dùng cùng điều kiện duyệt.
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { allowGate, type Gate } from './components/ApprovalCard';
 import type { GroupAction } from './components/QueueList';
+import { countdownEndsAt } from './countdown';
 import type { ApprovalView, ClientMsg, Decision } from './protocol';
 import type { HubState } from './store';
 import { useNow } from './useNow';
@@ -84,5 +85,28 @@ export function useApprovalQueue(state: HubState, send: (msg: ClientMsg) => bool
     [decide],
   );
 
-  return { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice };
+  // Đếm ngược phủ quyết (T14). Mốc hết giờ tính từ lúc thẻ hiện; đội tạm dừng thì không có đồng hồ nào.
+  const paused = state.team.paused;
+  const countdownOf = useCallback(
+    (a: ApprovalView): number | null => {
+      const end = countdownEndsAt(a, shownAt[a.request_id], paused);
+      return end === null ? null : Math.max(0, end - Math.max(now, Date.now()));
+    },
+    [shownAt, paused, now],
+  );
+
+  // Hết giờ thì gửi `allow` với `origin: countdown`, mỗi yêu cầu đúng một lần. Chỉ khi đã kết nối và trang đang hiện
+  // (người dùng có cơ hội thấy và phủ quyết); hub vẫn kiểm lại mọi điều kiện (allow_gate, §3.4).
+  const fired = useRef(new Set<string>());
+  useEffect(() => {
+    if (!connected || document.hidden) return;
+    for (const a of queue) {
+      if (fired.current.has(a.request_id) || countdownOf(a) !== 0) continue;
+      if (send({ t: 'decide', request_id: a.request_id, decision: 'allow', origin: 'countdown' })) {
+        fired.current.add(a.request_id);
+      }
+    }
+  }, [queue, connected, countdownOf, send]);
+
+  return { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf };
 }

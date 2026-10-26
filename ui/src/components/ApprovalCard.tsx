@@ -65,6 +65,8 @@ export interface ApprovalCardProps {
   loadFull: (requestId: string) => Promise<string>;
   /** Gọi khi đã lấy được bản đầy đủ (mở khóa Đồng ý cho thẻ `truncated`). */
   onReviewed: () => void;
+  /** Đếm ngược phủ quyết còn lại (ms), `null` khi thẻ không có (T14). Hết giờ thì UI tự gửi `origin: countdown`. */
+  countdownLeftMs?: number | null;
 }
 
 type FullState = { kind: 'none' } | { kind: 'loading' } | { kind: 'ok'; text: string } | { kind: 'error'; text: string };
@@ -79,6 +81,7 @@ export function ApprovalCard({
   onDecide,
   loadFull,
   onReviewed,
+  countdownLeftMs = null,
 }: ApprovalCardProps) {
   const [showOriginal, setShowOriginal] = useState(false);
   const [full, setFull] = useState<FullState>({ kind: 'none' });
@@ -197,11 +200,19 @@ export function ApprovalCard({
         </div>
       )}
 
+      {countdownLeftMs !== null && (
+        <p className="countdown">
+          {countdownLeftMs > 0
+            ? `Tự chạy sau ${Math.ceil(countdownLeftMs / 1000)} s — bấm "Dừng lại" để hủy`
+            : 'Hết giờ đếm ngược: đang chờ bạn bấm'}
+        </p>
+      )}
+
       <p className="muted small">Cũng đang hỏi trong terminal của agent.</p>
 
       <footer className="card__actions">
         <button type="button" className="btn btn--deny" onClick={() => onDecide('deny')}>
-          Từ chối <kbd>Esc</kbd>
+          {countdownLeftMs !== null ? 'Dừng lại' : 'Từ chối'} <kbd>Esc</kbd>
         </button>
         <button
           type="button"
@@ -210,7 +221,7 @@ export function ApprovalCard({
           title={gate.reason ?? undefined}
           onClick={() => gate.ok && onDecide('allow')}
         >
-          Đồng ý <kbd>Enter</kbd>
+          {countdownLeftMs !== null ? 'Chạy ngay' : 'Đồng ý'} <kbd>Enter</kbd>
         </button>
       </footer>
       {gate.reason !== null && <p className="muted small gate-reason">{gate.reason}</p>}

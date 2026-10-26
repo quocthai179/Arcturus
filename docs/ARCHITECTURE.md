@@ -47,6 +47,8 @@ trong terminal). Hub người dùng tự khởi động thì app chỉ kết n�
    ngược** (bấm tạm dừng thì hủy luôn đếm ngược của yêu cầu đang chờ; tiếp tục không khôi phục). Hub chặn
    `decide` có `origin: countdown` khi tạm dừng, nên khi tạm dừng không có allow nào mà người không bấm. Tạm dừng
    không tự từ chối và ở v0 không dừng được agent thật (xem T14).
+   "Giờ tập trung" (`team.focus`) chỉ là cờ của UI/tray: ẩn chấm báo và thông báo của yêu cầu Low/Medium, hub không đổi
+   hành vi duyệt và thẻ vẫn nằm trong hàng đợi.
    Tự allow chỉ được trả sau khi bản ghi `approvals` đã ghi xong; ghi lỗi thì đổi thành hỏi người.
 4. Vào hàng đợi: tạo `oneshot` channel, broadcast thông điệp WebSocket `approval_requested`.
 5. Người quyết qua UI → hub gửi vào channel → trả JSON decision cho Claude Code.

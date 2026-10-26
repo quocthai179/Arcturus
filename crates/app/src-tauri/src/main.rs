@@ -136,6 +136,15 @@ fn on_menu(app: &AppHandle, id: &str) {
             };
             let _ = state.commands.try_send(cmd);
         }
+        tray::MENU_TOGGLE_FOCUS => {
+            let (Some(state), Some(t)) = (
+                app.try_state::<Arc<AppState>>(),
+                app.try_state::<TrayState>(),
+            ) else {
+                return;
+            };
+            let _ = state.commands.try_send(Command::FocusSet(!t.focused()));
+        }
         tray::MENU_QUIT => {
             if let Some(state) = app.try_state::<Arc<AppState>>() {
                 state.stop_hub();

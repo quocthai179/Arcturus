@@ -26,6 +26,28 @@ describe('store', () => {
     expect(s.team.paused).toBe(true);
   });
 
+  it('pause_clears_countdown_everywhere_and_resume_does_not_restore', () => {
+    const timed = (id: string) => approval({ request_id: id, countdown_ms: 5000, reversible: true, risk: 'low' });
+    let s = applyServer(initialState, snapshot({ queue: [timed('req_1'), timed('req_2')] }));
+    expect(s.queue.map((a) => a.countdown_ms)).toEqual([5000, 5000]);
+    s = applyServer(s, { t: 'team_updated', team: { paused: true, focus: false, roster_max: 5 } });
+    expect(s.queue.map((a) => a.countdown_ms)).toEqual([null, null]);
+    s = applyServer(s, { t: 'team_updated', team: { paused: false, focus: false, roster_max: 5 } });
+    expect(s.queue.map((a) => a.countdown_ms)).toEqual([null, null]);
+    // Yêu cầu tới sau khi tiếp tục thì được có đếm ngược.
+    s = applyServer(s, { t: 'approval_requested', approval: timed('req_3') });
+    expect(s.queue.find((a) => a.request_id === 'req_3')?.countdown_ms).toBe(5000);
+  });
+
+  it('countdown_is_dropped_while_paused_even_if_snapshot_or_delta_carries_one', () => {
+    const timed = approval({ request_id: 'req_1', countdown_ms: 5000, reversible: true, risk: 'low' });
+    const paused = { paused: true, focus: false, roster_max: 5 };
+    let s = applyServer(initialState, snapshot({ queue: [timed], team: paused }));
+    expect(s.queue[0]?.countdown_ms).toBeNull();
+    s = applyServer(s, { t: 'approval_requested', approval: { ...timed, request_id: 'req_2' } });
+    expect(s.queue.map((a) => a.countdown_ms)).toEqual([null, null]);
+  });
+
   it('deltas_upsert_and_remove_by_id', () => {
     let s = applyServer(initialState, snapshot());
     s = applyServer(s, { t: 'approval_requested', approval: approval({ request_id: 'req_2', created_at: '2026-10-23T09:00:05Z' }) });

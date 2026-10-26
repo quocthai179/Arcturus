@@ -31,12 +31,14 @@ const REOPEN_GUARD: Duration = Duration::from_millis(400);
 pub const MENU_OPEN_QUEUE: &str = "open_queue";
 pub const MENU_OPEN_OFFICE: &str = "open_office";
 pub const MENU_TOGGLE_PAUSE: &str = "toggle_pause";
+pub const MENU_TOGGLE_FOCUS: &str = "toggle_focus";
 pub const MENU_QUIT: &str = "quit";
 
 /// Phần trạng thái của tray trong app.
 pub struct TrayState {
     pub tray: TrayIcon<Wry>,
     pub pause_item: MenuItem<Wry>,
+    pub focus_item: MenuItem<Wry>,
     icon_plain: Image<'static>,
     icon_dot: Image<'static>,
     popup: Mutex<PopupTimes>,
@@ -83,12 +85,20 @@ pub fn tooltip(b: &Badge, error: Option<&str>) -> String {
             None => "Arcturus: đang kết nối hub…".to_owned(),
         };
     }
-    let mut t = match b.pending {
-        0 => "Arcturus: không có yêu cầu nào".to_owned(),
-        n => format!("Arcturus: {n} yêu cầu đang chờ"),
+    let mut t = match (b.pending, b.focus) {
+        (0, true) => "Arcturus: không có yêu cầu nào cần chú ý".to_owned(),
+        (0, false) => "Arcturus: không có yêu cầu nào".to_owned(),
+        (n, _) => format!("Arcturus: {n} yêu cầu đang chờ"),
     };
     if b.in_terminal > 0 {
         t.push_str(&format!(", {} đang duyệt trong terminal", b.in_terminal));
+    }
+    if b.focus {
+        t.push_str(" (giờ tập trung");
+        if b.quiet > 0 {
+            t.push_str(&format!(": ẩn {} yêu cầu rủi ro thấp/vừa", b.quiet));
+        }
+        t.push(')');
     }
     if b.paused {
         t.push_str(" (đội đang tạm dừng)");
@@ -117,8 +127,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayState> {
         false,
         None::<&str>,
     )?;
+    let focus_item = MenuItem::with_id(
+        app,
+        MENU_TOGGLE_FOCUS,
+        "Bật giờ tập trung",
+        false,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Thoát", true, None::<&str>)?;
-    let menu = Menu::with_items(app, &[&open_queue, &open_office, &pause_item, &quit])?;
+    let menu = Menu::with_items(
+        app,
+        &[&open_queue, &open_office, &pause_item, &focus_item, &quit],
+    )?;
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
         .icon(base.clone())
@@ -141,6 +161,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayState> {
     Ok(TrayState {
         tray,
         pause_item,
+        focus_item,
         icon_plain: base,
         icon_dot,
         popup: Mutex::new(PopupTimes::default()),
@@ -174,6 +195,12 @@ impl TrayState {
             });
         }
         let _ = self.pause_item.set_enabled(b.connected);
+        let _ = self.focus_item.set_enabled(b.connected);
+        let _ = self.focus_item.set_text(if b.focus {
+            "Tắt giờ tập trung"
+        } else {
+            "Bật giờ tập trung"
+        });
         let _ = self.pause_item.set_text(if b.paused {
             "Tiếp tục cả đội"
         } else {
@@ -186,6 +213,13 @@ impl TrayState {
             .lock()
             .unwrap_or_else(|e| e.into_inner())
             .is_some_and(|b| b.paused)
+    }
+
+    pub fn focused(&self) -> bool {
+        self.last_badge
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .is_some_and(|b| b.focus)
     }
 
     fn mark_opened(&self) {
@@ -356,6 +390,7 @@ mod tests {
             in_terminal: 1,
             paused: true,
             connected: true,
+            ..Badge::default()
         };
         assert_eq!(
             tooltip(&b, None),
@@ -370,6 +405,28 @@ mod tests {
                 None
             ),
             "Arcturus: không có yêu cầu nào"
+        );
+        // Giờ tập trung: nói rõ có yêu cầu bị ẩn, để chấm báo không làm người dùng tưởng hàng đợi trống.
+        let focus = Badge {
+            quiet: 2,
+            focus: true,
+            connected: true,
+            ..Badge::default()
+        };
+        assert_eq!(
+            tooltip(&focus, None),
+            "Arcturus: không có yêu cầu nào cần chú ý (giờ tập trung: ẩn 2 yêu cầu rủi ro thấp/vừa)"
+        );
+        assert_eq!(
+            tooltip(
+                &Badge {
+                    pending: 1,
+                    quiet: 0,
+                    ..focus
+                },
+                None
+            ),
+            "Arcturus: 1 yêu cầu đang chờ (giờ tập trung)"
         );
         assert_eq!(
             tooltip(&Badge::default(), Some("hub không khởi động được")),
