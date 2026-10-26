@@ -1207,7 +1207,13 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "clap",
+ "futures-util",
+ "hub",
+ "hub-core",
+ "reqwest",
  "serde_json",
+ "tokio",
+ "tokio-tungstenite 0.30.0",
 ]
 
 [[package]]
