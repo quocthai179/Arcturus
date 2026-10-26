@@ -1068,6 +1068,24 @@ Chi tiết thao tác, kiểm tra và giới hạn xác minh desktop: `docs/OFFIC
 focus lọc thông báo theo risk; countdown chỉ xuất hiện khi có `countdown_ms`; hết giờ gửi `origin: Countdown`, nút
 bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và resume không chạy lại.
 
+**Đã làm ở T14**
+- `TeamControls` (popup và Office): "Tạm dừng cả đội"/"Tiếp tục cả đội" (`team_pause`/`team_resume`, `aria-pressed` theo
+  `TeamView.paused`) và "Giờ tập trung" (`focus_set`). Tooltip nói rõ giới hạn v0: hub chỉ tắt tự duyệt và đếm ngược,
+  không dừng được Claude Code. Nút tắt khi chưa kết nối; gửi lỗi thì báo.
+- Giờ tập trung chỉ đổi **chấm báo và tooltip của tray** (`link.rs` đếm theo `risk`: Low/Medium ẩn, High/Critical, `risk`
+  thiếu hoặc lạ, và thẻ "duyệt trong terminal" luôn báo; tooltip nói có bao nhiêu yêu cầu đang bị ẩn). Thẻ trong popup và
+  Office **không bị ẩn**: ẩn thẻ chờ duyệt thì người mở popup không thấy lệnh đang chặn agent. v0 chưa có âm báo. Thêm
+  mục menu tray "Bật/Tắt giờ tập trung".
+- Đếm ngược (`countdown.ts`, `useApprovalQueue`): chỉ hiện và chạy khi `countdown_ms` có giá trị **và** `reversible` **và**
+  risk Low/Medium **và** đội không tạm dừng (UI tự kiểm lại, không tin hub một mình). Mốc hết giờ tính từ
+  `max(created_at, lúc thẻ hiện) + countdown_ms`: thẻ tới muộn qua snapshot không tự chạy ngay khi vừa hiện (lệch nhẹ so
+  với đặc tả "hết giờ → gửi", chỉ làm đồng hồ dài hơn, không bao giờ ngắn hơn điều kiện hub). Hết giờ gửi
+  `decide{allow, origin: countdown}` đúng một lần cho mỗi yêu cầu, chỉ khi đã kết nối và trang đang hiện. "Dừng lại"
+  (`deny`) và "Chạy ngay" (`allow`, vẫn qua `allowGate`) gửi `origin: user`.
+- Reducer: `team_updated{paused: true}`, `snapshot` đang tạm dừng và `approval_requested` khi tạm dừng đều đặt
+  `countdown_ms = null`; resume không khôi phục.
+- Chưa làm: âm báo (chưa có trong v0), đo lại ngân sách app (chỉ thêm đếm trong `link.rs`, không thêm timer).
+
 ### T15 · ARC-36 · Replay
 
 `tools/replay`: `replay <dir> --url http://127.0.0.1:7878 --sessions N --rate R/s --duration D [--permission-mode allow|skip]`.

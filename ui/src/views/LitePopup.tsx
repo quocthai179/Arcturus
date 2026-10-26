@@ -3,6 +3,7 @@
 import { useEffect, useRef } from 'react';
 import { Character } from '../components/Character';
 import { QueueList } from '../components/QueueList';
+import { TeamControls } from '../components/TeamControls';
 import { approvalInput } from '../hub';
 import type { ClientMsg } from '../protocol';
 import type { HubState } from '../store';
@@ -19,7 +20,7 @@ export interface LitePopupViewProps {
 
 export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupViewProps) {
   const { queue, handoffs, agents, team, feed } = state;
-  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice } =
+  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf } =
     useApprovalQueue(state, send, minReviewMs);
 
   // Phím tắt chỉ trong popup (cửa sổ riêng, không đăng ký phím toàn cục).
@@ -72,6 +73,7 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
           {queue.length > 0 ? `${queue.length} yêu cầu đang chờ` : 'Không có yêu cầu nào đang chờ'}
         </span>
       </header>
+      <TeamControls team={team} connected={state.connection === 'open' && state.synced} send={send} />
 
       {state.connection !== 'open' && (
         <p className="banner banner--error" role="alert">
@@ -79,6 +81,9 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
         </p>
       )}
       {team.paused && <p className="banner banner--paused">Đội đang tạm dừng: không có gì được tự duyệt.</p>}
+      {team.focus && (
+        <p className="banner">Giờ tập trung: chỉ báo yêu cầu rủi ro cao và vùng khóa. Các yêu cầu khác vẫn nằm trong hàng đợi.</p>
+      )}
       {notice !== null && <p className="banner banner--error">{notice}</p>}
       {lastFeed !== undefined && (
         <p className="banner" role="status" aria-live="polite">
@@ -93,6 +98,7 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
         selectedId={selected?.request_id ?? null}
         now={now}
         gateOf={gateOf}
+        countdownOf={countdownOf}
         onSelect={setSelectedId}
         onDecide={decide}
         onDecideGroup={decideGroup}

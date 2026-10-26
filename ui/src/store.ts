@@ -45,6 +45,13 @@ function byCreated<T extends { created_at: string }>(a: T, b: T): number {
   return a.created_at < b.created_at ? -1 : a.created_at > b.created_at ? 1 : 0;
 }
 
+/** Đội tạm dừng: không yêu cầu nào được có đếm ngược (hub cũng xóa ở phía mình). */
+function withoutCountdown(queue: ApprovalView[]): ApprovalView[] {
+  return queue.some((a) => a.countdown_ms !== null)
+    ? queue.map((a) => (a.countdown_ms === null ? a : { ...a, countdown_ms: null }))
+    : queue;
+}
+
 function upsert<T>(list: readonly T[], item: T, key: (x: T) => string, sort?: (a: T, b: T) => number): T[] {
   const k = key(item);
   const i = list.findIndex((x) => key(x) === k);
@@ -57,11 +64,12 @@ export function applyServer(state: HubState, msg: ServerMsg): HubState {
     case 'snapshot': {
       const agents: Record<AgentId, AgentView> = {};
       for (const a of msg.agents) agents[a.id] = a;
+      const queue = [...msg.queue].sort(byCreated);
       return {
         ...state,
         synced: true,
         agents,
-        queue: [...msg.queue].sort(byCreated),
+        queue: msg.team.paused ? withoutCountdown(queue) : queue,
         handoffs: [...msg.handoffs].sort(byCreated),
         team: msg.team,
       };
@@ -74,8 +82,10 @@ export function applyServer(state: HubState, msg: ServerMsg): HubState {
       delete agents[msg.id];
       return { ...state, agents };
     }
-    case 'approval_requested':
-      return { ...state, queue: upsert(state.queue, msg.approval, (a) => a.request_id, byCreated) };
+    case 'approval_requested': {
+      const approval = state.team.paused && msg.approval.countdown_ms !== null ? { ...msg.approval, countdown_ms: null } : msg.approval;
+      return { ...state, queue: upsert(state.queue, approval, (a) => a.request_id, byCreated) };
+    }
     case 'approval_resolved': {
       const queue = state.queue.filter((a) => a.request_id !== msg.request_id);
       return queue.length === state.queue.length ? state : { ...state, queue };
@@ -87,7 +97,8 @@ export function applyServer(state: HubState, msg: ServerMsg): HubState {
       return handoffs.length === state.handoffs.length ? state : { ...state, handoffs };
     }
     case 'team_updated':
-      return { ...state, team: msg.team };
+      // Tạm dừng xóa đếm ngược của mọi yêu cầu; tiếp tục không khôi phục (chỉ yêu cầu tới sau mới có).
+      return { ...state, team: msg.team, queue: msg.team.paused ? withoutCountdown(state.queue) : state.queue };
     case 'feed':
       return { ...state, feed: [{ text: msg.text, ts: msg.ts }, ...state.feed].slice(0, FEED_MAX) };
   }

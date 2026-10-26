@@ -298,3 +298,32 @@ body {
 .team__act {
   overflow-wrap: anywhere;
 }
+
+/* T14: lệnh cho cả đội và đếm ngược phủ quyết. */
+.team-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+  margin: 8px 0;
+}
+
+.btn--team {
+  background: var(--raised);
+  color: var(--text);
+  border: 1px solid var(--border);
+}
+
+.btn--team[aria-pressed='true'] {
+  border-color: var(--approval);
+  color: var(--approval);
+}
+
+.countdown {
+  margin: 6px 0;
+  padding: 6px 8px;
+  border-radius: 6px;
+  background: var(--risk-medium-bg);
+  color: var(--risk-medium-fg);
+  font-size: 12px;
+}

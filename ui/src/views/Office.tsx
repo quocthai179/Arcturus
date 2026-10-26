@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AgentDesk } from '../components/AgentDesk';
 import { QueueList } from '../components/QueueList';
+import { TeamControls } from '../components/TeamControls';
 import { approvalInput } from '../hub';
 import { officeRoster } from '../office';
 import { DEFAULT_MIN_REVIEW_MS, useApprovalQueue } from '../useApprovalQueue';
@@ -9,7 +10,7 @@ import type { LitePopupViewProps } from './LitePopup';
 import './Office.css';
 
 export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupViewProps) {
-  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice } =
+  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf } =
     useApprovalQueue(state, send, minReviewMs);
   const { desks, support } = officeRoster(Object.values(state.agents), state.team.roster_max);
   const queueRef = useRef<HTMLElement>(null);
@@ -45,6 +46,7 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
           {Object.keys(state.agents).length} agent · {state.queue.length} yêu cầu đang chờ
         </p>
       </header>
+      <TeamControls team={state.team} connected={state.connection === 'open' && state.synced} send={send} />
       {(state.connection !== 'open' || !state.synced) && (
         <p className="banner banner--error" role="alert">{state.error ?? 'Đang đồng bộ với hub…'}</p>
       )}
@@ -99,6 +101,7 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
             selectedId={selected?.request_id ?? null}
             now={now}
             gateOf={gateOf}
+            countdownOf={countdownOf}
             onSelect={setSelectedId}
             onDecide={decide}
             onDecideGroup={decideGroup}

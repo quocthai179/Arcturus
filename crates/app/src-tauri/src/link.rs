@@ -1,7 +1,7 @@
 //! Kết nối WebSocket nhẹ phía Rust của app (docs/PLAN.md T12): đếm yêu cầu đang chờ cho badge tray và gửi
 //! `team_pause`/`team_resume` từ menu tray. Không cần webview (popup đóng thì webview bị hủy, link này vẫn sống).
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
@@ -18,25 +18,54 @@ use crate::hub_proc::HubInfo;
 pub enum Command {
     TeamPause,
     TeamResume,
+    FocusSet(bool),
 }
 
 /// Trạng thái badge.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Badge {
-    /// Yêu cầu trên thẻ duyệt.
+    /// Yêu cầu trên thẻ duyệt cần báo. Giờ tập trung (`focus`): chỉ đếm rủi ro cao và vùng khóa.
     pub pending: usize,
+    /// Yêu cầu rủi ro thấp/vừa đang bị ẩn khỏi chấm báo vì giờ tập trung (vẫn nằm trong hàng đợi).
+    pub quiet: usize,
     /// Thẻ "duyệt trong terminal" (cũng đang chờ người, trong terminal).
     pub in_terminal: usize,
     pub paused: bool,
+    /// Giờ tập trung đang bật.
+    pub focus: bool,
     pub connected: bool,
 }
 
 /// Áp `snapshot`/delta như UI (docs/PROTOCOL.md "Vòng đời"), chỉ giữ id.
 #[derive(Default)]
 pub struct Counter {
-    queue: HashSet<String>,
+    /// `request_id` → có cần báo kể cả trong giờ tập trung (rủi ro cao/vùng khóa, hoặc không rõ).
+    queue: HashMap<String, bool>,
     handoffs: HashSet<String>,
     paused: bool,
+    focus: bool,
+}
+
+/// Chỉ `low`/`medium` được coi là yên lặng được; thiếu hoặc lạ thì vẫn báo (an toàn).
+fn needs_attention(approval: &Value) -> bool {
+    !matches!(
+        approval.get("risk").and_then(Value::as_str),
+        Some("low" | "medium")
+    )
+}
+
+fn queue_of(v: &Value) -> HashMap<String, bool> {
+    v.get("queue")
+        .and_then(Value::as_array)
+        .map(|a| {
+            a.iter()
+                .filter_map(|x| {
+                    let id = x.get("request_id").and_then(Value::as_str)?;
+                    Some((id.to_owned(), needs_attention(x)))
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 fn ids(v: &Value, list: &str, key: &str) -> HashSet<String> {
@@ -53,20 +82,26 @@ fn ids(v: &Value, list: &str, key: &str) -> HashSet<String> {
 impl Counter {
     /// Áp một thông điệp; `true` khi số đếm hoặc cờ tạm dừng đổi.
     pub fn apply(&mut self, msg: &Value) -> bool {
-        let before = (self.queue.len(), self.handoffs.len(), self.paused);
+        let before = self.badge(true);
         let str_of = |k: &str| msg.get(k).and_then(Value::as_str).map(str::to_owned);
         match msg.get("t").and_then(Value::as_str) {
             Some("snapshot") => {
-                self.queue = ids(msg, "queue", "request_id");
+                self.queue = queue_of(msg);
                 self.handoffs = ids(msg, "handoffs", "handoff_id");
                 self.paused = msg
                     .pointer("/team/paused")
                     .and_then(Value::as_bool)
                     .unwrap_or(false);
+                self.focus = msg
+                    .pointer("/team/focus")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false);
             }
             Some("approval_requested") => {
-                if let Some(id) = msg.pointer("/approval/request_id").and_then(Value::as_str) {
-                    self.queue.insert(id.to_owned());
+                if let Some(a) = msg.get("approval") {
+                    if let Some(id) = a.get("request_id").and_then(Value::as_str) {
+                        self.queue.insert(id.to_owned(), needs_attention(a));
+                    }
                 }
             }
             Some("approval_resolved") => {
@@ -89,17 +124,30 @@ impl Counter {
                     .pointer("/team/paused")
                     .and_then(Value::as_bool)
                     .unwrap_or(self.paused);
+                self.focus = msg
+                    .pointer("/team/focus")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(self.focus);
             }
             _ => {}
         }
-        before != (self.queue.len(), self.handoffs.len(), self.paused)
+        before != self.badge(true)
     }
 
     pub fn badge(&self, connected: bool) -> Badge {
+        let attention = self.queue.values().filter(|a| **a).count();
+        let (pending, quiet) = if self.focus {
+            (attention, self.queue.len() - attention)
+        } else {
+            (self.queue.len(), 0)
+        };
         Badge {
-            pending: self.queue.len(),
+            pending,
+            quiet,
+            // Thẻ "duyệt trong terminal" là lệnh quá dài, không có risk để lọc: luôn báo.
             in_terminal: self.handoffs.len(),
             paused: self.paused,
+            focus: self.focus,
             connected,
         }
     }
@@ -174,6 +222,8 @@ async fn session(
                 let t = match cmd {
                     Command::TeamPause => r#"{"t":"team_pause"}"#,
                     Command::TeamResume => r#"{"t":"team_resume"}"#,
+                    Command::FocusSet(true) => r#"{"t":"focus_set","on":true}"#,
+                    Command::FocusSet(false) => r#"{"t":"focus_set","on":false}"#,
                 };
                 ws.send(Message::text(t)).await.map_err(|e| e.to_string())?;
             }
@@ -196,8 +246,8 @@ mod tests {
             Badge {
                 pending: 2,
                 in_terminal: 1,
-                paused: false,
-                connected: true
+                connected: true,
+                ..Badge::default()
             }
         );
         // Trùng ngay sau snapshot: không đổi.
@@ -212,14 +262,58 @@ mod tests {
             c.badge(true),
             Badge {
                 pending: 2,
-                in_terminal: 0,
                 paused: true,
-                connected: true
+                connected: true,
+                ..Badge::default()
             }
         );
         // Snapshot mới thay toàn bộ.
         assert!(c.apply(&json!({"t":"snapshot","queue":[],"handoffs":[],"team":{"paused":false}})));
         assert_eq!(c.badge(false), Badge::default());
+    }
+
+    #[test]
+    fn focus_hides_low_and_medium_but_never_high_critical_or_unknown() {
+        let mut c = Counter::default();
+        c.apply(&json!({"t":"snapshot","handoffs":[{"handoff_id":"hof_1"}],
+            "queue":[{"request_id":"req_l","risk":"low"},{"request_id":"req_m","risk":"medium"},
+                     {"request_id":"req_h","risk":"high"},{"request_id":"req_c","risk":"critical"},
+                     {"request_id":"req_x"}],
+            "team":{"paused":false,"focus":false,"roster_max":5}}));
+        assert_eq!(c.badge(true).pending, 5);
+        assert_eq!(c.badge(true).quiet, 0);
+        // Bật giờ tập trung: cờ đổi nên badge đổi.
+        assert!(c.apply(
+            &json!({"t":"team_updated","team":{"paused":false,"focus":true,"roster_max":5}})
+        ));
+        let b = c.badge(true);
+        assert_eq!(
+            (b.pending, b.quiet, b.in_terminal, b.focus),
+            (3, 2, 1, true)
+        );
+        // Yêu cầu thấp/vừa mới tới trong giờ tập trung: ẩn; số báo không đổi nhưng `quiet` đổi.
+        assert!(c.apply(
+            &json!({"t":"approval_requested","approval":{"request_id":"req_l2","risk":"low"}})
+        ));
+        assert_eq!((c.badge(true).pending, c.badge(true).quiet), (3, 3));
+        // Yêu cầu cao tới thì báo.
+        assert!(c.apply(
+            &json!({"t":"approval_requested","approval":{"request_id":"req_h2","risk":"high"}})
+        ));
+        assert_eq!(c.badge(true).pending, 4);
+        // Tắt giờ tập trung: đếm lại tất cả.
+        assert!(c.apply(
+            &json!({"t":"team_updated","team":{"paused":false,"focus":false,"roster_max":5}})
+        ));
+        let b = c.badge(true);
+        assert_eq!((b.pending, b.quiet, b.focus), (7, 0, false));
+        // Giờ tập trung đi qua snapshot (kết nối lại).
+        c.apply(
+            &json!({"t":"snapshot","queue":[{"request_id":"req_l","risk":"low"}],"handoffs":[],
+            "team":{"paused":false,"focus":true,"roster_max":5}}),
+        );
+        let b = c.badge(true);
+        assert_eq!((b.pending, b.quiet), (0, 1));
     }
 
     #[test]

@@ -105,6 +105,36 @@ describe('ApprovalCard', () => {
     expect(onDecide).toHaveBeenCalledWith('deny');
   });
 
+  it('countdown_shown_only_with_value_and_relabels_buttons', () => {
+    const plain = card(approval(), OPEN);
+    expect(screen.queryByText(/Tự chạy sau/)).toBeNull();
+    expect(screen.getByRole('button', { name: /Đồng ý/ })).toBeTruthy();
+    plain.unmount();
+    const timed = card(approval({ risk: 'low', reversible: true, countdown_ms: 5000 }), OPEN, { countdownLeftMs: 3200 });
+    expect(screen.getByText(/Tự chạy sau 4 s/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Dừng lại/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Chạy ngay/ }));
+    expect(timed.onDecide.mock.calls).toEqual([['deny'], ['allow']]);
+    expect(plain.onDecide).not.toHaveBeenCalled();
+  });
+
+  it('run_now_still_obeys_the_gate', () => {
+    const { onDecide } = card(
+      approval({ risk: 'low', reversible: true, countdown_ms: 5000 }),
+      { ok: false, reason: 'Xem kỹ' },
+      { countdownLeftMs: 3000 },
+    );
+    const run = screen.getByRole('button', { name: /Chạy ngay/ });
+    expect((run as HTMLButtonElement).disabled).toBe(true);
+    fireEvent.click(run);
+    expect(onDecide).not.toHaveBeenCalled();
+  });
+
+  it('countdown_expired_says_waiting_for_user', () => {
+    card(approval({ risk: 'low', reversible: true, countdown_ms: 5000 }), OPEN, { countdownLeftMs: 0 });
+    expect(screen.getByText(/Hết giờ đếm ngược/)).toBeTruthy();
+  });
+
   it('sandbox_option_shown_separately_and_flagged', () => {
     const { container } = card(approval({ tool_options: { dangerouslyDisableSandbox: 'true', timeout: '600000' } }));
     expect(container.querySelector('.option--danger')?.textContent).toContain('dangerouslyDisableSandbox');

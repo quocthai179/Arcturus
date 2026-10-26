@@ -1,11 +1,14 @@
-import { cleanup, fireEvent, render, screen } from '@testing-library/react';
+import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalView, ClientMsg } from '../protocol';
 import { applyServer, initialState, type HubState } from '../store';
 import { approval, handoff, snapshot } from '../test/fixtures';
 import { LitePopupView } from './LitePopup';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.useRealTimers();
+});
 
 function stateWith(queue: ApprovalView[], extra: Partial<HubState> = {}): HubState {
   return { ...applyServer(initialState, snapshot({ queue })), connection: 'open', ...extra };
@@ -90,6 +93,93 @@ describe('LitePopupView', () => {
     for (const b of screen.getAllByRole('button', { name: /Đồng ý/ })) {
       expect((b as HTMLButtonElement).disabled).toBe(true);
     }
+  });
+
+  describe('countdown', () => {
+    const timed = (over: Partial<ApprovalView> = {}) =>
+      approval({ request_id: 'req_t', risk: 'low', reversible: true, countdown_ms: 5000, ...over });
+
+    function timedPopup(queue: ApprovalView[], extra: Partial<HubState> = {}) {
+      vi.useFakeTimers({ toFake: ['Date', 'setInterval', 'clearInterval'] });
+      vi.setSystemTime(Date.parse('2026-10-23T09:00:00Z'));
+      const sent: ClientMsg[] = [];
+      const send = (m: ClientMsg) => (sent.push(m), true);
+      const view = (state: HubState) => (
+        <LitePopupView state={state} send={send} loadFull={() => Promise.resolve('{}')} minReviewMs={0} />
+      );
+      const r = render(view(stateWith(queue, extra)));
+      return { sent, rerender: (state: HubState) => r.rerender(view(state)) };
+    }
+    const wait = (ms: number) => act(() => void vi.advanceTimersByTime(ms));
+
+    it('expiry_sends_allow_with_origin_countdown_exactly_once', () => {
+      const { sent } = timedPopup([timed()]);
+      expect(screen.getByText(/Tự chạy sau/)).toBeTruthy();
+      wait(4000);
+      expect(sent).toEqual([]);
+      wait(1500);
+      expect(sent).toEqual([{ t: 'decide', request_id: 'req_t', decision: 'allow', origin: 'countdown' }]);
+      wait(5000);
+      expect(sent).toHaveLength(1);
+    });
+
+    it('stop_button_sends_deny_with_origin_user_and_run_now_allow_with_origin_user', () => {
+      const { sent } = timedPopup([timed(), timed({ request_id: 'req_u', created_at: '2026-10-23T09:00:01Z' })]);
+      wait(1000);
+      const [stop, ,] = screen.getAllByRole('button', { name: /Dừng lại/ });
+      const runs = screen.getAllByRole('button', { name: /Chạy ngay/ });
+      fireEvent.click(stop as HTMLElement);
+      fireEvent.click(runs[1] as HTMLElement);
+      expect(sent).toEqual([
+        { t: 'decide', request_id: 'req_t', decision: 'deny', origin: 'user' },
+        { t: 'decide', request_id: 'req_u', decision: 'allow', origin: 'user' },
+      ]);
+    });
+
+    it('never_for_high_or_critical_even_if_hub_sends_countdown', () => {
+      const { sent } = timedPopup([timed({ risk: 'high' }), timed({ request_id: 'req_c', risk: 'critical' })]);
+      expect(screen.queryByText(/Tự chạy sau/)).toBeNull();
+      wait(60_000);
+      expect(sent).toEqual([]);
+    });
+
+    it('pause_stops_the_clock_and_resume_does_not_restart_it', () => {
+      const { sent, rerender } = timedPopup([timed()]);
+      wait(2000);
+      const paused = applyServer(stateWith([timed()]), {
+        t: 'team_updated',
+        team: { paused: true, focus: false, roster_max: 5 },
+      });
+      rerender(paused);
+      expect(screen.queryByText(/Tự chạy sau/)).toBeNull();
+      wait(60_000);
+      const resumed = applyServer(paused, { t: 'team_updated', team: { paused: false, focus: false, roster_max: 5 } });
+      rerender(resumed);
+      wait(60_000);
+      expect(sent).toEqual([]);
+      expect(screen.queryByText(/Tự chạy sau/)).toBeNull();
+    });
+
+    it('no_auto_allow_when_disconnected_or_page_hidden', () => {
+      const { sent, rerender } = timedPopup([timed()], { connection: 'closed' });
+      wait(10_000);
+      expect(sent).toEqual([]);
+      Object.defineProperty(document, 'hidden', { configurable: true, get: () => true });
+      try {
+        rerender(stateWith([timed()]));
+        wait(10_000);
+        expect(sent).toEqual([]);
+      } finally {
+        Reflect.deleteProperty(document, 'hidden');
+      }
+    });
+  });
+
+  it('team_controls_are_in_the_popup', () => {
+    const { sent } = popup(stateWith([]));
+    fireEvent.click(screen.getByRole('button', { name: 'Tạm dừng cả đội' }));
+    fireEvent.click(screen.getByRole('button', { name: /Giờ tập trung/ }));
+    expect(sent).toEqual([{ t: 'team_pause' }, { t: 'focus_set', on: true }]);
   });
 
   it('handoff_cards_have_no_decision_buttons', () => {
