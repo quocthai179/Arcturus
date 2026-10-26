@@ -1046,6 +1046,12 @@ nhóm Critical không có nút duyệt gộp; `hidden_chars` hiện nhãn cảnh
 
 **Test:** gom phòng hỗ trợ đúng (không gom agent đang làm), thứ tự sắp xếp, bấm agent đang giơ tay cuộn tới thẻ duyệt.
 
+**Đã triển khai ở T13:** `views/Office`, `components/AgentDesk`, `officeRoster`; Office và popup dùng chung
+`useHubConnection`/`useApprovalQueue`. Thứ tự trong nhóm: `last_event_at` mới nhất trước, id phá hòa.
+Agent không rảnh (kể cả agent con) luôn có bàn riêng; chỉ phần idle vượt `roster_max` vào phòng hỗ trợ.
+Chọn agent chuyển focus/cuộn đến yêu cầu cũ nhất hoặc thẻ handoff. Page Visibility dừng timer UI và hiệu ứng CSS.
+Chi tiết thao tác, kiểm tra và giới hạn xác minh desktop: `docs/OFFICE.md`.
+
 ### T14 · ARC-35 · Lệnh cho cả đội
 
 - Nút "Tạm dừng cả đội" → `TeamPause` (phần hub đã làm ở T3 và T5). Hub v0 **không** chặn agent (chưa có cơ chế

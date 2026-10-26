@@ -4,7 +4,7 @@ import { SUSPICION_LABELS } from './ApprovalCard';
 
 export function HandoffCard({ handoff: h }: { handoff: HandoffView }) {
   return (
-    <article className="card card--handoff" aria-label={`Duyệt trong terminal: ${h.agent_name}`}>
+    <article className="card card--handoff" data-handoff-id={h.handoff_id} tabIndex={-1} aria-label={`Duyệt trong terminal: ${h.agent_name}`}>
       <header className="card__head">
         <div className="card__who">
           <strong>{h.agent_name}</strong>

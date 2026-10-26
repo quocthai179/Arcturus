@@ -98,6 +98,7 @@ export function ApprovalCard({
       aria-label={`Yêu cầu của ${a.agent_name}: ${a.tool}`}
       aria-current={selected ? 'true' : undefined}
       data-request-id={a.request_id}
+      tabIndex={-1}
       onClick={onSelect}
     >
       <header className="card__head">
