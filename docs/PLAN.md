@@ -932,6 +932,27 @@ ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte,
 **Test:** `group_key_examples` (bảng), `decide_group_skips_critical`, `batch_rule_auto_allows_until_expiry`,
 `batch_rule_never_applies_to_high_or_critical`, `batch_close_stops_auto_allow`.
 
+**Đã làm ở T9**
+- `hub-core/src/policy/group.rs`: `group_key(tool, tool_input)` đúng bảng ví dụ của đặc tả, thêm: bỏ đường dẫn và chữ hoa, lệnh bọc
+  đứng trước (`sudo apt update` ≠ `apt update`), **lệnh ghép** mang hậu tố ` (ghép)` (nhiều lần gọi/đoạn ở đoạn chính, `$(…)`,
+  cờ nghi ngờ, không phân tích được, tên chương trình động). Lý do: batch "cho phép `cargo test`" không được kéo theo
+  `cargo test && npm install x`. Thẻ và nhật ký duyệt giờ ghi `group_key` thật (trước đây chỉ là tên tool).
+- `hub-core/src/policy/batch.rs`: `BatchRules` (đồng hồ thay được để test), `Allowance` cắm vào `RulesPolicy`: tự duyệt khi trùng
+  khóa, còn hạn, risk ≤ Medium; 1–240 phút, tối đa 64 quy tắc, khóa ghép/rỗng/quá dài/có ký tự điều khiển bị từ chối; `restore`
+  không tin hàng đã lưu (hết hạn, khóa ghép, hạn dài hơn trần).
+- `Approvals::decide_group`: mọi yêu cầu cùng nhóm trừ Critical, mỗi yêu cầu qua `Approvals::decide` (nên qua `allow_gate`, đúng ghi
+  chú audit ARC-44 finding 8), chỉ `origin: user`; trả `GroupResult {matched, decided, held, critical_left}`.
+- Hub: `Hub::batch_open/batch_close/restore_batch`, `Hub::start_with_batch` (tiêm bộ quy tắc; `start_full` tự dựng và cắm);
+  quy tắc lưu ở SQLite (migration **v2** chỉ có `batch_rules`; bảng của T10 sẽ là migration sau, lệch nhẹ so với "v2 (T9, T10)" để
+  hai task không đụng nhau); hết hạn báo bằng một task ngủ tới hạn (không polling), gia hạn thì task của hạn cũ bỏ qua; `main` nạp
+  lại quy tắc còn hạn khi khởi động.
+- WebSocket: `decide_group`, `batch_open`, `batch_close` hết "chưa hỗ trợ"; chung giới hạn 20 lệnh/giây với `decide`.
+- UI: nút "Duyệt cả N" gửi **một** `decide_group` (hết trường hợp gửi dở nửa chừng của #13); hub trả `feed` kết quả.
+- Test: 8 (`group.rs`) + 8 (`batch.rs`) + 2 (store) đơn vị và 13 tích hợp (`hub/tests/batch.rs`: bỏ Critical, qua `allow_gate`, thẻ cắt
+  chưa mở, tự duyệt tới hạn, hạn theo đồng hồ giả, Critical/lệnh ghép không bao giờ, đội tạm dừng, đóng, sống qua khởi động lại,
+  một timer và gia hạn, qua WebSocket).
+- Chưa làm: UI mở/đóng batch và danh sách quy tắc đang mở (Snapshot chưa có trường này, cần đổi hợp đồng §3.4).
+
 ### T10 · ARC-31 · Trust grant
 
 - `subject`: tên persona (ổn định qua phiên) — không dùng session_id.

@@ -177,6 +177,18 @@ async fn main() -> anyhow::Result<()> {
         };
         let (hub, _tasks) =
             Hub::start_full(cfg, personas, hostname(), danger, Box::new(db.handle()));
+        // Nạp lại batch rule còn hạn từ lần chạy trước (T9). Lỗi đọc chỉ làm mất quy tắc (an toàn: mọi thứ hỏi người).
+        match store::StoreReader::open(&db_path)
+            .and_then(|r| r.batch_rules(time::OffsetDateTime::now_utc()))
+        {
+            Ok(rows) => {
+                let n = hub.restore_batch(rows);
+                if n > 0 {
+                    tracing::info!(n, "đã nạp lại batch rule");
+                }
+            }
+            Err(err) => tracing::warn!(%err, "không nạp lại được batch rule"),
+        }
         let (ui, ws_handle) = ws::router(hub.clone(), ui_token, port, ws::WsConfig::default());
         let app = hooks::router(hub.clone(), token).merge(ui);
         tracing::info!(

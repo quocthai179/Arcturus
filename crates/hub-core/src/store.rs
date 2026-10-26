@@ -28,7 +28,7 @@ use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 use crate::schema::{AgentId, DecidedBy, Event, RequestId, Risk};
 
 /// Phiên bản schema mới nhất (`PRAGMA user_version`).
-pub const DB_VERSION: i32 = 1;
+pub const DB_VERSION: i32 = 2;
 
 /// Tối đa sự kiện chờ ghi trong kênh (§3.5).
 pub const EVENT_QUEUE_MAX: usize = 1024;
@@ -43,7 +43,8 @@ pub const PURGE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 /// Chờ khóa ghi tối đa (một kết nối khác đang ghi).
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-const MIGRATIONS: [(i32, &str); 1] = [(
+const MIGRATIONS: [(i32, &str); 2] = [
+    (
     1,
     "CREATE TABLE events (
        id TEXT PRIMARY KEY, ts TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -59,7 +60,15 @@ const MIGRATIONS: [(i32, &str); 1] = [(
        decided_by TEXT, created_at TEXT NOT NULL, decided_at TEXT, latency_ms INTEGER, channel TEXT
      );
      CREATE INDEX approvals_created ON approvals(created_at);",
-)];
+    ),
+    (
+        2,
+        // T9: quy tắc "cho phép mẫu X trong N phút". Bảng của T10 (trust_grants, streaks, trust_log) thêm ở migration sau.
+        "CREATE TABLE batch_rules (
+           group_key TEXT PRIMARY KEY, opened_at TEXT NOT NULL, expires_at TEXT NOT NULL
+         );",
+    ),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -270,6 +279,14 @@ fn channel_of(d: Option<DecidedBy>) -> Option<&'static str> {
     }
 }
 
+/// Một batch rule đã lưu (T9).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchRow {
+    pub group_key: String,
+    pub opened_at: OffsetDateTime,
+    pub expires_at: OffsetDateTime,
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Mở, migration
 // ---------------------------------------------------------------------------------------------------------------
@@ -353,6 +370,8 @@ pub type Ack = Box<dyn FnOnce(Result<(), StoreError>) + Send>;
 enum Cmd {
     Event(EventRecord),
     Approval(ApprovalRecord, Option<Ack>),
+    BatchSet(BatchRow),
+    BatchDelete(String),
     Purge(OffsetDateTime),
     Flush(mpsc::Sender<()>),
     Close,
@@ -467,6 +486,24 @@ impl StoreHandle {
             if let Some(ack) = ack {
                 ack(Err(StoreError::Closed));
             }
+        }
+    }
+
+    /// Lưu (hoặc thay) một batch rule (T9). Không chặn; thread ghi đã dừng thì chỉ log.
+    pub fn batch_set(&self, row: BatchRow) {
+        if self.tx.send(Cmd::BatchSet(row)).is_err() {
+            tracing::warn!("thread ghi SQLite đã dừng: mất bản ghi batch rule");
+        }
+    }
+
+    /// Xóa batch rule của `group_key`.
+    pub fn batch_delete(&self, group_key: &str) {
+        if self
+            .tx
+            .send(Cmd::BatchDelete(group_key.to_owned()))
+            .is_err()
+        {
+            tracing::warn!("thread ghi SQLite đã dừng: mất lệnh xóa batch rule");
         }
     }
 
@@ -616,6 +653,17 @@ fn apply(conn: &Connection, cmd: &Cmd) -> rusqlite::Result<()> {
             Ok(())
         }
         Cmd::Approval(rec, _) => write_approval(conn, rec),
+        Cmd::BatchSet(r) => {
+            conn.execute(
+                "INSERT OR REPLACE INTO batch_rules (group_key, opened_at, expires_at) VALUES (?1, ?2, ?3)",
+                params![r.group_key, format_ts(r.opened_at), format_ts(r.expires_at)],
+            )?;
+            Ok(())
+        }
+        Cmd::BatchDelete(key) => {
+            conn.execute("DELETE FROM batch_rules WHERE group_key = ?1", params![key])?;
+            Ok(())
+        }
         Cmd::Purge(before) => {
             conn.execute(
                 "DELETE FROM events WHERE ts < ?1",
@@ -845,6 +893,30 @@ impl StoreReader {
             ))?;
             let rows = st.query_map(params![limit_i64(limit)], approval_row)?;
             rows.collect()
+        })
+    }
+
+    /// Batch rule đã lưu còn hạn tại `now` (hàng hỏng bị bỏ qua).
+    pub fn batch_rules(&self, now: OffsetDateTime) -> Result<Vec<BatchRow>, StoreError> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT group_key, opened_at, expires_at FROM batch_rules WHERE expires_at > ?1 ORDER BY group_key",
+            )?;
+            let rows = st.query_map(params![format_ts(now)], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (group_key, opened, expires) = row?;
+                if let (Some(opened_at), Some(expires_at)) = (parse_ts(&opened), parse_ts(&expires)) {
+                    out.push(BatchRow {
+                        group_key,
+                        opened_at,
+                        expires_at,
+                    });
+                }
+            }
+            Ok(out)
         })
     }
 
@@ -1317,6 +1389,64 @@ mod tests {
         assert_eq!(c, "2026-10-23T09:00:01.000Z");
         assert!(a < b && b < c);
         assert_eq!(parse_ts(&b), Some(datetime!(2026-10-23 09:00:00.5 UTC)));
+    }
+
+    #[test]
+    fn batch_rules_persist_replace_delete_and_skip_expired() {
+        let dir = TempDir::new();
+        let t0 = datetime!(2026-10-27 10:00 UTC);
+        let row = |k: &str, mins: i64| BatchRow {
+            group_key: k.to_owned(),
+            opened_at: t0,
+            expires_at: t0 + time::Duration::minutes(mins),
+        };
+        let s = Store::open(&dir.db(), 30).unwrap();
+        let h = s.handle();
+        h.batch_set(row("Bash:cargo test", 30));
+        h.batch_set(row("Bash:ls", 5));
+        h.batch_set(row("Bash:ls", 10)); // thay
+        h.batch_set(row("Bash:old", 1));
+        h.batch_set(row("Bash:gone", 60));
+        h.batch_delete("Bash:gone");
+        h.flush().unwrap();
+        s.close();
+        // Sống qua lần khởi động lại; hàng hết hạn không được trả về.
+        let r = StoreReader::open(&dir.db()).unwrap();
+        let rows = r.batch_rules(t0 + time::Duration::minutes(2)).unwrap();
+        let keys: Vec<&str> = rows.iter().map(|b| b.group_key.as_str()).collect();
+        assert_eq!(keys, ["Bash:cargo test", "Bash:ls"]);
+        assert_eq!(rows[1].expires_at, t0 + time::Duration::minutes(10));
+        assert!(r
+            .batch_rules(t0 + time::Duration::minutes(31))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn upgrade_from_v1_database_adds_batch_rules_and_keeps_data() {
+        let dir = TempDir::new();
+        // Dựng CSDL ở phiên bản 1 (chỉ migration 1), ghi một sự kiện, rồi mở bằng hub hiện tại.
+        {
+            let mut conn = Connection::open(dir.db()).unwrap();
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(MIGRATIONS[0].1).unwrap();
+            tx.pragma_update(None, "user_version", 1).unwrap();
+            tx.execute(
+                "INSERT INTO events (id, ts, session_id, kind, event_json) VALUES ('e1', '2026-10-27T10:00:00.000Z', 's', 'k', '{}')",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let s = Store::open(&dir.db(), 30).unwrap();
+        s.close();
+        let r = StoreReader::open(&dir.db()).unwrap();
+        assert_eq!(r.user_version().unwrap(), DB_VERSION);
+        assert_eq!(r.event_count().unwrap(), 1, "dữ liệu cũ còn nguyên");
+        assert!(r
+            .batch_rules(datetime!(2026-10-27 10:00 UTC))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

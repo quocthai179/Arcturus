@@ -8,7 +8,9 @@
 //!    - Critical (khớp danger list) và High **không bao giờ** tự duyệt (quy tắc bất biến 2; batch/trust chỉ tới Medium).
 //!    - Đếm ngược phủ quyết chỉ khi yêu cầu `reversible` (v0: chỉ Low).
 
+pub mod batch;
 pub mod danger;
+pub mod group;
 pub mod normalize;
 pub mod risk;
 
