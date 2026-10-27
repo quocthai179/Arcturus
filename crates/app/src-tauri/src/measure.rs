@@ -72,6 +72,12 @@ pub fn log(event: &str, extra: &str) {
     }
 }
 
+/// Chỉ bật ghi mốc `[measure] ...` ra stderr, không tự mở/đóng gì (`ARCTURUS_MEASURE_LOG=1`): để người dùng tự rê chuột và bấm
+/// trên tray thật rồi đọc `popup_prewarmed`, `popup_shown`, `popup_ready ms=...`.
+pub fn enable_logging() {
+    ENABLED.store(true, Ordering::Relaxed);
+}
+
 /// Bật chế độ đo và chạy chuỗi hành động ở một thread riêng. Việc mở/đóng cửa sổ chạy trên thread chính của Tauri.
 pub fn start(app: AppHandle, cfg: Config) {
     ENABLED.store(true, Ordering::Relaxed);

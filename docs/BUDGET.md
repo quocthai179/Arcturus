@@ -31,6 +31,10 @@ Chế độ đo của app (`crates/app/src-tauri/src/measure.rs`) chỉ bật kh
 mở/đóng popup và ghi `[measure] event=...` ra stderr; `popup_ready` là thời gian từ lúc bắt đầu mở cửa sổ tới khung đầu
 tiên đã vẽ. RSS là working set (Windows) hoặc VmRSS (Linux); app tính cả cây webview, không tính hub con.
 
+Kiểm tay bằng chuột thật (không tự động hoá): chạy app với `ARCTURUS_MEASURE_LOG=1` (chỉ ghi mốc ra stderr, không tự mở popup),
+rê chuột ~0,5 s trên icon tray rồi bấm; stderr phải có `popup_prewarmed` rồi `popup_shown` và `popup_ready ms=<nhỏ>`:
+`$env:ARCTURUS_MEASURE_LOG='1'; .\cratespp\src-tauri	argeteleasercturus-app.exe 2>&1 | Select-String '\[measure\]'`.
+
 Đo tay (khi cần soi một tiến trình):
 - Linux/macOS: `pgrep -f 'target/.*/hub' | xargs -I{} ps -o pid,rss,%cpu,etime,command -p {}` (RSS bằng KB).
 - Windows: `Get-Process hub, arcturus-app | Select-Object Name, Id, @{n='RSS_MB';e={[math]::Round($_.WorkingSet64/1MB,1)}}, CPU`.
