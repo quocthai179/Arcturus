@@ -141,8 +141,7 @@ Migration v1:
   decided_by, created_at, decided_at, latency_ms, channel)` — `status`: `pending | allowed | denied | timed_out | cancelled |
   handed_off`; `command_*` là đúng phần người duyệt thấy trên thẻ
 
-Migration v2 (T9, T10):
-- `batch_rules(group_key, opened_at, expires_at)`
+Migration v2 (T9): `batch_rules(group_key, opened_at, expires_at)`. Migration v3 (T10):
 - `trust_grants(id, subject, pattern, level, granted_at, expires_at, reason, revoked_at)` — `subject` là tên persona,
   `pattern` là `group_key`
 - `streaks(subject, pattern, approved_in_row, first_at, last_at, last_incident_at)` — để đề xuất nâng/hạ mức

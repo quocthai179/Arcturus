@@ -489,12 +489,13 @@ async fn ws_decide_errors_are_private_feeds() {
 
     send(
         &mut ws,
-        json!({ "t": "decide_group", "group_key": "Bash", "decision": "allow" }),
+        json!({ "t": "suggestion_answer", "id": "sug_1", "accept": true }),
     )
     .await;
+    // T9, T10 đã hỗ trợ decide_group/batch_*/suggestion_answer: id không biết trả Feed riêng.
     assert_eq!(
         next_of(&mut ws, &["feed"]).await["text"],
-        "Lệnh này chưa được hỗ trợ"
+        "Đề xuất không còn hiệu lực"
     );
 
     // Client kia không nhận Feed của client này (chỉ nhận broadcast).

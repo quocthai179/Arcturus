@@ -5,16 +5,21 @@
 //! Thứ tự xử lý một sự kiện: luồng duyệt trước (hủy/thay yêu cầu), trạng thái agent sau, nên khi `SessionEnd` UI nhận
 //! `ApprovalResolved` trước `AgentRemoved`.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use hub_core::config::Config;
 use hub_core::hook::{self, HookInput};
 use hub_core::persona::PersonaBook;
+use hub_core::policy::batch::{BatchError, BatchRule, BatchRules};
+use hub_core::policy::trust::{
+    Answered, Streak, TrustBook, TrustError, TrustGrant, TrustSuggestion,
+};
 use hub_core::protocol::{ServerMsg, TeamView};
 use hub_core::schema::Event;
 use hub_core::state::TeamState;
-use hub_core::store::EventRing;
+use hub_core::store::{BatchRow, EventRing};
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, mpsc, watch};
 use tokio::task::JoinHandle;
@@ -31,6 +36,30 @@ pub const BROADCAST_CAPACITY: usize = 256;
 /// Sức chứa hàng đợi `/hooks/event` (§3.5).
 pub const EVENT_QUEUE: usize = 1024;
 
+/// Hai nguồn tự duyệt của policy thật: batch rule (T9) và trust grant (T10). Cùng bộ được cắm vào `RulesPolicy` và đưa vào
+/// hub để lệnh WebSocket thao tác.
+#[derive(Clone)]
+pub struct Automation {
+    pub batch: Arc<BatchRules>,
+    pub trust: Arc<TrustBook>,
+}
+
+impl Automation {
+    pub fn new(trust_cfg: &hub_core::config::TrustConfig) -> Self {
+        Automation {
+            batch: Arc::new(BatchRules::new()),
+            trust: Arc::new(TrustBook::new(trust_cfg)),
+        }
+    }
+
+    /// `RulesPolicy` với cả hai nguồn: batch rule trước, trust grant sau.
+    pub fn policy(&self) -> RulesPolicy {
+        RulesPolicy::new()
+            .with(Box::new(self.batch.clone()))
+            .with(Box::new(self.trust.clone()))
+    }
+}
+
 pub struct Hub {
     pub cfg: Config,
     pub host: String,
@@ -45,6 +74,10 @@ pub struct Hub {
     recent: Mutex<EventRing>,
     /// Khóa ngoài cùng cho thay đổi cờ đội (`set_paused`, `set_focus`); lấy trước khóa của `Approvals` và `state`.
     team: Mutex<()>,
+    /// Batch rule đang mở (T9). `RulesPolicy` giữ một bản `Arc` để tự duyệt theo nhóm.
+    batch: Arc<BatchRules>,
+    /// Đường dẫn cơ sở dữ liệu SQLite, để `GET /standup` mở kết nối đọc khi cần (T19). `main` đặt một lần.
+    db_path: OnceLock<PathBuf>,
 }
 
 /// Các task nền của hub; drop không dừng chúng (dừng khi `Hub` bị drop và kênh đóng).
@@ -74,17 +107,21 @@ impl Hub {
         store: Box<dyn ApprovalStore>,
     ) -> (Arc<Hub>, HubTasks) {
         let approvals_cfg = approvals_config(&cfg, danger);
-        Self::start_with(
+        let auto = Automation::new(&cfg.trust);
+        let policy = auto.policy();
+        Self::start_with_batch(
             cfg,
             personas,
             host,
             approvals_cfg,
-            Box::new(RulesPolicy::new()),
+            Box::new(policy),
             store,
+            auto,
         )
     }
 
-    /// Dựng hub và khởi động vòng sự kiện + task tick (cần đang ở trong runtime tokio).
+    /// Dựng hub và khởi động vòng sự kiện + task tick (cần đang ở trong runtime tokio). Batch rule mở qua hub chỉ có hiệu
+    /// lực nếu `policy` tự cắm [`BatchRules`] (xem [`Hub::start_with_batch`]).
     pub fn start_with(
         cfg: Config,
         personas: PersonaBook,
@@ -93,11 +130,34 @@ impl Hub {
         policy: Box<dyn Policy>,
         store: Box<dyn ApprovalStore>,
     ) -> (Arc<Hub>, HubTasks) {
+        let trust_cfg = cfg.trust.clone();
+        Self::start_with_batch(
+            cfg,
+            personas,
+            host,
+            approvals_cfg,
+            policy,
+            store,
+            Automation::new(&trust_cfg),
+        )
+    }
+
+    /// Như [`Hub::start_with`], với bộ batch rule do người gọi cấp (cùng bộ đã cắm vào `policy`; test truyền đồng hồ giả).
+    pub fn start_with_batch(
+        cfg: Config,
+        personas: PersonaBook,
+        host: String,
+        approvals_cfg: ApprovalsConfig,
+        policy: Box<dyn Policy>,
+        store: Box<dyn ApprovalStore>,
+        auto: Automation,
+    ) -> (Arc<Hub>, HubTasks) {
+        let Automation { batch, trust } = auto;
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (events, events_rx) = mpsc::channel(EVENT_QUEUE);
         let (wake, wake_rx) = watch::channel(None);
         let hub = Arc::new(Hub {
-            approvals: Approvals::new(approvals_cfg, policy, store, tx.clone()),
+            approvals: Approvals::with_trust(approvals_cfg, policy, store, tx.clone(), trust),
             cfg,
             host,
             personas,
@@ -107,12 +167,149 @@ impl Hub {
             wake,
             recent: Mutex::new(EventRing::default()),
             team: Mutex::new(()),
+            batch,
+            db_path: OnceLock::new(),
         });
         let tasks = HubTasks {
             events: tokio::spawn(event_loop(Arc::downgrade(&hub), events_rx)),
             tick: tokio::spawn(tick_loop(Arc::downgrade(&hub), wake_rx)),
         };
         (hub, tasks)
+    }
+
+    pub fn batch(&self) -> &Arc<BatchRules> {
+        &self.batch
+    }
+
+    pub fn trust(&self) -> &Arc<TrustBook> {
+        self.approvals.trust()
+    }
+
+    /// Đề xuất nâng mức đang chờ trả lời (gửi cho client mới sau `Snapshot`).
+    pub fn pending_suggestions(&self) -> Vec<TrustSuggestion> {
+        self.approvals.trust().pending_suggestions()
+    }
+
+    /// `SuggestionAnswer` (T10): chấp nhận thì cấp grant mức 6 và báo mọi client; từ chối thì không đề xuất lại 7 ngày.
+    pub fn trust_answer(&self, suggestion_id: &str, accept: bool) -> Result<Answered, TrustError> {
+        let (answered, update) = self.approvals.trust().answer(suggestion_id, accept)?;
+        self.approvals.apply_trust(update);
+        if let Answered::Granted(g) = &answered {
+            tracing::info!(subject = ?g.subject, pattern = ?g.pattern, grant = %g.id, "trust grant mức 6 được cấp");
+            let days = (g.expires_at - g.granted_at).whole_days();
+            self.broadcast_feed(format!(
+                "Đã cho phép {} tự chạy \"{}\" trong {days} ngày (chỉ rủi ro thấp/vừa)",
+                g.subject, g.pattern
+            ));
+        }
+        Ok(answered)
+    }
+
+    /// Nạp lại grant và chuỗi duyệt đã lưu khi khởi động. Trả số grant nạp được.
+    pub fn restore_trust(&self, grants: Vec<TrustGrant>, streaks: Vec<Streak>) -> usize {
+        self.approvals.trust().restore(grants, streaks)
+    }
+
+    /// `BatchOpen` (T9): mở hoặc gia hạn quy tắc cho `group_key` trong `minutes` phút. Lưu vào store, hẹn một lần để báo khi
+    /// hết hạn (task một lần, không polling) và báo `Feed` cho mọi client.
+    pub fn batch_open(
+        self: &Arc<Self>,
+        group_key: &str,
+        minutes: u32,
+    ) -> Result<BatchRule, BatchError> {
+        let rule = self.batch.open(group_key, minutes)?;
+        self.approvals.batch_set(BatchRow {
+            group_key: rule.group_key.clone(),
+            opened_at: rule.opened_at,
+            expires_at: rule.expires_at,
+        });
+        self.schedule_batch_expiry(&rule);
+        tracing::info!(group = ?rule.group_key, minutes, "batch rule mở");
+        self.broadcast_feed(format!(
+            "Cho phép \"{}\" trong {minutes} phút (chỉ yêu cầu rủi ro thấp/vừa)",
+            rule.group_key
+        ));
+        Ok(rule)
+    }
+
+    /// `BatchClose` (T9). `true` nếu có quy tắc đang mở bị đóng.
+    pub fn batch_close(&self, group_key: &str) -> bool {
+        let closed = self.batch.close(group_key);
+        self.approvals.batch_delete(group_key);
+        if closed {
+            tracing::info!(group = ?group_key, "batch rule đóng");
+            self.broadcast_feed(format!("Đã tắt cho phép \"{group_key}\""));
+        }
+        closed
+    }
+
+    /// Nạp lại quy tắc đã lưu khi khởi động (bỏ qua hàng hết hạn hoặc không hợp lệ). Trả số quy tắc nạp được.
+    pub fn restore_batch(self: &Arc<Self>, rows: Vec<BatchRow>) -> usize {
+        let mut n = 0;
+        for row in rows {
+            let rule = BatchRule {
+                group_key: row.group_key,
+                opened_at: row.opened_at,
+                expires_at: row.expires_at,
+            };
+            if self.batch.restore(rule.clone()) {
+                self.schedule_batch_expiry(&rule);
+                n += 1;
+            } else {
+                // Hàng không dùng được (hết hạn, khóa ghép, hạn quá xa): dọn khỏi store.
+                self.approvals.batch_delete(&rule.group_key);
+            }
+        }
+        n
+    }
+
+    /// Hẹn báo hết hạn: một task ngủ tới hạn (không polling). Quy tắc được gia hạn có hạn mới hơn, nên task của hạn cũ bỏ
+    /// qua; task của hạn mới sẽ xử lý.
+    fn schedule_batch_expiry(self: &Arc<Self>, rule: &BatchRule) {
+        let weak = Arc::downgrade(self);
+        let rule = rule.clone();
+        let wait = (rule.expires_at - self.batch_now())
+            .try_into()
+            .unwrap_or(Duration::ZERO)
+            + Duration::from_millis(50);
+        tokio::spawn(async move {
+            tokio::time::sleep(wait).await;
+            let Some(hub) = weak.upgrade() else { return };
+            hub.batch_expired(&rule);
+        });
+    }
+
+    fn batch_now(&self) -> OffsetDateTime {
+        self.batch.now()
+    }
+
+    fn batch_expired(&self, rule: &BatchRule) {
+        // Còn hạn: đã được gia hạn (task của hạn mới sẽ báo), hoặc đánh thức sớm hơn hạn.
+        if self.batch.expiry(&rule.group_key).is_some() {
+            return;
+        }
+        // Dọn hàng đã hết hạn khỏi bộ nhớ và store.
+        let _ = self.batch.active();
+        self.approvals.batch_delete(&rule.group_key);
+        tracing::info!(group = ?rule.group_key, "batch rule hết hạn");
+        self.broadcast_feed(format!("Hết thời hạn cho phép \"{}\"", rule.group_key));
+    }
+
+    /// `Feed` cho mọi client.
+    pub fn broadcast_feed(&self, text: String) {
+        self.publish(vec![ServerMsg::Feed {
+            text,
+            ts: OffsetDateTime::now_utc(),
+        }]);
+    }
+
+    /// Cho biết cơ sở dữ liệu nằm ở đâu (gọi một lần sau khi mở store; lần sau bị bỏ qua).
+    pub fn set_db_path(&self, path: PathBuf) {
+        let _ = self.db_path.set(path);
+    }
+
+    pub fn db_path(&self) -> Option<&Path> {
+        self.db_path.get().map(PathBuf::as_path)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<ServerMsg> {
@@ -222,6 +419,11 @@ impl Hub {
     /// Mọi agent hiện có (cho `Snapshot`, T5b).
     pub fn agent_views(&self) -> Vec<hub_core::protocol::AgentView> {
         self.lock_state().views()
+    }
+
+    /// Phiên đang giữ kèm sự kiện gần nhất (đối soát, T7).
+    pub fn sessions(&self) -> Vec<(String, OffsetDateTime)> {
+        self.lock_state().sessions()
     }
 
     /// Tắt hub: trả `{}` cho mọi yêu cầu đang chờ.

@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { AgentDesk } from '../components/AgentDesk';
 import { QueueList } from '../components/QueueList';
+import { SuggestionList } from '../components/SuggestionList';
 import { TeamControls } from '../components/TeamControls';
 import { approvalInput } from '../hub';
 import { officeRoster } from '../office';
@@ -10,7 +11,7 @@ import type { LitePopupViewProps } from './LitePopup';
 import './Office.css';
 
 export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupViewProps) {
-  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf } =
+  const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf, suggestions, answerSuggestion } =
     useApprovalQueue(state, send, minReviewMs);
   const { desks, support } = officeRoster(Object.values(state.agents), state.team.roster_max);
   const queueRef = useRef<HTMLElement>(null);
@@ -94,6 +95,7 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
           {state.queue.length === 0 && state.handoffs.length === 0 && (
             <p className="muted">Không có yêu cầu nào đang chờ.</p>
           )}
+          <SuggestionList suggestions={suggestions} onAnswer={answerSuggestion} />
           <QueueList
             queue={state.queue}
             handoffs={state.handoffs}

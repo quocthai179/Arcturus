@@ -3,7 +3,7 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { allowGate, type Gate } from './components/ApprovalCard';
 import type { GroupAction } from './components/QueueList';
 import { countdownEndsAt } from './countdown';
-import type { ApprovalView, ClientMsg, Decision } from './protocol';
+import type { ApprovalView, ClientMsg, Decision, TrustSuggestionView } from './protocol';
 import type { HubState } from './store';
 import { useNow } from './useNow';
 
@@ -71,18 +71,28 @@ export function useApprovalQueue(state: HubState, send: (msg: ClientMsg) => bool
 
   const decideGroup = useCallback(
     (g: GroupAction) => {
-      // T9 chưa có `decide_group` ở hub: gửi từng `decide`, hub vẫn kiểm điều kiện cho từng yêu cầu (allow_gate).
-      // Dừng ở lần gửi lỗi đầu tiên và nói rõ đã gửi được bao nhiêu (không để thông báo của lần cuối che mất).
-      let sent = 0;
-      for (const a of g.items) {
-        if (!decide(a.request_id, 'allow')) {
-          setNotice(`Mới gửi ${sent}/${g.items.length} yêu cầu, mất kết nối hub. Kiểm tra lại hàng đợi.`);
-          return;
-        }
-        sent += 1;
-      }
+      // Một thông điệp `decide_group` (T9): hub áp cho mọi yêu cầu cùng nhóm trừ Critical, kiểm điều kiện cho từng yêu cầu
+      // (allow_gate) và trả `Feed` báo đã duyệt bao nhiêu, bao nhiêu bị giữ lại. Không còn trường hợp gửi dở nửa chừng.
+      const ok = send({ t: 'decide_group', group_key: g.groupKey, decision: 'allow' });
+      setNotice(ok ? null : 'Chưa kết nối hub, chưa gửi được');
     },
-    [decide],
+    [send],
+  );
+
+  // Đề xuất nâng mức tin cậy (T10): trả lời bằng một thông điệp; thẻ biến mất ngay ở cửa sổ này (hub chỉ báo cho client khác
+  // qua Feed), nên giữ danh sách id đã trả lời cục bộ.
+  const [answered, setAnswered] = useState<ReadonlySet<string>>(new Set());
+  const suggestions = useMemo<TrustSuggestionView[]>(
+    () => state.suggestions.filter((s) => !answered.has(s.id)),
+    [state.suggestions, answered],
+  );
+  const answerSuggestion = useCallback(
+    (id: string, accept: boolean) => {
+      const ok = send({ t: 'suggestion_answer', id, accept });
+      setNotice(ok ? null : 'Chưa kết nối hub, chưa gửi được');
+      if (ok) setAnswered((prev) => new Set(prev).add(id));
+    },
+    [send],
   );
 
   // Đếm ngược phủ quyết (T14). Mốc hết giờ tính từ lúc thẻ hiện; đội tạm dừng thì không có đồng hồ nào.
@@ -108,5 +118,17 @@ export function useApprovalQueue(state: HubState, send: (msg: ClientMsg) => bool
     }
   }, [queue, connected, countdownOf, send]);
 
-  return { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf };
+  return {
+    now,
+    selected,
+    setSelectedId,
+    gateOf,
+    decide,
+    decideGroup,
+    setReviewed,
+    notice,
+    countdownOf,
+    suggestions,
+    answerSuggestion,
+  };
 }

@@ -79,6 +79,19 @@ export interface TeamView {
   roster_max: number;
 }
 
+/** Đề xuất nâng mức tin cậy (T10). `text` do hub dựng từ template; hiển thị như văn bản thuần. */
+export interface TrustSuggestionView {
+  id: string;
+  subject: string;
+  pattern: string;
+  level: number;
+  approved_in_row: number;
+  window_days: number;
+  grant_days: number;
+  text: string;
+  created_at: string;
+}
+
 export type ServerMsg =
   | { t: 'snapshot'; agents: AgentView[]; queue: ApprovalView[]; handoffs: HandoffView[]; team: TeamView }
   | { t: 'feed'; text: string; ts: string }
@@ -88,11 +101,15 @@ export type ServerMsg =
   | { t: 'approval_resolved'; request_id: RequestId; decision: Decision | null; decided_by: DecidedBy }
   | { t: 'team_updated'; team: TeamView }
   | { t: 'approval_handed_off'; handoff: HandoffView }
-  | { t: 'handoff_cleared'; handoff_id: string };
+  | { t: 'handoff_cleared'; handoff_id: string }
+  | { t: 'suggestion'; suggestion: TrustSuggestionView };
 
 export type ClientMsg =
   | { t: 'decide'; request_id: RequestId; decision: Decision; message?: string; origin: DecideOrigin }
   | { t: 'decide_group'; group_key: string; decision: Decision }
+  | { t: 'batch_open'; group_key: string; minutes: number }
+  | { t: 'batch_close'; group_key: string }
+  | { t: 'suggestion_answer'; id: string; accept: boolean }
   | { t: 'team_pause' }
   | { t: 'team_resume' }
   | { t: 'focus_set'; on: boolean };
@@ -107,6 +124,7 @@ const SERVER_TYPES: ReadonlySet<string> = new Set([
   'team_updated',
   'approval_handed_off',
   'handoff_cleared',
+  'suggestion',
 ]);
 
 function isRecord(v: unknown): v is Record<string, unknown> {
@@ -156,6 +174,11 @@ export function parseServerMsg(raw: string): ServerMsg | null {
       break;
     case 'handoff_cleared':
       if (typeof v.handoff_id !== 'string') return null;
+      break;
+    case 'suggestion':
+      if (!isRecord(v.suggestion) || typeof v.suggestion.id !== 'string' || typeof v.suggestion.text !== 'string') {
+        return null;
+      }
       break;
   }
   return v as ServerMsg;

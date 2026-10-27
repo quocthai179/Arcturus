@@ -818,6 +818,24 @@ trong `CLAUDE.md` nếu có điều mới (đề xuất, chờ duyệt).
 **Test:** dùng trait `AgentLister` để giả lập: `removes_session_missing_twice`, `keeps_session_missing_once`,
 `command_failure_removes_nothing`.
 
+**Đã làm ở T7**
+- `hub/src/reconcile.rs`: trait `AgentLister` (`impl Future` thay cho `async fn` trong trait để có `Send`), `ClaudeAgents`
+  (`claude agents --json`, `kill_on_drop`, timeout 5 giây, đầu ra ≤1 MiB, không cửa sổ console trên Windows), `parse_agents`
+  (chịu lỗi: phần tử thiếu/sai kiểu `sessionId` bị bỏ qua, không phải mảng thì không kết luận), `Reconciler` (bộ đếm thuần),
+  `tick` và `spawn` (mỗi `reconcile_interval_secs`, giữ `Weak<Hub>` nên dừng khi hub bị drop). `main` khởi động task.
+- **Không polling thường trực**: nếu hub không giữ phiên nào thì không chạy `claude` (quy tắc bất biến 6); mỗi lần chạy ≈270 ms
+  ở một tiến trình riêng, không tính vào RSS của hub.
+- **Lệch/làm chặt so với đặc tả**: (1) "vắng hai lần liên tiếp" tính trên hai lần quan sát **thành công**: lệnh lỗi hay hết giờ
+  xóa bộ đếm (đặc tả chỉ nói bỏ qua lần đó); (2) chỉ dọn phiên đã **im lặng ≥ 2 chu kỳ** (không có sự kiện hook), vì phiên chạy
+  một lệnh dài không bắn sự kiện, và chưa biết (Q8) phiên `-p`/nền có được liệt kê không; dọn nhầm là fail-safe (yêu cầu đang
+  giữ trả `{}`, agent hiện lại ở sự kiện kế tiếp) nhưng gây nhiễu.
+- Dọn bằng cách đưa một `SessionEnd` giả (`reason: "reconcile"`) vào `Hub::ingest`: cùng đường với `SessionEnd` thật (hủy yêu cầu
+  đang chờ → `ApprovalResolved(cancelled)` trước `AgentRemoved`, xóa agent con, ghi sự kiện).
+- `TeamState::sessions()`: phiên suy từ id agent gốc; thời điểm sự kiện gần nhất là max của phiên và mọi agent con.
+- Test: 7 đơn vị (`reconcile.rs`: đếm, đứt chuỗi khi lỗi, hoạt động gần đây, parse chịu lỗi, thiếu chương trình) và 6 tích hợp
+  (`hub/tests/reconcile.rs`: dọn như SessionEnd thật gồm hủy yêu cầu và thứ tự thông điệp, lỗi không xóa gì, agent con, hoạt
+  động gần đây, hub rỗng không chạy lister, task theo chu kỳ và dừng khi hub drop). Có thêm test `#[ignore]` chạy `claude` thật.
+
 ### T8 · ARC-29 · Danger list, chuẩn hóa, rủi ro
 
 **`normalize.rs`**
@@ -932,6 +950,27 @@ ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte,
 **Test:** `group_key_examples` (bảng), `decide_group_skips_critical`, `batch_rule_auto_allows_until_expiry`,
 `batch_rule_never_applies_to_high_or_critical`, `batch_close_stops_auto_allow`.
 
+**Đã làm ở T9**
+- `hub-core/src/policy/group.rs`: `group_key(tool, tool_input)` đúng bảng ví dụ của đặc tả, thêm: bỏ đường dẫn và chữ hoa, lệnh bọc
+  đứng trước (`sudo apt update` ≠ `apt update`), **lệnh ghép** mang hậu tố ` (ghép)` (nhiều lần gọi/đoạn ở đoạn chính, `$(…)`,
+  cờ nghi ngờ, không phân tích được, tên chương trình động). Lý do: batch "cho phép `cargo test`" không được kéo theo
+  `cargo test && npm install x`. Thẻ và nhật ký duyệt giờ ghi `group_key` thật (trước đây chỉ là tên tool).
+- `hub-core/src/policy/batch.rs`: `BatchRules` (đồng hồ thay được để test), `Allowance` cắm vào `RulesPolicy`: tự duyệt khi trùng
+  khóa, còn hạn, risk ≤ Medium; 1–240 phút, tối đa 64 quy tắc, khóa ghép/rỗng/quá dài/có ký tự điều khiển bị từ chối; `restore`
+  không tin hàng đã lưu (hết hạn, khóa ghép, hạn dài hơn trần).
+- `Approvals::decide_group`: mọi yêu cầu cùng nhóm trừ Critical, mỗi yêu cầu qua `Approvals::decide` (nên qua `allow_gate`, đúng ghi
+  chú audit ARC-44 finding 8), chỉ `origin: user`; trả `GroupResult {matched, decided, held, critical_left}`.
+- Hub: `Hub::batch_open/batch_close/restore_batch`, `Hub::start_with_batch` (tiêm bộ quy tắc; `start_full` tự dựng và cắm);
+  quy tắc lưu ở SQLite (migration **v2** chỉ có `batch_rules`; bảng của T10 sẽ là migration sau, lệch nhẹ so với "v2 (T9, T10)" để
+  hai task không đụng nhau); hết hạn báo bằng một task ngủ tới hạn (không polling), gia hạn thì task của hạn cũ bỏ qua; `main` nạp
+  lại quy tắc còn hạn khi khởi động.
+- WebSocket: `decide_group`, `batch_open`, `batch_close` hết "chưa hỗ trợ"; chung giới hạn 20 lệnh/giây với `decide`.
+- UI: nút "Duyệt cả N" gửi **một** `decide_group` (hết trường hợp gửi dở nửa chừng của #13); hub trả `feed` kết quả.
+- Test: 8 (`group.rs`) + 8 (`batch.rs`) + 2 (store) đơn vị và 13 tích hợp (`hub/tests/batch.rs`: bỏ Critical, qua `allow_gate`, thẻ cắt
+  chưa mở, tự duyệt tới hạn, hạn theo đồng hồ giả, Critical/lệnh ghép không bao giờ, đội tạm dừng, đóng, sống qua khởi động lại,
+  một timer và gia hạn, qua WebSocket).
+- Chưa làm: UI mở/đóng batch và danh sách quy tắc đang mở (Snapshot chưa có trường này, cần đổi hợp đồng §3.4).
+
 ### T10 · ARC-31 · Trust grant
 
 - `subject`: tên persona (ổn định qua phiên) — không dùng session_id.
@@ -948,6 +987,26 @@ ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte,
 **Test:** `suggests_after_threshold_within_window`, `no_suggestion_if_incident_in_window`, `accept_creates_grant_level_6`,
 `deny_under_grant_demotes`, `grant_expires`, `critical_ignores_grant` (dùng lại bảng của T8),
 `level5_no_countdown_while_paused`, `level5_no_countdown_when_not_reversible`.
+
+**Đã làm ở T10**
+- `hub-core/src/policy/trust.rs` (thuần, đồng hồ thay được): `TrustBook` với `record`, `report_incident`, `answer`, `restore`,
+  `grant_level`, và `Allowance`: mức 6 → `AutoAllow{reason: "trust:<id>"}`, mức 5 → `Countdown(10 s)`; chỉ tới Medium (Critical/High không
+  bao giờ; `enforce` lọc lại). `subject` là tên persona (`ApprovalCtx.subject`, hub truyền `agent_name`), `pattern` là `group_key` (T9).
+- Chuỗi chỉ đếm quyết định của **người** (`decided_by = user`) cho yêu cầu risk ≤ Medium và khóa không ghép; duyệt do đếm ngược/policy/
+  batch không đếm. Chuỗi cũ hơn `streak_window_days` bắt đầu lại (đặc tả chỉ nói "trong cửa sổ", không nói chuỗi chậm thì sao).
+  Đề xuất: đủ ngưỡng, không sự cố trong cửa sổ, chưa có mức 6, chưa có đề xuất chờ, không bị từ chối trong 7 ngày; từ chối chỉ nhớ
+  trong bộ nhớ (mất khi khởi động lại, tránh thêm cột vào hợp đồng §3.5). Mức 5 chỉ tạo ra bằng hạ mức (6 → 5 khi bị từ chối); từ
+  chối nữa thu hồi. `report_incident(subject, pattern)` có sẵn cho bước hoàn tác sau này.
+- Giao thức: `ServerMsg::Suggestion{TrustSuggestionView}` (hub dựng `text` bằng template, hiện ký tự ẩn); hub gửi lại các đề xuất đang
+  chờ ngay sau mỗi `Snapshot`; `SuggestionAnswer` hết "chưa hỗ trợ". Hạ mức/thu hồi/cấp quyền báo bằng `Feed` broadcast.
+- Store: migration **v3** (`trust_grants`, `streaks`, `trust_log` đúng §3.5); `StoreReader::trust_grants/streaks/trust_log`; hub nạp lại
+  khi khởi động (grant hết hạn/đã thu hồi/mức lạ bị bỏ).
+- Hub: `Automation {batch, trust}` + `Automation::policy()` (batch trước, trust sau); `Hub::start_with_batch` nhận `Automation`.
+- UI: `SuggestionList` ở popup và Văn phòng ("Cho phép"/"Để sau"), store giữ `suggestions`, `suggestion_answer` một thông điệp.
+- Test: 12 (`trust.rs`) + 2 (store, protocol) đơn vị, 9 tích hợp (`hub/tests/trust.rs`: ngưỡng và phát một lần, chỉ người đếm, cấp grant mức 6
+  chỉ cho đúng persona/nhóm, từ chối 7 ngày, hạ 6→5→thu hồi kèm `trust_log`, đếm ngược mức 5 và đội tạm dừng, Critical/High bỏ qua
+  grant, sống qua khởi động lại, qua WebSocket) và 5 UI.
+- Chưa làm: UI thu hồi grant thủ công và danh sách grant; hoàn tác tự động (chờ đo được); `declined_until` bền vững.
 
 ### T11 · ARC-32 · Component nhân vật
 
@@ -1125,6 +1184,24 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
 - Chạy `claude -p "chạy npm test"` với permission mode buộc hỏi; 4 kịch bản: allow, deny, timeout (timeout hub 5 s), hub tắt.
 - Kiểm: file đánh dấu do lệnh tạo ra có/không xuất hiện đúng theo kịch bản.
 
+**Đã làm ở T17**
+- `crates/hub/tests/e2e_claude.rs`, 4 test `#[ignore]` (chạy tay: `cargo test -p hub --test e2e_claude -- --ignored --nocapture
+  --test-threads=1`; biến tùy chọn `ARCTURUS_E2E_MODEL`, `ARCTURUS_E2E_CLAUDE`; tự bỏ qua nếu không có `claude`). Hub chạy trong tiến
+  trình test (cổng ngẫu nhiên, policy thật `RulesPolicy`, không store); dự án tạm có `npm test` ghi `marker.txt`; hook về hub nạp bằng
+  `--settings` (không đụng `~/.claude`), token qua biến môi trường như bản dogfood; `claude -p ... --permission-mode default`.
+- Kết quả **chạy thật trên Claude Code 2.1.308 (Windows, model haiku), 4/4 đạt, 39 giây**:
+  1. allow (người duyệt giả trả `allow` sau 300 ms): hub thấy `PermissionRequest` của `npm test` và ghi `ApprovalResolved(allow, user)`; file
+     đánh dấu **có**.
+  2. deny: file đánh dấu **không**.
+  3. timeout (hub 5 giây, không ai trả lời): `ApprovalResolved(decision = null, timeout)`, file **không**, tổng thời gian ≥ 5 giây.
+  4. hub tắt (cổng không ai lắng nghe): `claude -p` không treo, file **không**.
+  => Xác nhận trên máy thật quy tắc bất biến 1 cho **hết giờ và lỗi kết nối**: không bao giờ có allow; Claude Code rơi về hộp thoại
+  terminal, ở headless không có người hỏi nên lệnh bị từ chối. Chưa kiểm: phản hồi non-2xx (`401` sai token, `400`) và `{}` khi hub trả
+  sớm ở các nhánh `Overloaded`/hand-off; các nhánh đó đã có test ở phía hub.
+- Lỗi của chính test đã sửa khi chạy: người duyệt giả chạy vòng `recv` trên kênh broadcast không bao giờ đóng (Hub còn sống) nên `await` chờ
+  mãi; nay dừng bằng `abort` (`Responder::finish`).
+- Bộ test không chạy trong CI mặc định (cần Claude Code đăng nhập, tốn lượt dùng).
+
 ### T18 · ARC-39 · Dogfood
 
 - `hooks/arcturus-dogfood.json` hoàn chỉnh; `scripts/dogfood-install.sh` và `dogfood-uninstall.sh` gộp/gỡ khối `hooks`
@@ -1160,6 +1237,22 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
 - Endpoint `GET /standup` (Bearer) trả JSON; UI hiển thị ở v1.
 
 **Test:** dữ liệu giả lập → đúng số liệu và câu chữ (snapshot).
+
+**Đã làm ở T19**
+- `hub-core/src/standup.rs` (thuần): `build(&Input, &dyn GitLog) -> Standup` thay cho chữ ký `build(store, since, now, git)` của đặc tả
+  (hub đọc SQLite rồi đưa sự kiện vào, nên test không cần cơ sở dữ liệu). Đếm theo persona: `TurnStopped` = lượt xong;
+  `PostToolUse` / `PostToolUseFailure` của Bash khớp bộ chạy test = test đạt / lỗi (không cần mã thoát: Claude Code chỉ bắn
+  `PostToolUse` khi lệnh thành công); lỗi công cụ lặp ≥3 lần; yêu cầu đang chờ; commit từ `git log`.
+- Persona của sự kiện: agent đang chạy (đúng tên đang hiện) → `match_cwd` → `Agent <4 ký tự session>`; các phiên cùng persona gộp.
+- `StoreReader::events_since`; `Hub::set_db_path` (đặt một lần ở `main`) để `GET /standup` mở kết nối đọc khi cần.
+- `hub/src/standup.rs`: `SystemGit` chạy `git -C <cwd> -c core.fsmonitor=false --no-pager log --no-merges --since=…` (timeout 3 giây, tối
+  đa 256 KiB, thread đọc riêng để pipe không đầy; lỗi mọi kiểu trả rỗng); handler chạy trong `spawn_blocking`.
+- `GET /standup?hours=` ở router UI (token UI, kiểm `Host`/`Origin`, `no-store`); mô tả ở `docs/PROTOCOL.md`.
+- Rủi ro đã xử lý: tiêu đề commit và lệnh là dữ liệu do agent/repo viết nên đi qua `clean` (hiện ký tự ẩn, cắt); `cwd` do agent
+  gửi chỉ làm đối số của `-C`, không bao giờ qua shell; chạy `git` không tương tác (`GIT_TERMINAL_PROMPT=0`).
+- Test: 8 đơn vị (`standup.rs`: đếm, template bằng so khớp chuỗi, rỗng, làm sạch, tối đa 5 thư mục, nhận diện lệnh test) và 6
+  tích hợp (`hub/tests/standup.rs`: SQLite + persona + hàng đợi thật, token UI/hook, `hours` sai, 503, `Host` lạ, `git log` thật).
+- Chưa làm: UI hiển thị (v1 theo đặc tả); đếm "task xong" theo ticket (chỉ có lượt trả lời).
 
 ### T20 · ARC-41 · Chỉ số dogfood
 

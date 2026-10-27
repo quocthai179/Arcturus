@@ -19,7 +19,7 @@ về hub ở `127.0.0.1:7879`.
 | Q5 | Phiên nền (`claude --bg`, Agent View) có chạy HTTP hook như phiên thường không? | Đa phiên | | |
 | Q6 | Trả `deny` kèm `message` thì Claude nhận lý do ở đâu, có tự đổi hướng không? | UX từ chối | | |
 | Q7 | Nhiều phiên cùng gọi hook một lúc: có giới hạn đồng thời phía Claude Code không? | Hub phải chịu tải | | |
-| Q8 | `claude agents --json` trả những trường nào, trạng thái `waitingFor` khớp với PermissionRequest không? | Đối soát | | |
+| Q8 | `claude agents --json` trả những trường nào, trạng thái `waitingFor` khớp với PermissionRequest không? | Đối soát | *Một phần* (v2.1.308, 2026-10-27, một phiên tương tác đang bận): mảng JSON, mỗi phần tử `{pid, cwd, kind: "interactive", startedAt (ms epoch), sessionId, name, status: "busy"}`; `sessionId` là khóa nối với `session_id` của hook; chạy mất khoảng 270 ms. **Chưa quan sát** `waitingFor` (không có trường này khi phiên bận) và chưa biết phiên `claude -p` hay phiên nền (`--bg`) có được liệt kê không. T7 chỉ dùng `sessionId`, parse chịu lỗi, và chỉ dọn phiên đã im lặng ≥2 chu kỳ để một phiên không được liệt kê mà vẫn bắn hook không bị dọn nhầm. | |
 | Q9 | Agent teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`): `TeammateIdle`, `TaskCreated`, `TaskCompleted` có dữ liệu gì? | Bảng task đội | | |
 | Q10 | Hook `Notification` bắn khi nào, trùng với PermissionRequest không? | Tránh báo trùng | *Một phần, chưa kết luận:* ở phiên tương tác, `Notification` `{notification_type: "permission_prompt", message: "Claude needs your permission"}` tới ~6 s sau `PermissionRequest` của cùng yêu cầu, không có `tool_name`. Chưa thử các loại notification khác. | `fixtures/hooks/Notification/01M5FMQM4X9CTXY61KY2MW7M16.json` |
 
@@ -78,3 +78,8 @@ về hub ở `127.0.0.1:7879`.
      `kết nối hook đóng trước khi có quyết định, hủy yêu cầu` lúc 05:09:31.26, ngay sau khi script tắt `claude`
      (05:09:30.2 + Ctrl-C). Kết luận: Claude Code không đóng kết nối khi người trả lời ở terminal; chỉ đóng khi tiến trình
      thoát (hoặc hết timeout của hook).
+- 2026-10-27 · T17 · kịch bản e2e với hub trong tiến trình test và `claude -p --permission-mode default --settings <file>` (Claude Code
+  2.1.308, Windows, model haiku, dự án tạm có `npm test` ghi `marker.txt`): **allow** → lệnh chạy; **deny** → không chạy; **hub hết giờ 5 giây
+  (`{}`)** → không chạy; **không có gì lắng nghe (lỗi kết nối)** → không chạy và `claude -p` không treo. Cả bốn đúng như CLAUDE.md đã ghi;
+  hai nhánh mới được kiểm chứng trên máy thật: lỗi kết nối và hết giờ không bao giờ dẫn tới allow. Chưa kiểm non-2xx. Test:
+  `crates/hub/tests/e2e_claude.rs`.

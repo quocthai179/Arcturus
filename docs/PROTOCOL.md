@@ -159,13 +159,41 @@ Tin nhắn cho người dùng, thường **chỉ gửi cho client vừa gửi l�
 | `Lý do từ chối quá dài (tối đa 500 ký tự)` | `message` quá dài; yêu cầu vẫn chờ |
 | `Quá nhiều lệnh duyệt, hãy thử lại sau` | quá 20 `decide`/giây |
 | `Quá nhiều lệnh, hãy thử lại sau` | quá 20 lệnh/giây tính cả `team_pause`, `team_resume`, `focus_set` |
-| `Lệnh này chưa được hỗ trợ` | `decide_group`, `batch_open`, `batch_close`, `suggestion_answer` (T9, T10) |
+| `Đã duyệt N yêu cầu` / `Đã từ chối N yêu cầu` (+ `, M yêu cầu chưa đủ điều kiện (xem kỹ rồi bấm lại)`, + `, K yêu cầu vùng khóa ở lại, duyệt từng cái`) | kết quả `decide_group` |
+| `Không có yêu cầu nào trong nhóm này` | `decide_group` không khớp yêu cầu nào |
+| `Thời hạn phải từ 1 tới 240 phút` / `Nhóm không hợp lệ` / `Lệnh ghép (…) không được cho phép theo nhóm` / `Đã mở quá nhiều quy tắc, hãy tắt bớt` | `batch_open` bị từ chối |
+| `Không có quy tắc nào đang mở cho nhóm này` | `batch_close` không có gì để đóng |
+| `Quá nhiều lệnh duyệt, hãy thử lại sau` | quá 20 lệnh/giây tính cả `decide_group`, `batch_open`, `batch_close` |
+| `Sẽ không đề xuất lại trong 7 ngày` | `suggestion_answer` với `accept: false` |
+| `Đề xuất không còn hiệu lực` | `suggestion_answer` cho id không biết (đã trả lời, hoặc chuỗi đã đứt vì bị từ chối) |
+| `Đã cho phép <persona> tự chạy "<nhóm>" trong N ngày (chỉ rủi ro thấp/vừa)` | broadcast khi `suggestion_answer` chấp nhận |
+| `<persona>: hạ quyền tự chạy "<nhóm>" xuống mức 5 (hỏi kèm đếm ngược) vì bạn từ chối` / `<persona>: đã thu hồi quyền tự chạy "<nhóm>" vì bạn từ chối` | broadcast khi người từ chối một yêu cầu thuộc nhóm đang có grant |
 | `Thông điệp không hợp lệ` | JSON sai hoặc `t` không biết |
 | `Chỉ nhận thông điệp JSON dạng text` | frame nhị phân |
 
 Thông điệp sai không làm đóng kết nối.
 
-### `suggestion` (T10, chưa có)
+### `suggestion` (T10)
+
+```json
+{"t":"suggestion","suggestion":{"id":"sug_01M5…","subject":"Khoa","pattern":"Bash:npm test","level":6,
+ "approved_in_row":20,"window_days":7,"grant_days":30,"created_at":"2026-10-27T10:00:00Z",
+ "text":"Khoa đã được bạn duyệt 20 lần liên tiếp cho \"Bash:npm test\" trong 7 ngày. Cho phép tự chạy trong 30 ngày? (Chỉ yêu cầu rủi ro thấp/vừa; vùng khóa vẫn hỏi bạn.)"}}
+```
+
+- Hub gửi khi chuỗi duyệt của **người** (không tính đếm ngược, policy, batch) cho một cặp (persona, `group_key`) đạt
+  `[trust] streak_threshold` lần liên tiếp trong `streak_window_days` ngày, không có sự cố (người từ chối) trong cửa sổ đó,
+  và cặp đó chưa có grant mức 6. Chỉ yêu cầu risk ≤ Medium và lệnh không ghép mới được đếm. Một lần cho mỗi cặp cho tới khi
+  được trả lời.
+- Client mới kết nối (và client vừa tụt kênh nhận `Snapshot` mới) nhận lại các đề xuất đang chờ **ngay sau `Snapshot`**.
+- `subject`, `pattern`, `text` là dữ liệu không tin cậy (tên persona và tên lệnh): ký tự ẩn đã hiện `⟨U+XXXX⟩`; hiển thị như
+  văn bản thuần.
+- Trả lời bằng `suggestion_answer {id, accept}`. Chấp nhận → grant mức 6 trong `grant_days` ngày (tự duyệt yêu cầu risk ≤ Medium
+  của đúng cặp đó, `decided_by: policy`, lý do `trust:<id>`). Từ chối → không đề xuất lại cặp đó trong 7 ngày (chỉ giữ trong
+  bộ nhớ hub, mất khi hub khởi động lại). Người từ chối một yêu cầu của nhóm đang có grant → hạ 6 → 5 (hỏi người kèm đếm ngược 10
+  giây, chỉ cho yêu cầu `reversible`), từ chối nữa → thu hồi; mọi thay đổi ghi `trust_log`.
+- Hub không có thông điệp "đề xuất đã được trả lời nơi khác": client thấy lại đề xuất cho tới khi tải lại; trả lời lần hai nhận
+  `Đề xuất không còn hiệu lực`.
 
 ## Client → server
 
@@ -176,12 +204,25 @@ Thông điệp sai không làm đóng kết nối.
 {"t":"team_pause"}
 {"t":"team_resume"}
 {"t":"focus_set","on":true}
-{"t":"decide_group","group_key":"Bash","decision":"allow"}      // T9
-{"t":"batch_open","group_key":"Bash","minutes":60}              // T9
-{"t":"batch_close","group_key":"Bash"}                          // T9
+{"t":"decide_group","group_key":"Bash:npm test","decision":"allow"}   // T9
+{"t":"batch_open","group_key":"Bash:npm test","minutes":60}           // T9
+{"t":"batch_close","group_key":"Bash:npm test"}                       // T9
 {"t":"suggestion_answer","id":"…","accept":true}                // T10
 ```
 
+- `group_key` (`ApprovalView.group_key`): Bash/PowerShell: `<tool>:<[lệnh bọc ]chương trình[ lệnh con]>` (bỏ đường dẫn, chữ
+  thường), ví dụ `Bash:npm test`, `Bash:cargo test`, `Bash:git push`, `Bash:sudo apt update`; tool khác `<tool>:*`. Lệnh
+  **ghép** (nhiều lệnh, có `$(…)`, cờ nghi ngờ, không phân tích được) mang hậu tố ` (ghép)` và chỉ gom với nhau.
+- `decide_group`: áp `decision` cho mọi yêu cầu đang chờ cùng `group_key` **trừ Critical** (ở lại hàng đợi). Mỗi yêu cầu qua
+  đúng các điều kiện của `decide` với `origin: user` (sàn `min_review_ms`, thẻ cắt phải mở bản đầy đủ, đội tạm dừng); yêu cầu
+  chưa đủ điều kiện được giữ nguyên, không bị từ chối. Kết quả từng yêu cầu đến qua `approval_resolved`; client gửi lệnh nhận
+  thêm một `feed` tóm tắt. Không có `origin: countdown` cho duyệt gộp.
+- `batch_open {group_key, minutes}`: trong `minutes` (1–240) phút, yêu cầu **trùng khóa** và có risk ≤ Medium được hub tự duyệt
+  (`decided_by: policy`, lý do `batch:<group_key>`); High và Critical không bao giờ; khóa ghép bị từ chối; đội đang tạm
+  dừng thì không tự duyệt gì. Mở lại cùng khóa là gia hạn (tính từ lúc đó). Tối đa 64 quy tắc. Quy tắc được lưu (bảng
+  `batch_rules`) và nạp lại khi hub khởi động; hết hạn thì hub broadcast `feed` "Hết thời hạn cho phép …" (một timer duy nhất
+  cho mỗi quy tắc, không polling). `batch_open` thành công và `batch_close` đều broadcast `feed` cho mọi client. Snapshot
+  chưa có danh sách quy tắc đang mở (cần đổi hợp đồng, chưa làm).
 - Kết quả của `decide` thành công đến qua `approval_resolved` (broadcast cho mọi client), không có trả lời riêng.
 - `team_pause` xóa đếm ngược của mọi yêu cầu đang chờ (snapshot sau đó có `countdown_ms: null`); `team_resume` không
   khôi phục. Lệnh của cùng một kết nối được xử lý đúng thứ tự gửi.
@@ -200,3 +241,19 @@ Authorization: Bearer <token UI>        # chỉ header, không nhận ?token=
 - Route không có CORS. Webview gọi `fetch` kèm header `Authorization` sẽ bị preflight chặn: app gọi qua phía Rust của
   Tauri (T12), không thêm CORS dễ dãi.
 - `404`: không còn chờ, không tồn tại, hoặc là `handoff_id`. `401`: thiếu/sai token UI. `403`: `Host`/`Origin` sai.
+
+```
+GET /standup?hours=24
+Authorization: Bearer <token UI>        # chỉ header; hours 1..=168, mặc định 24
+```
+
+- `200`, `application/json`, `nosniff`, `no-store` (có tiêu đề commit và lệnh test của người dùng): standup của `hours` giờ gần
+  nhất, **không LLM** (quy tắc bất biến 5). Số liệu đếm từ sự kiện đã lưu trong SQLite, `git log` chạy trong các `cwd` của
+  persona (tối đa 5 thư mục, 3 giây mỗi thư mục, bỏ merge), văn bản sinh từ template tiếng Việt cố định.
+- Hình dạng: `{"since","until","text","personas":[{"name","turns_done","commits":[…≤5],"commit_count","tests_passed",
+  "tests_failed","pending","repeated_errors":[{"tool","what","count"}]}]}`. `repeated_errors`: cùng một lỗi công cụ ≥3 lần.
+  `tests_*`: lệnh Bash khớp bộ chạy test phổ biến (`PostToolUse` = đạt, `PostToolUseFailure` = lỗi). `pending`: yêu cầu duyệt
+  đang chờ lúc gọi.
+- Mọi chuỗi (tên, lệnh, tiêu đề commit) là dữ liệu không tin cậy: ký tự ẩn hiện thành `⟨U+XXXX⟩`, gộp khoảng trắng, cắt 120
+  ký tự. UI hiển thị như văn bản thuần.
+- `400`: `hours` ngoài khoảng hoặc không phải số. `401`/`403` như các route UI khác. `503`: hub chạy không có cơ sở dữ liệu.

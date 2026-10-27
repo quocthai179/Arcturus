@@ -170,6 +170,21 @@ impl TeamState {
         self.agents.values().map(|a| a.view.clone()).collect()
     }
 
+    /// Các phiên Claude Code hub đang giữ, kèm thời điểm sự kiện gần nhất của phiên hoặc của agent con nào của nó
+    /// (đối soát, T7). `session_id` suy từ id agent gốc `agt_<session_id>`.
+    pub fn sessions(&self) -> Vec<(String, OffsetDateTime)> {
+        let mut by_session: BTreeMap<String, OffsetDateTime> = BTreeMap::new();
+        for a in self.agents.values() {
+            let root = a.view.parent_id.as_deref().unwrap_or(&a.view.id);
+            let session = root.strip_prefix("agt_").unwrap_or(root).to_owned();
+            let last = by_session.entry(session).or_insert(a.view.last_event_at);
+            if a.view.last_event_at > *last {
+                *last = a.view.last_event_at;
+            }
+        }
+        by_session.into_iter().collect()
+    }
+
     /// Tên hiển thị của agent (cho thẻ duyệt).
     pub fn name_of(&self, id: &str) -> Option<&str> {
         self.agents.get(id).map(|a| a.view.name.as_str())
