@@ -10,10 +10,12 @@ $failures = 0
 
 function Write-Csv([string]$Name, [object[]]$Rows) {
     $path = Join-Path $work $Name
-    $lines = @('ts,rss_kb,cpu_pct,priv_kb,phase')
+    $lines = @('ts,rss_kb,cpu_pct,priv_kb,phase,pws_kb')
     $i = 0
     foreach ($r in $Rows) {
-        $lines += ('2026-10-27T10:00:{0:D2}.000Z,{1},{2},{3},{4}' -f $i, $r[0], $r[1], ($r[0] / 4), $r[2])
+        # Cột thứ tư của dòng giả (tùy chọn) là private working set (KB); thiếu thì bằng 1/3 working set.
+        $pws = if ($r.Count -gt 3) { $r[3] } else { [math]::Round($r[0] / 3) }
+        $lines += ('2026-10-27T10:00:{0:D2}.000Z,{1},{2},{3},{4},{5}' -f $i, $r[0], $r[1], ($r[0] / 4), $r[2], $pws)
         $i++
     }
     Set-Content -Path $path -Value $lines -Encoding UTF8
@@ -74,14 +76,30 @@ $r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '380,420,450' }
 Check 'app FAIL: popup mở chậm hơn 300 ms' ($r.Code -eq 1 -and $r.Out.Contains('popup_ready_median>300')) $r.Out
 $r = Run-Analyze $appCsv
 Check 'app FAIL: không đo được popup_ready' ($r.Code -eq 1 -and $r.Out.Contains('khong_do_duoc_popup_ready')) $r.Out
-$big = @(@((70 * 1024), '0.00', 'tray'), @((200 * 1024), '0.00', 'popup_open'), @((65 * 1024), '0.00', 'after_close'))
+$big = @(@((70 * 1024), '0.00', 'tray'), @((200 * 1024), '0.00', 'popup_open', (160 * 1024)), @((65 * 1024), '0.00', 'after_close'))
 $r = Run-Analyze (Write-Csv 'appbig.csv' $big) @{ MEASURE_POPUP_READY_MS = '200' }
-Check 'app FAIL: tray, popup và sau đóng đều vượt' ($r.Code -eq 1 -and $r.Out.Contains('tray_rss>60') -and $r.Out.Contains('popup_rss>150') -and $r.Out.Contains('sau_dong_rss>60')) $r.Out
+Check 'app FAIL: tray, popup và sau đóng đều vượt' ($r.Code -eq 1 -and $r.Out.Contains('tray_rss>60') -and $r.Out.Contains('popup_pws>150') -and $r.Out.Contains('sau_dong_rss>60')) $r.Out
+
+# Popup mở: working set 366 MB (đếm trùng trang dùng chung) nhưng private working set 120 MB => đạt; 160 MB => vượt.
+$shared = @(@((17 * 1024), '0.00', 'tray'), @((366 * 1024), '0.00', 'popup_open', (120 * 1024)), @((33 * 1024), '0.00', 'after_close'))
+$r = Run-Analyze (Write-Csv 'pws-ok.csv' $shared) @{ MEASURE_POPUP_READY_MS = '12' }
+Check 'app: popup 366 MB WS nhưng 120 MB private working set đạt ngân sách' ($r.Code -eq 0 -and $r.Out.Contains('popup_open_rss_mb=366.0') -and $r.Out.Contains('popup_open_pws_mb=120.0') -and $r.Out -match 'verdict=PASS') $r.Out
+$over = @(@((17 * 1024), '0.00', 'tray'), @((366 * 1024), '0.00', 'popup_open', (160 * 1024)), @((33 * 1024), '0.00', 'after_close'))
+$r = Run-Analyze (Write-Csv 'pws-over.csv' $over) @{ MEASURE_POPUP_READY_MS = '12' }
+Check 'app FAIL: private working set 160 MB vượt 150 MB' ($r.Code -eq 1 -and $r.Out.Contains('popup_pws>150MB')) $r.Out
 
 $r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '7,8,10'; MEASURE_PREWARM_DROPPED = '1' }
 Check 'app prewarm: popup mở 7 ms và đã hủy popup bỏ dở' ($r.Code -eq 0 -and $r.Out -match 'popup_ready_median_ms=8' -and $r.Out.Contains('prewarm_dropped=1')) $r.Out
 $r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '7,8,10'; MEASURE_PREWARM_DROPPED = '0' }
 Check 'app FAIL: popup tạo sẵn không bị hủy khi rời icon' ($r.Code -eq 1 -and $r.Out.Contains('prewarm_khong_bi_huy')) $r.Out
+
+# Đường nguội: ngưỡng riêng 500 ms (404 ms đạt, 600 ms vượt); đường chuột vẫn 300 ms.
+$r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '380,404,450'; MEASURE_POPUP_COLD = '1' }
+Check 'app đường nguội: trung vị 404 ms đạt ngưỡng 500 ms' ($r.Code -eq 0 -and $r.Out.Contains('path=cold') -and $r.Out -match 'verdict=PASS') $r.Out
+$r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '560,600,640'; MEASURE_POPUP_COLD = '1' }
+Check 'app FAIL: đường nguội 600 ms vượt 500 ms' ($r.Code -eq 1 -and $r.Out.Contains('popup_ready_nguoi_median>500ms')) $r.Out
+$r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '404,404,404' }
+Check 'app FAIL: đường chuột không được dùng ngưỡng nguội (404 ms > 300 ms)' ($r.Code -eq 1 -and $r.Out.Contains('path=mouse') -and $r.Out.Contains('popup_ready_median>300ms')) $r.Out
 
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 if ($failures -gt 0) { Write-Host "$failures kiểm tra lỗi"; exit 1 }
