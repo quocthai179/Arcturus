@@ -15,7 +15,7 @@
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use tauri::AppHandle;
+use tauri::{AppHandle, PhysicalPosition, PhysicalSize, Position, Rect, Size};
 
 use crate::tray;
 
@@ -83,13 +83,11 @@ pub fn start(app: AppHandle, cfg: Config) {
     }
 }
 
-fn prewarm(app: &AppHandle) {
-    let a = app.clone();
-    if app
-        .run_on_main_thread(move || tray::prewarm_popup(&a, None))
-        .is_err()
-    {
-        eprintln!("arcturus app: không đưa được thao tác prewarm lên thread chính");
+/// Một icon tray giả ở góc màn hình, đủ để chạy đúng đường xử lý rê chuột của tray.
+fn fake_icon_rect() -> Rect {
+    Rect {
+        position: Position::Physical(PhysicalPosition::new(0, 0)),
+        size: Size::Physical(PhysicalSize::new(16, 16)),
     }
 }
 
@@ -103,11 +101,22 @@ fn toggle(app: &AppHandle) {
     }
 }
 
+/// Con trỏ dừng trên icon (đi qua `hover_enter` thật: dwell, hủy khi bấm, trần thời gian) rồi chờ `cfg.hover` trước khi bấm.
 fn hover(app: &AppHandle, cfg: Config) {
     if !cfg.hover.is_zero() {
-        prewarm(app);
+        tray::hover_enter(app, fake_icon_rect(), true);
         std::thread::sleep(cfg.hover);
     }
+}
+
+/// Rê vào icon rồi rời đi mà không bấm: popup tạo sẵn phải bị destroy (sự kiện `popup_prewarm_dropped`).
+fn abandon(app: &AppHandle) {
+    log("abandon_start", "");
+    tray::hover_enter(app, fake_icon_rect(), true);
+    std::thread::sleep(Duration::from_secs(1));
+    tray::hover_leave(app);
+    std::thread::sleep(Duration::from_secs(5));
+    log("abandon_end", "");
 }
 
 fn run(app: &AppHandle, cfg: Config) {
@@ -123,6 +132,9 @@ fn run(app: &AppHandle, cfg: Config) {
         log("popup_closed", &format!("n={}", i + 1));
         // Cú đóng vừa rồi chặn mở lại trong REOPEN_GUARD (400 ms); chờ lâu hơn hẳn.
         std::thread::sleep(Duration::from_millis(1500));
+    }
+    if !cfg.hover.is_zero() {
+        abandon(app);
     }
     log("popup_open", "n=hold");
     hover(app, cfg);

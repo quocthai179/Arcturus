@@ -8,7 +8,7 @@
 //!   sau khi con trỏ rời thì destroy. Đường nguội (bàn phím, cảm ứng, Linux) vẫn tạo mới khi bấm.
 //! - Badge: macOS dùng tiêu đề tray (số); Windows/Linux đổi giữa icon thường / icon có chấm, kèm tooltip.
 
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
@@ -36,6 +36,8 @@ const REOPEN_GUARD: Duration = Duration::from_millis(400);
 const HOVER_DWELL: Duration = Duration::from_millis(150);
 /// Popup tạo sẵn mà không ai bấm: destroy sau chừng này kể từ lúc con trỏ rời icon.
 const PREWARM_TTL: Duration = Duration::from_secs(3);
+/// Trần cứng: popup tạo sẵn không ai hiện thì destroy sau chừng này kể từ lúc tạo, dù có `Leave` hay không.
+const PREWARM_MAX: Duration = Duration::from_secs(8);
 
 pub const MENU_OPEN_QUEUE: &str = "open_queue";
 pub const MENU_OPEN_OFFICE: &str = "open_office";
@@ -54,6 +56,12 @@ pub struct TrayState {
     last_badge: Mutex<Option<Badge>>,
     /// Tăng mỗi lần con trỏ vào/ra icon hoặc có click: các luồng chờ của lần cũ thấy số khác thì bỏ việc.
     hover_gen: AtomicU64,
+    /// Sau một cú bấm thì không tạo sẵn lại cho tới lần rê chuột kế tiếp.
+    hover_armed: AtomicBool,
+    /// Đã có một lượt hẹn tạo sẵn đang chờ hết `HOVER_DWELL` (`Move` dày đặc không sinh thêm luồng).
+    hover_pending: AtomicBool,
+    /// Số thứ tự lần tạo sẵn gần nhất, để luồng giới hạn cũ không dọn nhầm popup mới.
+    prewarm_id: AtomicU64,
 }
 
 #[derive(Default)]
@@ -186,10 +194,11 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayState> {
                 rect,
                 ..
             } => {
-                bump_hover(tray.app_handle());
+                hover_clicked(tray.app_handle());
                 toggle_popup(tray.app_handle(), Some(rect));
             }
-            TrayIconEvent::Enter { rect, .. } => hover_enter(tray.app_handle(), rect),
+            TrayIconEvent::Enter { rect, .. } => hover_enter(tray.app_handle(), rect, true),
+            TrayIconEvent::Move { rect, .. } => hover_enter(tray.app_handle(), rect, false),
             TrayIconEvent::Leave { .. } => hover_leave(tray.app_handle()),
             _ => {}
         })
@@ -204,6 +213,9 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayState> {
         popup: Mutex::new(PopupTimes::default()),
         last_badge: Mutex::new(None),
         hover_gen: AtomicU64::new(0),
+        hover_armed: AtomicBool::new(true),
+        hover_pending: AtomicBool::new(false),
+        prewarm_id: AtomicU64::new(0),
     })
 }
 
@@ -408,10 +420,13 @@ pub fn prewarm_popup(app: &AppHandle, anchor: Option<Rect>) {
     }
     let t = Instant::now();
     match build_popup(app, anchor) {
-        Ok(_) => crate::measure::log(
-            "popup_prewarmed",
-            &format!("ms={}", t.elapsed().as_millis()),
-        ),
+        Ok(_) => {
+            crate::measure::log(
+                "popup_prewarmed",
+                &format!("ms={}", t.elapsed().as_millis()),
+            );
+            schedule_prewarm_cap(app);
+        }
         Err(e) => eprintln!("arcturus app: không tạo sẵn được popup: {e}"),
     }
 }
@@ -426,16 +441,41 @@ fn hover_current(app: &AppHandle) -> u64 {
         .map_or(0, |s| s.hover_gen.load(Ordering::SeqCst))
 }
 
-fn hover_enter(app: &AppHandle, rect: Rect) {
-    if app.get_webview_window(POPUP).is_some() {
+/// Có nên hẹn tạo sẵn popup không: con trỏ chưa bị "vô hiệu" bởi một cú bấm, chưa có lượt hẹn nào đang chờ và chưa có popup.
+fn hover_wants_prewarm(armed: bool, pending: bool, popup_exists: bool) -> bool {
+    armed && !pending && !popup_exists
+}
+
+/// Con trỏ vào (`fresh`) hoặc di chuyển trên icon. Windows chỉ phát `Leave` sau ít nhất một `Move`, nên rê vào rồi rời nhanh có
+/// thể không có `Leave` và lần rê sau chỉ ra `Move`: `Move` cũng phải kích hoạt được prewarm.
+pub(crate) fn hover_enter(app: &AppHandle, rect: Rect, fresh: bool) {
+    let Some(state) = app.try_state::<TrayState>() else {
+        return;
+    };
+    if fresh {
+        state.hover_armed.store(true, Ordering::SeqCst);
+    }
+    let popup_exists = app.get_webview_window(POPUP).is_some();
+    if !hover_wants_prewarm(
+        state.hover_armed.load(Ordering::SeqCst),
+        state.hover_pending.load(Ordering::SeqCst),
+        popup_exists,
+    ) {
         return;
     }
+    state.hover_pending.store(true, Ordering::SeqCst);
     let gen = bump_hover(app);
     let app = app.clone();
     let spawned = std::thread::Builder::new()
         .name("prewarm".to_owned())
         .spawn(move || {
             std::thread::sleep(HOVER_DWELL);
+            if let Some(state) = app.try_state::<TrayState>() {
+                state.hover_pending.store(false, Ordering::SeqCst);
+                if !state.hover_armed.load(Ordering::SeqCst) {
+                    return;
+                }
+            }
             if hover_current(&app) != gen {
                 return;
             }
@@ -444,10 +484,22 @@ fn hover_enter(app: &AppHandle, rect: Rect) {
         });
     if let Err(e) = spawned {
         eprintln!("arcturus app: không chạy được luồng prewarm: {e}");
+        state.hover_pending.store(false, Ordering::SeqCst);
     }
 }
 
-fn hover_leave(app: &AppHandle) {
+/// Click: popup vừa hiện hoặc đóng theo ý người dùng, con trỏ vẫn nằm trên icon nên không tạo sẵn lại cho tới lần rê sau.
+fn hover_clicked(app: &AppHandle) {
+    bump_hover(app);
+    if let Some(state) = app.try_state::<TrayState>() {
+        state.hover_armed.store(false, Ordering::SeqCst);
+    }
+}
+
+pub(crate) fn hover_leave(app: &AppHandle) {
+    if let Some(state) = app.try_state::<TrayState>() {
+        state.hover_armed.store(true, Ordering::SeqCst);
+    }
     let gen = bump_hover(app);
     let app = app.clone();
     let spawned = std::thread::Builder::new()
@@ -462,6 +514,31 @@ fn hover_leave(app: &AppHandle) {
         });
     if let Err(e) = spawned {
         eprintln!("arcturus app: không chạy được luồng dọn prewarm: {e}");
+    }
+}
+
+/// Dọn nếu popup tạo sẵn vẫn chưa ai hiện sau `PREWARM_MAX`, kể cả khi hệ thống không phát `Leave`.
+fn schedule_prewarm_cap(app: &AppHandle) {
+    let Some(state) = app.try_state::<TrayState>() else {
+        return;
+    };
+    let id = state.prewarm_id.fetch_add(1, Ordering::SeqCst) + 1;
+    let app = app.clone();
+    let spawned = std::thread::Builder::new()
+        .name("prewarm-cap".to_owned())
+        .spawn(move || {
+            std::thread::sleep(PREWARM_MAX);
+            let current = app
+                .try_state::<TrayState>()
+                .map_or(0, |s| s.prewarm_id.load(Ordering::SeqCst));
+            if current != id {
+                return;
+            }
+            let a = app.clone();
+            let _ = app.run_on_main_thread(move || drop_unused_prewarm(&a));
+        });
+    if let Err(e) = spawned {
+        eprintln!("arcturus app: không chạy được luồng giới hạn prewarm: {e}");
     }
 }
 
@@ -541,6 +618,20 @@ pub fn menu_id(event: &MenuEvent) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn prewarm_only_when_armed_idle_and_no_popup() {
+        assert!(hover_wants_prewarm(true, false, false));
+        assert!(
+            !hover_wants_prewarm(false, false, false),
+            "vừa bấm: chờ lần rê sau"
+        );
+        assert!(
+            !hover_wants_prewarm(true, true, false),
+            "đã có lượt hẹn đang chờ"
+        );
+        assert!(!hover_wants_prewarm(true, false, true), "đã có popup");
+    }
 
     #[test]
     fn ready_after_click_reports_time_since_click() {

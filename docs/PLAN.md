@@ -1097,10 +1097,14 @@ nhóm Critical không có nút duyệt gộp; `hidden_chars` hiện nhãn cảnh
 **Đã làm thêm ở T12 khi đo bằng T16 (2026-10-27): prewarm khi rê chuột**
 - Đo bản release trên Windows: tạo webview WebView2 nguội mất ≈285 ms, nên popup mở ≈340–400 ms kể từ lúc bấm (không đạt ≤300 ms). Cờ
   `--disable-gpu`/`--in-process-gpu` chỉ giảm ≈50 ms nên không dùng.
-- `tray.rs`: con trỏ dừng ≥150 ms trên icon (`TrayIconEvent::Enter`) thì tạo sẵn popup **ẩn** (`build_popup`); bấm thì chỉ `show_popup`
-  (đo 7 ms tới khung đầu tiên). Con trỏ rời icon mà không bấm trong 3 s thì destroy (RSS về mức Lite). Click trái, mất focus, đóng và
-  đường nguội không đổi. Quy tắc "không giữ webview khi popup đóng" giờ có ngoại lệ ngắn (≤ ~3 s sau khi rê chuột, tạm ≈360 MB WS).
-- Test: `tray::tests` (3, đồng hồ "UI vẽ xong" trước/sau lúc bấm), `measure::tests`. Chưa thử bằng con trỏ thật trên bản release.
+- `tray.rs`: con trỏ vào icon (`TrayIconEvent::Enter`, và `Move` vì Windows chỉ phát `Leave` sau ít nhất một `Move`) và dừng ≥150 ms thì tạo
+  sẵn popup **ẩn** (`build_popup`); bấm thì chỉ `show_popup`. Sau một cú bấm không tạo sẵn lại cho tới lần rê sau. Rời icon mà không bấm
+  trong 3 s, hoặc 8 s kể từ lúc tạo dù không có `Leave`, thì destroy (RSS về mức Lite). Click trái, mất focus, đóng và đường nguội
+  không đổi. Đo: bấm 500 ms sau lúc con trỏ vào icon thì khung đầu tiên sau trung vị 44 ms (tối đa 66 ms); bấm sớm hơn thì chờ phần còn lại
+  của lần tạo (≈200 ms nếu bấm sau 300 ms, ≈350 ms nếu bấm ngay). Quy tắc "không giữ webview khi popup đóng" giờ có ngoại lệ ngắn
+  (≤ 8 s sau khi rê chuột, tạm ≈360 MB WS).
+- Test: `tray::tests` (4: điều kiện hẹn tạo sẵn, đồng hồ "UI vẽ xong" trước/sau lúc bấm), `measure::tests`; chế độ đo chạy qua đúng `hover_enter`/`hover_leave`
+  (`-HoverMs 500`, kiểm cả popup bỏ dở bị hủy). Chưa thử bằng con trỏ thật trên bản release.
 
 ### T13 · ARC-34 · Văn phòng 2D
 

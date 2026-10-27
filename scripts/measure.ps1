@@ -121,7 +121,8 @@ function Get-HubSummary($Samples, [double]$IngestP99, [string]$Commit) {
 }
 
 # App: tray, popup_cycle, popup_open, after_close. $ReadyMs: thời gian mở popup (ms) của từng lần.
-function Get-AppSummary($Samples, [double[]]$ReadyMs, [string]$Commit) {
+# $PrewarmDropped: số lần popup tạo sẵn bị destroy sau khi rê chuột rồi rời đi (-1 = không kiểm, tức không chạy với -HoverMs).
+function Get-AppSummary($Samples, [double[]]$ReadyMs, [string]$Commit, [int]$PrewarmDropped = -1) {
     $tray = @(Select-Phase $Samples @('tray'))
     $open = @(Select-Phase $Samples @('popup_open'))
     $after = @(Select-Phase $Samples @('after_close'))
@@ -141,10 +142,12 @@ function Get-AppSummary($Samples, [double[]]$ReadyMs, [string]$Commit) {
     if ($after.Count -gt 0 -and $afterRss -gt $Budget.AppLiteMB) { $fail += "sau_dong_rss>$($Budget.AppLiteMB)MB" }
     if ($ReadyMs.Count -eq 0) { $fail += 'khong_do_duoc_popup_ready' }
     elseif ($readyMed -gt $Budget.PopupReadyMs) { $fail += "popup_ready_median>$($Budget.PopupReadyMs)ms" }
+    if ($PrewarmDropped -eq 0) { $fail += 'prewarm_khong_bi_huy' }
     $verdict = if ($fail.Count -eq 0) { 'PASS' } else { 'FAIL' }
     $reasons = if ($fail.Count -eq 0) { '-' } else { $fail -join ',' }
-    return ("measure target=app commit={0} tray_rss_mb={1} tray_cpu_pct={2} popup_open_rss_mb={3} popup_open_cpu_pct={4} after_close_rss_mb={5} after_close_cpu_pct={6} popup_ready_median_ms={7} popup_ready_max_ms={8} popup_runs={9} reasons={10} verdict={11}" -f `
-        $Commit, (Format-Num $trayRss 1), (Format-Num $trayCpu), (Format-Num $openPeak 1), (Format-Num $openCpu), (Format-Num $afterRss 1), (Format-Num $afterCpu), (Format-Num $readyMed 0), (Format-Num $readyMax 0), $ReadyMs.Count, $reasons, $verdict)
+    $dropText = if ($PrewarmDropped -ge 0) { " prewarm_dropped=$PrewarmDropped" } else { '' }
+    return ("measure target=app commit={0} tray_rss_mb={1} tray_cpu_pct={2} popup_open_rss_mb={3} popup_open_cpu_pct={4} after_close_rss_mb={5} after_close_cpu_pct={6} popup_ready_median_ms={7} popup_ready_max_ms={8} popup_runs={9}{12} reasons={10} verdict={11}" -f `
+        $Commit, (Format-Num $trayRss 1), (Format-Num $trayCpu), (Format-Num $openPeak 1), (Format-Num $openCpu), (Format-Num $afterRss 1), (Format-Num $afterCpu), (Format-Num $readyMed 0), (Format-Num $readyMax 0), $ReadyMs.Count, $reasons, $verdict, $dropText)
 }
 
 if ($Analyze) {
@@ -154,7 +157,8 @@ if ($Analyze) {
     $p99 = if ($env:MEASURE_INGEST_P99_MS) { [double]::Parse($env:MEASURE_INGEST_P99_MS, [System.Globalization.CultureInfo]::InvariantCulture) } else { 0.0 }
     $ready = @()
     if ($env:MEASURE_POPUP_READY_MS) { $ready = @($env:MEASURE_POPUP_READY_MS.Split(',') | ForEach-Object { [double]::Parse($_, [System.Globalization.CultureInfo]::InvariantCulture) }) }
-    $line = if ($isApp) { Get-AppSummary $samples $ready 'analyze' } else { Get-HubSummary $samples $p99 'analyze' }
+    $dropped = if ($env:MEASURE_PREWARM_DROPPED) { [int]$env:MEASURE_PREWARM_DROPPED } else { -1 }
+    $line = if ($isApp) { Get-AppSummary $samples $ready 'analyze' $dropped } else { Get-HubSummary $samples $p99 'analyze' }
     Write-Output $line
     if ($line -match 'verdict=FAIL') { exit 1 }
     exit 0
@@ -359,7 +363,8 @@ try {
         }
         $csv = Join-Path $OutDir "app-$stamp.csv"
         Save-Csv $csv
-        $line = Get-AppSummary @(Read-Samples $csv) $ready $commit
+        $dropped = if ($HoverMs -gt 0) { @($events | Where-Object { $_ -match 'event=popup_prewarm_dropped' }).Count } else { -1 }
+        $line = Get-AppSummary @(Read-Samples $csv) $ready $commit $dropped
         Copy-Item $appErr (Join-Path $OutDir "app-$stamp.log") -ErrorAction SilentlyContinue
     }
     Write-Host "CSV: $csv"

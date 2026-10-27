@@ -78,6 +78,11 @@ $big = @(@((70 * 1024), '0.00', 'tray'), @((200 * 1024), '0.00', 'popup_open'), 
 $r = Run-Analyze (Write-Csv 'appbig.csv' $big) @{ MEASURE_POPUP_READY_MS = '200' }
 Check 'app FAIL: tray, popup và sau đóng đều vượt' ($r.Code -eq 1 -and $r.Out.Contains('tray_rss>60') -and $r.Out.Contains('popup_rss>150') -and $r.Out.Contains('sau_dong_rss>60')) $r.Out
 
+$r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '7,8,10'; MEASURE_PREWARM_DROPPED = '1' }
+Check 'app prewarm: popup mở 7 ms và đã hủy popup bỏ dở' ($r.Code -eq 0 -and $r.Out -match 'popup_ready_median_ms=8' -and $r.Out.Contains('prewarm_dropped=1')) $r.Out
+$r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '7,8,10'; MEASURE_PREWARM_DROPPED = '0' }
+Check 'app FAIL: popup tạo sẵn không bị hủy khi rời icon' ($r.Code -eq 1 -and $r.Out.Contains('prewarm_khong_bi_huy')) $r.Out
+
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 if ($failures -gt 0) { Write-Host "$failures kiểm tra lỗi"; exit 1 }
 Write-Host 'tất cả kiểm tra đạt'
