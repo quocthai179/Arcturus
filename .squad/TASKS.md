@@ -146,7 +146,7 @@ Chi tiết, bất biến riêng và thiết kế: `docs/PLAN.md` §7. Thuộc Ep
 | P1 | main + ui | ADR + sửa phạm vi CLAUDE.md/ARCHITECTURE; đưa điểm thay thế UI từ nhánh `arc-ui-extensibility` lên main (đang xung đột 3 file); thêm `AvatarStyle = 'vrm'` | P0 | 2 | todo |
 | P2 | ui | Cửa sổ `pet` tạo ở Rust như `popup`/`office` (`tray.rs`), capability riêng, tray bật/tắt, kéo, nhớ vị trí, đa màn hình/DPI, hủy khi đóng | P1 | 3 | todo |
 | P3 | ui | `?view=pet` + `PetScene` nạp lazy (không vào bundle của popup), nền trong suốt, vẽ theo `useMotionPolicy`, lui về 2D | P2 | 3 | todo |
-| P4 | ui | Trạng thái → biểu cảm/động tác (VRMA), chớp mắt, nhìn theo con trỏ, ngủ | P3 | 3 | todo |
+| P4 | ui | Trạng thái → biểu cảm/động tác: tạo dáng theo giải phẫu (PLAN §7.10) + VRMA, chớp mắt, nhìn theo con trỏ, ngủ; test tay trên VRM0 và VRM1 | P3 | 3 | todo |
 | P5 | ui | `brain.ts` tầng 0 + bong bóng thoại (duyệt qua `useApprovalQueue`/`allowGate`, Critical không có nút) | P3 | 3 | todo |
 | P6 | ui | Tương tác: bấm, bấm đúp mở Văn phòng, kéo, vuốt ve, menu chuột phải, bàn phím/tray | P4, P5, T13 | 2 | todo |
 | P7 | ui | Orchestrator tầng 1: lệnh ánh xạ `team_pause`/`team_resume`/`focus_set` và mở thẻ; "tóm tắt" qua lệnh Rust mới gọi `GET /standup`; không bao giờ gửi `decide*`, `batch_open`, `suggestion_answer` | P5 | 2 | todo |

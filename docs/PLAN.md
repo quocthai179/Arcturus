@@ -1450,7 +1450,7 @@ im lặng, chỉ phản ứng High/Critical. Mọi biểu cảm là hiệu ứng
 | P1 | main + ui | ADR + sửa phạm vi (`CLAUDE.md` v1, `ARCHITECTURE.md`); đưa điểm thay thế UI (`AgentAvatar`, `scenes`, `useMotionPolicy`, `docs/UI_EXTENSION.md`) từ nhánh `arc-ui-extensibility` lên `main` (hiện xung đột ở `.squad/TASKS.md`, `ui/src/index.css`, `ui/src/views/Office.tsx`); thêm `AvatarStyle = 'vrm'` | P0 | 2 |
 | P2 | ui | Cửa sổ `pet` tạo ở Rust (`tray.rs` hoặc `pet.rs`, như `popup`/`office`), capability riêng, vòng đời, tray bật/tắt, kéo, nhớ vị trí, đa màn hình/DPI, ẩn khi ứng dụng toàn màn hình, `destroy()` khi đóng | P1 | 3 |
 | P3 | ui | `?view=pet` trong `App.tsx` + `PetScene`: nạp VRM lazy (không vào bundle của popup), nền trong suốt, vẽ theo `useMotionPolicy`, `dispose`, đường lui 2D khi không có WebGL | P2 | 3 |
-| P4 | ui | Bảng trạng thái → biểu cảm/động tác (VRMA), chớp mắt, nhìn theo con trỏ, ngủ | P3 | 3 |
+| P4 | ui | Bảng trạng thái → biểu cảm/động tác: bộ tạo dáng theo giải phẫu (7.10) cho tư thế tĩnh, VRMA cho chuyển động; chớp mắt, nhìn theo con trỏ, ngủ; test tay trên model VRM0 và VRM1 | P3 | 3 |
 | P5 | ui | `brain.ts` tầng 0 + bong bóng thoại: văn bản mẫu, chống lặp, tôn trọng Giờ tập trung; duyệt qua `decide`/`allowGate` với tùy chọn tắt đếm ngược mới của `useApprovalQueue` | P3 | 3 |
 | P6 | ui | Tương tác: bấm, bấm đúp mở Văn phòng, kéo, vuốt ve, menu chuột phải, bàn phím/tray (đủ truy cập không cần chuột) | P4, P5, T13 | 2 |
 | P7 | ui | Tầng 1: hộp lệnh/menu ánh xạ `team_pause`/`team_resume`/`focus_set` và lệnh chỉ-UI; lệnh Rust mới `standup` gọi `GET /standup` (T19 đã xong) | P5 | 2 |
@@ -1500,6 +1500,47 @@ pet không bao giờ phát `decide` allow nếu người dùng chưa bấm (test
 | (chưa nói) | CSP không có `blob:`; một bundle cho mọi view | Kiểm `img-src blob:` ở P0; three.js nạp lazy, có test kích thước bundle |
 | Popup 2D ≈200 MB private | Đo lại 74,7–75,4 MB private, ngân sách popup ≤150 MB; đo bằng `scripts/measure.ps1` + `measure.rs` | Cập nhật mốc ở 7.6; P0/P11 dùng script đo có sẵn |
 | Bấm đúp mở Văn phòng | Office (T13) đang `review` | P6 phụ thuộc T13 |
+
+### 7.10 Tạo dáng tay: lỗi "ngược tay" và cách tránh (thử 5 model, 2026-10-28)
+
+Demo thử (không phải code sản phẩm, nằm ngoài repo): three.js 0.180 + `@pixiv/three-vrm` 3.5.5, 5 model mẫu công khai
+(Constraint Twist Sample, Seed-san, AvatarSample_B: VRM1; AliciaSolid 0.51, three-vrm-girl: VRM0) × 6 trạng thái. Mỗi tổ hợp
+được đo tự động trên xương thật sau `vrm.update()`: độ gập khuỷu có dấu theo trục bản lề của chính cánh tay đó (âm = gập
+ngược), góc cẳng tay rời mặt phẳng bản lề (lớn = khuỷu bẻ ngang), và bàn tay cao/thấp hơn vai có đúng trạng thái không.
+
+| Cách tạo dáng | VRM1 (3 model) | VRM0 (2 model) | Tổng |
+|---|---|---|---|
+| Góc Euler viết cứng cho từng xương (demo đầu tiên) | 2/6 trạng thái hỏng mỗi model: cẳng tay lệch bản lề 50–86°, Seed-san khuỷu gập ngược −16° | 6/6 hỏng: tay buông thành giơ lên và ngược lại | 18/30 hỏng |
+| Theo giải phẫu, trục đo từ model (bên dưới) | 0 lỗi; khuỷu ≥ 5°, lệch bản lề ≤ 0° | 0 lỗi; lệch bản lề ≤ 3° | 0/30 |
+| VRMA `idle_loop.vrma` qua `createVRMAnimationClip` | đúng (AvatarSample_B) | đúng (AliciaSolid) | thử 2 model |
+
+**Nguyên nhân**
+
+1. **Góc xương viết cứng theo trục của một model.** VRM0 quay mặt về −Z, VRM1 về +Z. `VRMUtils.rotateVRM0` chỉ xoay cả cảnh
+   180°, còn khung xương chuẩn hóa bên trong vẫn theo VRM0, nên mọi góc quay quanh trục X và Z đổi dấu: "buông tay" thành
+   "giơ tay", gật đầu thành ngửa đầu. Không thể sửa bằng một bộ góc chung cho mọi model.
+2. **Khuỷu bị quay quanh trục không phải bản lề.** Khuỷu là khớp bản lề một trục. Muốn "cẳng tay dựng lên" mà quay xương
+   cẳng tay quanh Z (trục khác bản lề) thì cẳng tay bị bẻ ngang khỏi mặt phẳng gập, có lúc gập ngược. Lỗi này có cả ở VRM1.
+   Cách đúng là xoay cánh tay trên quanh trục dọc của nó (twist) để mặt phẳng bản lề hướng lên, rồi mới gập khuỷu.
+3. **Nội suy từng thành phần Euler** khi chuyển tư thế cho đường đi lạ (tay vặn qua tư thế trung gian không có thật).
+
+**Cách làm bắt buộc ở P3/P4**
+
+- Không viết góc xương thô trong code hay dữ liệu tư thế. Tư thế tĩnh mô tả theo giải phẫu cho từng tay: góc nâng
+  (`elev`), hướng quanh thân (`az`), độ gập khuỷu (`elbow`), hướng cẳng tay đi tới khi gập (`hint`: trước, lên, vào trong).
+- Lúc nạp model, đo trục từ chính model: hướng sang trái = vai trái − vai phải, hướng mặt = trái × lên, hướng cánh tay
+  lúc nghỉ = khuỷu − vai, trục bản lề = hướng cánh tay × hướng mặt. Không rẽ nhánh theo `metaVersion`.
+- Đổi sang quaternion bằng swing–twist: swing từ hướng nghỉ tới hướng đích, twist quanh trục cánh tay để mặt phẳng bản lề
+  hướng về `hint`, khuỷu chỉ quay quanh trục bản lề. Kẹp: khuỷu 0…145° (không bao giờ âm), twist ±110°.
+- Chuyển tư thế bằng `slerp` quaternion, không nội suy Euler.
+- Chuyển động phức tạp (vẫy tay, gõ phím, ngồi) dùng file VRMA qua `@pixiv/three-vrm-animation`
+  (`createVRMAnimationClip` tự xử lý VRM0/VRM1); tư thế giải phẫu dùng cho trạng thái tĩnh và lớp cộng nhỏ.
+- Tay áo/tóc là spring bone: sau khi đổi tư thế phải cho lắng (~2 s, hoặc chạy `vrm.update` vài chục bước) trước khi dừng
+  vòng vẽ, nếu không sẽ đứng hình ở tư thế xòe.
+- **Test bắt buộc**: với mọi trạng thái × ít nhất một model VRM0 và một model VRM1, kiểm tự động như bảng trên: khuỷu có
+  dấu ≥ −5°, cẳng tay lệch bản lề ≤ 20°, tay cao/thấp hơn vai đúng trạng thái. Model test chỉ dùng trong test, không đóng gói.
+- Lưu ý khi đánh giá ảnh: phụ kiện của model (ví dụ cánh tay robot trên ba lô của Seed-san) dễ bị nhầm là tay; tin số đo
+  trên xương humanoid hơn là ảnh.
 
 ---
 
