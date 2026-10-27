@@ -185,6 +185,7 @@ async fn main() -> anyhow::Result<()> {
             reconcile::ClaudeAgents::default(),
             reconcile_every,
         );
+        hub.set_db_path(db_path.clone());
         let (ui, ws_handle) = ws::router(hub.clone(), ui_token, port, ws::WsConfig::default());
         let app = hooks::router(hub.clone(), token).merge(ui);
         tracing::info!(

@@ -8,6 +8,7 @@ pub mod persona;
 pub mod policy;
 pub mod protocol;
 pub mod schema;
+pub mod standup;
 pub mod state;
 pub mod store;
 

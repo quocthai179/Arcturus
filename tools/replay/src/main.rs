@@ -1,14 +1,18 @@
 //! Công cụ fixture hook cho Arcturus.
 //!
-//! - `replay [DIR]`: đếm fixture; gửi tới hub được thêm ở T15.
+//! - `replay [DIR] --sessions N --rate R --duration D`: phát lại fixture vào hub đang chạy (T15), in p50/p95/p99.
+//! - `replay [DIR] --dry-run`: chỉ đếm fixture.
 //! - `replay scrub <IN> <OUT>`: làm sạch JSON đã ghi băng (T1) trước khi đưa vào `fixtures/hooks/`.
 
 mod scrub;
 
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
+use replay::files::{count_json_files, json_files};
+use replay::send::{self, PermissionMode};
 use scrub::Scrubber;
 
 #[derive(Parser, Debug)]
@@ -19,6 +23,50 @@ struct Cli {
 
     /// Thư mục fixture (mặc định fixtures/hooks).
     dir: Option<PathBuf>,
+
+    /// Gốc HTTP của hub.
+    #[arg(long, default_value = "http://127.0.0.1:7878")]
+    url: String,
+
+    /// Số phiên giả (`replay-0`, `replay-1`, …).
+    #[arg(long, default_value_t = 1)]
+    sessions: usize,
+
+    /// Số yêu cầu mỗi giây (chia đều cho các phiên).
+    #[arg(long, default_value_t = 20.0)]
+    rate: f64,
+
+    /// Thời lượng gửi (giây).
+    #[arg(long, default_value_t = 5.0)]
+    duration: f64,
+
+    /// `allow`: gửi cả PermissionRequest và duyệt allow qua WebSocket (cần token UI); `skip`: chỉ gửi sự kiện.
+    #[arg(long, value_enum, default_value_t = PermissionMode::Skip)]
+    permission_mode: PermissionMode,
+
+    /// Chờ bao lâu (ms) rồi mới duyệt allow; phải lớn hơn `min_review_ms` của hub.
+    #[arg(long, default_value_t = 1100)]
+    allow_delay_ms: u64,
+
+    /// Thoát với mã ≠ 0 nếu p99 của /hooks/event vượt ngưỡng (ms), hoặc có lỗi.
+    #[arg(long)]
+    assert_p99_ms: Option<f64>,
+
+    /// Token hook của hub.
+    #[arg(long, env = "ARCTURUS_TOKEN", hide_env_values = true)]
+    hook_token: Option<String>,
+
+    /// Token UI (chỉ cần với `--permission-mode allow`).
+    #[arg(long, env = "ARCTURUS_UI_TOKEN", hide_env_values = true)]
+    ui_token: Option<String>,
+
+    /// Đọc token UI từ file (ví dụ file do `hub --ui-token-file` ghi).
+    #[arg(long)]
+    ui_token_file: Option<PathBuf>,
+
+    /// Chỉ đếm fixture, không gửi gì.
+    #[arg(long)]
+    dry_run: bool,
 }
 
 #[derive(Subcommand, Debug)]
@@ -41,7 +89,8 @@ enum Command {
     },
 }
 
-fn main() -> anyhow::Result<()> {
+#[tokio::main]
+async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
         Some(Command::Scrub {
@@ -72,44 +121,65 @@ fn main() -> anyhow::Result<()> {
             );
         }
         None => {
-            let dir = cli.dir.unwrap_or_else(|| PathBuf::from("fixtures/hooks"));
-            let n = count_json_files(&dir)
-                .with_context(|| format!("không đọc được {}", dir.display()))?;
+            let dir = cli
+                .dir
+                .clone()
+                .unwrap_or_else(|| PathBuf::from("fixtures/hooks"));
+            if cli.dry_run {
+                let n = count_json_files(&dir)
+                    .with_context(|| format!("không đọc được {}", dir.display()))?;
+                println!("replay: {n} fixture trong {}", dir.display());
+                return Ok(());
+            }
+            let opts = send_options(&cli, dir)?;
             println!(
-                "replay: {n} fixture trong {} (chưa gửi tới hub, xem T15)",
-                dir.display()
+                "replay: {} phiên, {} yêu cầu/giây, {} giây, tới {} (permission-mode {:?})",
+                opts.sessions,
+                opts.rate,
+                opts.duration.as_secs_f64(),
+                opts.url,
+                opts.permission_mode
             );
+            let report = send::run(opts).await?;
+            print!("{}", report.summary());
+            if let Err(why) = report.check(cli.assert_p99_ms) {
+                bail!("{why}");
+            }
         }
     }
     Ok(())
 }
 
-/// Đếm file `.json` trong `dir` và các thư mục con. Thư mục chưa tồn tại thì trả 0.
-fn count_json_files(dir: &Path) -> std::io::Result<usize> {
-    Ok(json_files(dir)?.len())
-}
-
-/// Danh sách file `.json` (đường dẫn tương đối so với `dir`), sắp xếp. Thư mục chưa tồn tại thì rỗng.
-fn json_files(dir: &Path) -> std::io::Result<Vec<PathBuf>> {
-    let mut out = Vec::new();
-    if !dir.exists() {
-        return Ok(out);
+/// Gom tùy chọn dòng lệnh thành [`send::Options`]: token hook bắt buộc; token UI từ cờ, biến môi trường hoặc file.
+fn send_options(cli: &Cli, dir: PathBuf) -> anyhow::Result<send::Options> {
+    let hook_token = cli
+        .hook_token
+        .clone()
+        .context("thiếu token hook: đặt ARCTURUS_TOKEN hoặc --hook-token")?;
+    let ui_token = match (&cli.ui_token, &cli.ui_token_file) {
+        (Some(t), _) => Some(t.clone()),
+        (None, Some(f)) => Some(
+            std::fs::read_to_string(f)
+                .with_context(|| format!("không đọc được {}", f.display()))?
+                .trim()
+                .to_owned(),
+        ),
+        (None, None) => None,
+    };
+    if !(cli.duration.is_finite() && cli.duration > 0.0) {
+        bail!("--duration phải > 0");
     }
-    let mut stack = vec![dir.to_path_buf()];
-    while let Some(d) = stack.pop() {
-        for entry in std::fs::read_dir(&d)? {
-            let path = entry?.path();
-            if path.is_dir() {
-                stack.push(path);
-            } else if path.extension().is_some_and(|e| e == "json") {
-                if let Ok(rel) = path.strip_prefix(dir) {
-                    out.push(rel.to_path_buf());
-                }
-            }
-        }
-    }
-    out.sort();
-    Ok(out)
+    Ok(send::Options {
+        dir,
+        url: cli.url.trim_end_matches('/').to_owned(),
+        sessions: cli.sessions,
+        rate: cli.rate,
+        duration: Duration::from_secs_f64(cli.duration),
+        permission_mode: cli.permission_mode,
+        allow_delay: Duration::from_millis(cli.allow_delay_ms),
+        hook_token,
+        ui_token,
+    })
 }
 
 /// Làm sạch mọi `.json` trong `input`, ghi JSON định dạng đẹp vào `output` với cùng đường dẫn tương đối.

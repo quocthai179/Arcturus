@@ -1114,6 +1114,23 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
   trả lời qua WebSocket với chế độ `allow`).
 - In p50/p95/p99 độ trễ và số lỗi; mã thoát ≠0 nếu p99 > 5 ms cho `/hooks/event` (cờ `--assert-p99-ms`).
 
+**Đã làm ở T15**
+- `tools/replay` tách thành thư viện (`files`, `send`) và binary; `replay [DIR]` giờ **gửi** tới hub (trước đây chỉ đếm; `--dry-run`
+  giữ hành vi đếm). Cờ: `--url`, `--sessions` (mặc định 1), `--rate` (20/giây), `--duration` (5 giây), `--permission-mode
+  allow|skip` (mặc định `skip`), `--allow-delay-ms` (1.100, phải lớn hơn `min_review_ms` của hub), `--assert-p99-ms`.
+- Token: hook từ `ARCTURUS_TOKEN` (hoặc `--hook-token`); token UI (chỉ cần với `allow`) từ `ARCTURUS_UI_TOKEN`, `--ui-token`
+  hoặc `--ui-token-file` (file do `hub --ui-token-file` ghi). Token không in ra.
+- Kế hoạch gửi xác định: phiên `n % sessions`, mỗi phiên đi hết danh sách fixture theo thứ tự, lệch pha giữa các phiên.
+  `PermissionRequest` đi `/hooks/permission`, còn lại `/hooks/event`; `skip` bỏ `PermissionRequest`.
+- Chế độ `allow` kết nối WebSocket trước khi gửi (Snapshot cũng được duyệt) và gửi `decide{allow, origin: user}` sau
+  `--allow-delay-ms`. Vì replay xen sự kiện của cùng phiên (`Stop`, `PostToolUse`…), luật "đã được trả lời ở terminal" của T3
+  hủy nhiều yêu cầu giữ trước khi tới lượt duyệt: kết quả `{}` nhiều là bình thường, không phải lỗi.
+- Báo cáo riêng cho `/hooks/event` và `/hooks/permission` (p50/p95/p99/max, lỗi, allow/deny/`{}`). Thoát ≠0 khi `/hooks/event`
+  có lỗi hoặc p99 vượt `--assert-p99-ms`; lỗi ở `/hooks/permission` không làm hỏng kiểm p99.
+- Test: 9 test đơn vị (phân vị, thay `session_id`, kế hoạch, đọc quyết định, báo cáo/kiểm ngưỡng, fixture thật) và 6 test tích hợp
+  với hub thật (`tools/replay/tests/e2e.rs`: chỉ sự kiện, người duyệt giả, sai token hook/UI, thiếu token UI, tùy chọn sai).
+- Chạy tay với hub release: 5 phiên, 200 yêu cầu/giây, 5 giây, 952 sự kiện: p50 0,45 ms, p95 0,68 ms, p99 0,93 ms, 0 lỗi.
+
 ### T16 · ARC-37 · Đo ngân sách
 
 `scripts/measure.sh` (Linux/macOS) và `scripts/measure.ps1` (Windows) theo kịch bản `docs/BUDGET.md`; xuất CSV
@@ -1161,6 +1178,22 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
 - Endpoint `GET /standup` (Bearer) trả JSON; UI hiển thị ở v1.
 
 **Test:** dữ liệu giả lập → đúng số liệu và câu chữ (snapshot).
+
+**Đã làm ở T19**
+- `hub-core/src/standup.rs` (thuần): `build(&Input, &dyn GitLog) -> Standup` thay cho chữ ký `build(store, since, now, git)` của đặc tả
+  (hub đọc SQLite rồi đưa sự kiện vào, nên test không cần cơ sở dữ liệu). Đếm theo persona: `TurnStopped` = lượt xong;
+  `PostToolUse` / `PostToolUseFailure` của Bash khớp bộ chạy test = test đạt / lỗi (không cần mã thoát: Claude Code chỉ bắn
+  `PostToolUse` khi lệnh thành công); lỗi công cụ lặp ≥3 lần; yêu cầu đang chờ; commit từ `git log`.
+- Persona của sự kiện: agent đang chạy (đúng tên đang hiện) → `match_cwd` → `Agent <4 ký tự session>`; các phiên cùng persona gộp.
+- `StoreReader::events_since`; `Hub::set_db_path` (đặt một lần ở `main`) để `GET /standup` mở kết nối đọc khi cần.
+- `hub/src/standup.rs`: `SystemGit` chạy `git -C <cwd> -c core.fsmonitor=false --no-pager log --no-merges --since=…` (timeout 3 giây, tối
+  đa 256 KiB, thread đọc riêng để pipe không đầy; lỗi mọi kiểu trả rỗng); handler chạy trong `spawn_blocking`.
+- `GET /standup?hours=` ở router UI (token UI, kiểm `Host`/`Origin`, `no-store`); mô tả ở `docs/PROTOCOL.md`.
+- Rủi ro đã xử lý: tiêu đề commit và lệnh là dữ liệu do agent/repo viết nên đi qua `clean` (hiện ký tự ẩn, cắt); `cwd` do agent
+  gửi chỉ làm đối số của `-C`, không bao giờ qua shell; chạy `git` không tương tác (`GIT_TERMINAL_PROMPT=0`).
+- Test: 8 đơn vị (`standup.rs`: đếm, template bằng so khớp chuỗi, rỗng, làm sạch, tối đa 5 thư mục, nhận diện lệnh test) và 6
+  tích hợp (`hub/tests/standup.rs`: SQLite + persona + hàng đợi thật, token UI/hook, `hours` sai, 503, `Host` lạ, `git log` thật).
+- Chưa làm: UI hiển thị (v1 theo đặc tả); đếm "task xong" theo ticket (chỉ có lượt trả lời).
 
 ### T20 · ARC-41 · Chỉ số dogfood
 
