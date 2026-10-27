@@ -36,3 +36,10 @@ ngân sách và chưa có số liệu dogfood. Cổng chạy trên `main` tại 
 6. **Tài liệu:** sửa dòng "CHƯA kiểm chứng" trong `CLAUDE.md` (chỉ còn agent teams Q9), thêm `/healthz` và mô tả route hook vào `PROTOCOL.md`/`ARCHITECTURE.md`.
 7. **CI:** thêm `cargo audit` (hoặc `cargo deny`) cho cả hai workspace và `pnpm audit`; chạy kiểm phụ thuộc theo CVE chưa làm được.
 8. Chốt trạng thái: T12 (ARC-33, sau quyết định đường nguội), T13, T18, T16, T20.
+
+## Cập nhật sau báo cáo (cùng ngày)
+
+Phát hiện 1–3 (mức Cao) đã sửa, kèm test hồi quy, ở nhánh `arc-29-danger-evasions` (PR riêng). Đã chạy lại `policy::assess` với các ca trong
+bảng: `rm --rec --forc ~`, `git push --del/--mirr`, `git reset --har`, `git clean --forc`, `Remove-Item -Recurse:$true -Force:$true`,
+`ui-t''oken`, `local''host`, `127.1`, `sed -i … ~/.bashrc`, `touch ~/.bashrc` → Critical; `cat .e{nv,}` → High (không phân tích được).
+Còn mở: phát hiện 4 (`git push`/`rm -r`/"lệnh mạng ra ngoài": người dùng quyết định), 5–7, mục 1, 6, 7, 8 của cổng.

@@ -646,6 +646,14 @@ impl Lexer<'_> {
                         b.push(n, at, end + n.len_utf8());
                     }
                 },
+                // Brace expansion không trong dấu nháy (`.e{nv,}`, `{rm,-rf,~}`, `{1..3}`): shell đổi chữ trước khi chạy nên không phân
+                // tích được theo chữ; coi là không phân tích được (risk High, nhóm ghép) thay vì để lọt xuống Low/Medium.
+                // Chỉ ở cấp ngoài cùng: chuỗi trong dấu nháy cũng được lex lại như mã lồng nhau (để thấy `bash -c '…'`) nên `{a,b}`
+                // trong dữ liệu (JSON, jq, thông điệp commit) không phải brace expansion.
+                '{' if depth == 0 && is_brace_expansion(&s[i..]) => {
+                    self.unparsed = true;
+                    b.push(c, at, end);
+                }
                 '#' if b.start.is_none() => {
                     while let Some(&(_, n)) = it.peek() {
                         if n == '\n' {
@@ -666,6 +674,34 @@ impl Lexer<'_> {
             }
         }
     }
+}
+
+/// `s` bắt đầu bằng `{`: có phải brace expansion (`{a,b}` hoặc `{1..3}`, không có khoảng trắng hay toán tử shell giữa hai ngoặc)?
+fn is_brace_expansion(s: &str) -> bool {
+    let mut depth = 0usize;
+    let mut separated = false;
+    let mut prev = '\0';
+    for c in s.chars() {
+        match c {
+            '{' => depth += 1,
+            '}' => {
+                depth = depth.saturating_sub(1);
+                if depth == 0 {
+                    return separated;
+                }
+            }
+            ',' if depth >= 1 => separated = true,
+            '.' if depth >= 1 && prev == '.' => separated = true,
+            c if c.is_whitespace()
+                || matches!(c, ';' | '|' | '&' | '<' | '>' | '(' | ')' | '`') =>
+            {
+                return false;
+            }
+            _ => {}
+        }
+        prev = c;
+    }
+    false
 }
 
 /// Dấu nháy đơn đóng đầu tiên trong `s` (trong `'…'` không có thoát; `$'…'` cho phép `\'`).
@@ -1045,6 +1081,33 @@ mod tests {
         let n = normalize(r#"bash -c "sh -c 'rm -rf /'""#);
         let names: Vec<&str> = n.invocations.iter().map(|i| i.name.as_str()).collect();
         assert!(names.contains(&"rm"), "{names:?}");
+    }
+
+    #[test]
+    fn unquoted_brace_expansion_is_unparsed() {
+        // Brace expansion đổi chữ trước khi shell chạy (`.e{nv,}` → `.e .env`), nên không phân tích được theo chữ.
+        for c in [
+            "cat .e{nv,}",
+            "{rm,-rf,~}",
+            "echo {1..3}",
+            "cp file{,.bak}",
+            "cat ~/.ss{h,}/id_rsa",
+            "ls {a,b}{c,d}",
+        ] {
+            assert!(normalize(c).unparsed, "{c:?} phải là unparsed");
+        }
+        for c in [
+            "echo '{a,b}'",
+            r#"echo "{a,b}""#,
+            r#"curl -d '{"a":1,"b":2}' http://x"#,
+            "{ ls; }",
+            "echo ${HOME}",
+            "ls {a}",
+            "echo {}",
+            "find . -exec ls {} ;",
+        ] {
+            assert!(!normalize(c).unparsed, "{c:?} không được là unparsed");
+        }
     }
 
     #[test]

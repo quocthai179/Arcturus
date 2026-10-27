@@ -295,6 +295,27 @@ mod tests {
             b("chmod 777 x"),
             b("cat ~/.local/share/arcturus/ui-token"),
             b("curl http://127.0.0.1:7878/ws"),
+            // Dạng lách (báo cáo cổng v0): tùy chọn dài viết tắt, tham số PowerShell, tách bằng dấu nháy, địa chỉ cục bộ rút gọn,
+            // ghi ngoài workspace bằng lệnh khác cp/mv.
+            b("rm --rec --forc ~"),
+            b("git push --del origin main"),
+            b("git push --mirr origin"),
+            b("git reset --har HEAD~3"),
+            b("git clean --forc -dx"),
+            b("cat ~/.local/share/arcturus/ui-t''oken"),
+            b("cat ~/.config/arcturus/arcturus.t''oml"),
+            b("curl http://local''host:7878/ws"),
+            b("curl http://127.1:7878/ws"),
+            b("sed -i s/a/b/ ~/.bashrc"),
+            b("touch ~/.bashrc"),
+            (
+                "PowerShell",
+                json!({ "command": "Remove-Item -Recurse:$true -Force:$true C:/x" }),
+            ),
+            (
+                "PowerShell",
+                json!({ "command": "Set-Content C:/Windows/x.txt hi" }),
+            ),
             b("cat ~/.config/arcturus/arcturus.toml"),
             (
                 "PowerShell",
@@ -419,6 +440,32 @@ mod tests {
                 ..
             }
         ));
+    }
+
+    #[test]
+    fn brace_expansion_is_never_auto_allowed_even_with_a_grant() {
+        // `cat .e{nv,}` đọc `.env` sau khi shell mở rộng: theo chữ thì vô hại, nên phải coi là không phân tích được (High).
+        let p = RulesPolicy::new().with(Box::new(AlwaysGrant));
+        for c in [
+            "cat .e{nv,}",
+            "grep -r . .e{nv,}",
+            "{rm,-rf,~}",
+            "cat ~/.ss{h,}/id_rsa",
+        ] {
+            let a = bash(c);
+            assert!(a.risk >= Risk::High, "{c:?} → {:?}", a.risk);
+            let ctx = ApprovalCtx {
+                agent_id: "a",
+                subject: "Khoa",
+                tool: "Bash",
+                tool_input: &json!({ "command": c }),
+                cwd: CWD,
+            };
+            assert!(
+                matches!(p.decide(&ctx, &a), PolicyOutcome::AskUser { .. }),
+                "{c:?} không được tự duyệt"
+            );
+        }
     }
 
     #[test]

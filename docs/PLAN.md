@@ -938,6 +938,22 @@ ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte,
 - Đã biết, chưa làm: so đường dẫn theo chữ (không theo symlink); WebFetch tới host ngoài là Medium (không thuộc bảng
   `outbound_network` vốn chỉ cho lệnh); `python -c "shutil.rmtree('/')"` chỉ là High (mã thông dịch không được phân tích).
 
+**Sửa sau cổng v0 (2026-10-27, báo cáo `.squad/reports/2026-10-27-milestone-v0.md`, phát hiện 1–3 mức Cao)**
+- Brace expansion không trong dấu nháy (`cat .e{nv,}`, `{rm,-rf,~}`, `{1..3}`): lexer đặt `unparsed` (risk High, nhóm ghép) vì shell đổi chữ
+  trước khi chạy. Chỉ ở cấp ngoài cùng: chuỗi trong dấu nháy được lex lại như mã lồng nhau nên `{a,b}` trong dữ liệu (JSON, jq) không bị gắn nhầm.
+- Tùy chọn dài viết tắt (`rm --rec --forc`, `git push --del/--mirr/--pru/--forc`, `git reset --har`, `git clean --forc`) khớp theo tiền tố như
+  getopt_long (khớp rộng: tiền tố mơ hồ cũng tính, chỉ làm tăng rủi ro). PowerShell bỏ phần `:<giá trị>` của tham số (`-Recurse:$true`).
+- Luật `arcturus_ui_token`/`arcturus_state`/URL hub chạy thêm trên **từ đã bỏ dấu nháy và `\`** (`ui-t''oken`, `local''host`, `ui-t\oken`); URL hub
+  nhận `127.1`, `0`, `0x7f000001`, số thập phân 9–10 chữ số, `[::ffff:127.0.0.1]`.
+- `write_outside_workspace` thêm `touch`, `mkdir`, `truncate`, `unlink`, `shred`, `mkfifo`, `chmod/chown/chgrp`, `sed -i`, `perl -i`,
+  `Set-Content`, `Add-Content`, `Out-File`, `New-Item`, `Clear-Content`.
+- **Chưa làm (chờ người quyết định, `CLAUDE.md` quy tắc 2 so với dòng `rm -r dir` / `git push origin main` Medium ở trên):** `rm -r` và
+  `Remove-Item -Recurse` không kèm `-f` ngoài workspace, `git push` thường tới URL lạ, danh sách "lệnh mạng ra ngoài" (`gh gist`, `npm publish`, `nslookup`…).
+- Test hồi quy: `danger::tests::{abbreviated_long_options_are_still_dangerous, quote_split_cannot_hide_token_state_or_hub_url,
+  writes_outside_workspace_beyond_cp_and_redirects}`, `normalize::tests::unquoted_brace_expansion_is_unparsed`,
+  `policy::tests::brace_expansion_is_never_auto_allowed_even_with_a_grant` và các ca mới trong `critical_samples` (Critical không bao giờ tự duyệt
+  dù có grant hay batch).
+
 ### T9 · ARC-30 · Gom nhóm và batch rule
 
 **`group_key`**: `"<tool>:<pattern>"`, với Bash là hai token đầu của segment đầu sau chuẩn hóa, bỏ đường dẫn
