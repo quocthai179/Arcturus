@@ -78,3 +78,8 @@ về hub ở `127.0.0.1:7879`.
      `kết nối hook đóng trước khi có quyết định, hủy yêu cầu` lúc 05:09:31.26, ngay sau khi script tắt `claude`
      (05:09:30.2 + Ctrl-C). Kết luận: Claude Code không đóng kết nối khi người trả lời ở terminal; chỉ đóng khi tiến trình
      thoát (hoặc hết timeout của hook).
+- 2026-10-27 · T17 · kịch bản e2e với hub trong tiến trình test và `claude -p --permission-mode default --settings <file>` (Claude Code
+  2.1.308, Windows, model haiku, dự án tạm có `npm test` ghi `marker.txt`): **allow** → lệnh chạy; **deny** → không chạy; **hub hết giờ 5 giây
+  (`{}`)** → không chạy; **không có gì lắng nghe (lỗi kết nối)** → không chạy và `claude -p` không treo. Cả bốn đúng như CLAUDE.md đã ghi;
+  hai nhánh mới được kiểm chứng trên máy thật: lỗi kết nối và hết giờ không bao giờ dẫn tới allow. Chưa kiểm non-2xx. Test:
+  `crates/hub/tests/e2e_claude.rs`.
