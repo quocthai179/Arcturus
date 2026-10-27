@@ -12,7 +12,20 @@ export const DEFAULT_MIN_REVIEW_MS = 1000;
 /** Sau khi một thẻ rời hàng đợi (thẻ dưới trượt lên dưới con trỏ/phím), chưa cho Đồng ý chừng này để người dùng kịp thấy. */
 export const LIST_SETTLE_MS = 500;
 
-export function useApprovalQueue(state: HubState, send: (msg: ClientMsg) => boolean, minReviewMs: number) {
+export interface ApprovalQueueOptions {
+  /**
+   * Chạy đếm ngược phủ quyết (T14) và tự gửi `origin: countdown` khi hết giờ. Mặc định bật cho popup và Office, nơi thẻ
+   * đầy đủ đang hiện. Cửa sổ pet luôn hiện nhưng không hiện thẻ đầy đủ nên phải tắt (docs/PLAN.md §7.2 mục 1).
+   */
+  countdown?: boolean;
+}
+
+export function useApprovalQueue(
+  state: HubState,
+  send: (msg: ClientMsg) => boolean,
+  minReviewMs: number,
+  { countdown = true }: ApprovalQueueOptions = {},
+) {
   const { queue } = state;
   const connected = state.connection === 'open' && state.synced;
   const now = useNow(queue.length > 0);
@@ -99,24 +112,25 @@ export function useApprovalQueue(state: HubState, send: (msg: ClientMsg) => bool
   const paused = state.team.paused;
   const countdownOf = useCallback(
     (a: ApprovalView): number | null => {
+      if (!countdown) return null;
       const end = countdownEndsAt(a, shownAt[a.request_id], paused);
       return end === null ? null : Math.max(0, end - Math.max(now, Date.now()));
     },
-    [shownAt, paused, now],
+    [countdown, shownAt, paused, now],
   );
 
   // Hết giờ thì gửi `allow` với `origin: countdown`, mỗi yêu cầu đúng một lần. Chỉ khi đã kết nối và trang đang hiện
   // (người dùng có cơ hội thấy và phủ quyết); hub vẫn kiểm lại mọi điều kiện (allow_gate, §3.4).
   const fired = useRef(new Set<string>());
   useEffect(() => {
-    if (!connected || document.hidden) return;
+    if (!countdown || !connected || document.hidden) return;
     for (const a of queue) {
       if (fired.current.has(a.request_id) || countdownOf(a) !== 0) continue;
       if (send({ t: 'decide', request_id: a.request_id, decision: 'allow', origin: 'countdown' })) {
         fired.current.add(a.request_id);
       }
     }
-  }, [queue, connected, countdownOf, send]);
+  }, [countdown, queue, connected, countdownOf, send]);
 
   return {
     now,

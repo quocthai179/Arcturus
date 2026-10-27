@@ -1,0 +1,201 @@
+/* Cửa sổ trợ lý (docs/PLAN.md §7.3): nền trong suốt ở mọi lớp (cửa sổ, webview, HTML/CSS). Chỉ dùng token. */
+:root[data-view='pet'],
+:root[data-view='pet'] body,
+:root[data-view='pet'] #root {
+  background: transparent;
+  overflow: hidden;
+}
+
+.pet {
+  position: relative;
+  width: 100vw;
+  height: 100vh;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
+  user-select: none;
+}
+
+.pet__bubbles {
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  top: var(--space-2);
+  display: flex;
+  flex-direction: column;
+  gap: var(--space-2);
+  z-index: 3;
+  pointer-events: none;
+}
+
+.pet__bubbles > * {
+  pointer-events: auto;
+}
+
+.pet__say,
+.pet__card {
+  margin: 0;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--text);
+  line-height: 1.45;
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.pet__say--long {
+  max-height: 260px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
+.pet__say--muted {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.pet__card {
+  border-color: var(--approval);
+}
+
+.pet__card.risk-critical,
+.pet__card.risk-high {
+  border-color: var(--risk-high-fg);
+}
+
+.pet__card-head {
+  display: flex;
+  align-items: center;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.pet__x {
+  margin-left: auto;
+  background: none;
+  border: 0;
+  color: var(--muted);
+  font-size: 16px;
+  cursor: pointer;
+}
+
+/* Lệnh hiện đầy đủ, xuống dòng ở mọi ký tự (quy tắc bất biến 3; lệnh dài không vào bong bóng). */
+.pet__cmdline {
+  margin: var(--space-2) 0;
+  white-space: pre-wrap;
+  word-break: break-all;
+  overflow-wrap: anywhere;
+}
+
+.pet__warn {
+  color: var(--risk-high-fg);
+  margin: var(--space-1) 0;
+}
+
+.pet__actions {
+  display: flex;
+  gap: var(--space-2);
+  flex-wrap: wrap;
+}
+
+.pet__body {
+  position: relative;
+  height: 72vh;
+  outline: none;
+  cursor: grab;
+  touch-action: none;
+}
+
+.pet__body:focus-visible {
+  box-shadow: inset 0 0 0 2px var(--working);
+  border-radius: var(--radius-xl);
+}
+
+.pet__scene,
+.pet__scene canvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.pet__svg {
+  height: 100%;
+  display: flex;
+  align-items: flex-end;
+  justify-content: center;
+  padding-bottom: var(--space-4);
+}
+
+.pet__hint {
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: 0;
+  margin: 0;
+  text-align: center;
+}
+
+.pet__badge {
+  position: absolute;
+  right: var(--space-5);
+  top: var(--space-5);
+  z-index: 2;
+  min-width: 22px;
+  padding: 0 var(--space-1);
+  border-radius: var(--radius-pill);
+  background: var(--approval);
+  color: var(--bg);
+  font-weight: 700;
+  text-align: center;
+}
+
+.pet__cmd {
+  position: absolute;
+  left: var(--space-2);
+  right: var(--space-2);
+  bottom: var(--space-2);
+  z-index: 4;
+}
+
+.pet__cmd input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-pill);
+  border: 1px solid var(--working);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+}
+
+.pet__menu {
+  position: absolute;
+  z-index: 5;
+  margin: 0;
+  padding: var(--space-1);
+  list-style: none;
+  min-width: 170px;
+  background: var(--raised);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-md);
+  box-shadow: 0 6px 18px rgba(0, 0, 0, 0.45);
+}
+
+.pet__menu button {
+  width: 100%;
+  text-align: left;
+  padding: var(--space-1) var(--space-2);
+  background: none;
+  border: 0;
+  border-radius: var(--radius-sm);
+  color: var(--text);
+  font: inherit;
+  cursor: pointer;
+}
+
+.pet__menu button:hover,
+.pet__menu button:focus-visible {
+  background: var(--surface);
+}
