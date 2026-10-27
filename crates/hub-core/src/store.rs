@@ -858,6 +858,22 @@ impl StoreReader {
             .map(|n| u64::try_from(n).unwrap_or(0))
     }
 
+    /// Sự kiện từ `since` trở đi (không kèm `raw_json`), cũ trước, tối đa `limit` (T19).
+    pub fn events_since(
+        &self,
+        since: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<EventRow>, StoreError> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT id, ts, session_id, kind, event_json, NULL FROM events
+                 WHERE ts >= ?1 ORDER BY ts, rowid LIMIT ?2",
+            )?;
+            let rows = st.query_map(params![format_ts(since), limit_i64(limit)], event_row)?;
+            rows.collect()
+        })
+    }
+
     /// Sự kiện của một phiên, cũ trước (cùng mili giây: theo thứ tự ghi, vì chỉ có một thread ghi).
     pub fn session_events(
         &self,

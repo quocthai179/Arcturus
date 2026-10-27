@@ -632,6 +632,7 @@ dependencies = [
  "http-body-util",
  "hub-core",
  "reqwest",
+ "serde",
  "serde_json",
  "time",
  "tokio",

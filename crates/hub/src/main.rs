@@ -177,6 +177,7 @@ async fn main() -> anyhow::Result<()> {
         };
         let (hub, _tasks) =
             Hub::start_full(cfg, personas, hostname(), danger, Box::new(db.handle()));
+        hub.set_db_path(db_path.clone());
         let (ui, ws_handle) = ws::router(hub.clone(), ui_token, port, ws::WsConfig::default());
         let app = hooks::router(hub.clone(), token).merge(ui);
         tracing::info!(
