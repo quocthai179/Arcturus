@@ -1096,6 +1096,23 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
   trả lời qua WebSocket với chế độ `allow`).
 - In p50/p95/p99 độ trễ và số lỗi; mã thoát ≠0 nếu p99 > 5 ms cho `/hooks/event` (cờ `--assert-p99-ms`).
 
+**Đã làm ở T15**
+- `tools/replay` tách thành thư viện (`files`, `send`) và binary; `replay [DIR]` giờ **gửi** tới hub (trước đây chỉ đếm; `--dry-run`
+  giữ hành vi đếm). Cờ: `--url`, `--sessions` (mặc định 1), `--rate` (20/giây), `--duration` (5 giây), `--permission-mode
+  allow|skip` (mặc định `skip`), `--allow-delay-ms` (1.100, phải lớn hơn `min_review_ms` của hub), `--assert-p99-ms`.
+- Token: hook từ `ARCTURUS_TOKEN` (hoặc `--hook-token`); token UI (chỉ cần với `allow`) từ `ARCTURUS_UI_TOKEN`, `--ui-token`
+  hoặc `--ui-token-file` (file do `hub --ui-token-file` ghi). Token không in ra.
+- Kế hoạch gửi xác định: phiên `n % sessions`, mỗi phiên đi hết danh sách fixture theo thứ tự, lệch pha giữa các phiên.
+  `PermissionRequest` đi `/hooks/permission`, còn lại `/hooks/event`; `skip` bỏ `PermissionRequest`.
+- Chế độ `allow` kết nối WebSocket trước khi gửi (Snapshot cũng được duyệt) và gửi `decide{allow, origin: user}` sau
+  `--allow-delay-ms`. Vì replay xen sự kiện của cùng phiên (`Stop`, `PostToolUse`…), luật "đã được trả lời ở terminal" của T3
+  hủy nhiều yêu cầu giữ trước khi tới lượt duyệt: kết quả `{}` nhiều là bình thường, không phải lỗi.
+- Báo cáo riêng cho `/hooks/event` và `/hooks/permission` (p50/p95/p99/max, lỗi, allow/deny/`{}`). Thoát ≠0 khi `/hooks/event`
+  có lỗi hoặc p99 vượt `--assert-p99-ms`; lỗi ở `/hooks/permission` không làm hỏng kiểm p99.
+- Test: 9 test đơn vị (phân vị, thay `session_id`, kế hoạch, đọc quyết định, báo cáo/kiểm ngưỡng, fixture thật) và 6 test tích hợp
+  với hub thật (`tools/replay/tests/e2e.rs`: chỉ sự kiện, người duyệt giả, sai token hook/UI, thiếu token UI, tùy chọn sai).
+- Chạy tay với hub release: 5 phiên, 200 yêu cầu/giây, 5 giây, 952 sự kiện: p50 0,45 ms, p95 0,68 ms, p99 0,93 ms, 0 lỗi.
+
 ### T16 · ARC-37 · Đo ngân sách
 
 `scripts/measure.sh` (Linux/macOS) và `scripts/measure.ps1` (Windows) theo kịch bản `docs/BUDGET.md`; xuất CSV
