@@ -1108,6 +1108,24 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
 - Chạy `claude -p "chạy npm test"` với permission mode buộc hỏi; 4 kịch bản: allow, deny, timeout (timeout hub 5 s), hub tắt.
 - Kiểm: file đánh dấu do lệnh tạo ra có/không xuất hiện đúng theo kịch bản.
 
+**Đã làm ở T17**
+- `crates/hub/tests/e2e_claude.rs`, 4 test `#[ignore]` (chạy tay: `cargo test -p hub --test e2e_claude -- --ignored --nocapture
+  --test-threads=1`; biến tùy chọn `ARCTURUS_E2E_MODEL`, `ARCTURUS_E2E_CLAUDE`; tự bỏ qua nếu không có `claude`). Hub chạy trong tiến
+  trình test (cổng ngẫu nhiên, policy thật `RulesPolicy`, không store); dự án tạm có `npm test` ghi `marker.txt`; hook về hub nạp bằng
+  `--settings` (không đụng `~/.claude`), token qua biến môi trường như bản dogfood; `claude -p ... --permission-mode default`.
+- Kết quả **chạy thật trên Claude Code 2.1.308 (Windows, model haiku), 4/4 đạt, 39 giây**:
+  1. allow (người duyệt giả trả `allow` sau 300 ms): hub thấy `PermissionRequest` của `npm test` và ghi `ApprovalResolved(allow, user)`; file
+     đánh dấu **có**.
+  2. deny: file đánh dấu **không**.
+  3. timeout (hub 5 giây, không ai trả lời): `ApprovalResolved(decision = null, timeout)`, file **không**, tổng thời gian ≥ 5 giây.
+  4. hub tắt (cổng không ai lắng nghe): `claude -p` không treo, file **không**.
+  => Xác nhận trên máy thật quy tắc bất biến 1 cho **hết giờ và lỗi kết nối**: không bao giờ có allow; Claude Code rơi về hộp thoại
+  terminal, ở headless không có người hỏi nên lệnh bị từ chối. Chưa kiểm: phản hồi non-2xx (`401` sai token, `400`) và `{}` khi hub trả
+  sớm ở các nhánh `Overloaded`/hand-off; các nhánh đó đã có test ở phía hub.
+- Lỗi của chính test đã sửa khi chạy: người duyệt giả chạy vòng `recv` trên kênh broadcast không bao giờ đóng (Hub còn sống) nên `await` chờ
+  mãi; nay dừng bằng `abort` (`Responder::finish`).
+- Bộ test không chạy trong CI mặc định (cần Claude Code đăng nhập, tốn lượt dùng).
+
 ### T18 · ARC-39 · Dogfood
 
 - `hooks/arcturus-dogfood.json` hoàn chỉnh; `scripts/dogfood-install.sh` và `dogfood-uninstall.sh` gộp/gỡ khối `hooks`
