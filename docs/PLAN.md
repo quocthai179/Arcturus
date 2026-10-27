@@ -1323,8 +1323,7 @@ Chạy `/milestone-gate v0`. Không code mới.
 
 ## 7. v1 · Trợ lý 3D "Pet" — đề xuất, chưa nằm trong v0
 
-> Trạng thái: **đề xuất**, chờ người duyệt. Phạm vi v0 trong `CLAUDE.md` vẫn cấm VRM 3D và giọng nói; khi mở milestone này
-> phải sửa mục "Phạm vi hiện tại" của `CLAUDE.md` **cùng commit và có người duyệt**. Thuộc Epic ARC-6 (v1). Các task P0…P11
+> Trạng thái: **đang làm** (người dùng duyệt 2026-10-28, `docs/adr/0001-pet-v1.md`; `CLAUDE.md` đã ghi ngoại lệ phạm vi). Thuộc Epic ARC-6 (v1). Các task P0…P11
 > dưới đây chưa có mã ARC (`CLAUDE.md`: đề xuất ticket, không tự tạo). Đã đối chiếu với code trên `main` 808c436
 > (2026-10-28), các điểm lệch và cách xử lý ở 7.9.
 
@@ -1447,7 +1446,7 @@ im lặng, chỉ phản ứng High/Critical. Mọi biểu cảm là hiệu ứng
 | ID | Làn | Task | Phụ thuộc | Ước lượng |
 |---|---|---|---|---|
 | P0 | lab + ui | **Spike** (nhánh bỏ đi, không merge vào `main`): cửa sổ Tauri trong suốt + một VRM + animation VRMA; kiểm click xuyên trên Windows/WebView2 và đo chi phí theo dõi con trỏ; kiểm CSP cần thêm gì; đo RAM/GPU/FPS bằng `scripts/measure.ps1` trên máy này và một máy yếu; kết luận đi/không và chốt ngân sách 7.6 | T21 (cổng v0 đạt) | 2 |
-| P1 | main + ui | ADR + sửa phạm vi (`CLAUDE.md` v1, `ARCHITECTURE.md`); đưa điểm thay thế UI (`AgentAvatar`, `scenes`, `useMotionPolicy`, `docs/UI_EXTENSION.md`) từ nhánh `arc-ui-extensibility` lên `main` (hiện xung đột ở `.squad/TASKS.md`, `ui/src/index.css`, `ui/src/views/Office.tsx`); thêm `AvatarStyle = 'vrm'` | P0 | 2 |
+| P1 | main + ui | ADR + sửa phạm vi (`CLAUDE.md` v1, `ARCHITECTURE.md`); đưa điểm thay thế UI (`AgentAvatar`, `scenes`, `useMotionPolicy`, `docs/UI_EXTENSION.md`) từ nhánh `arc-ui-extensibility` vào nhánh pet; **không** thêm `AvatarStyle = 'vrm'` (ADR 0001 mục 9: VRM chỉ trong cửa sổ pet) | P0 | 2 |
 | P2 | ui | Cửa sổ `pet` tạo ở Rust (`tray.rs` hoặc `pet.rs`, như `popup`/`office`), capability riêng, vòng đời, tray bật/tắt, kéo, nhớ vị trí, đa màn hình/DPI, ẩn khi ứng dụng toàn màn hình, `destroy()` khi đóng | P1 | 3 |
 | P3 | ui | `?view=pet` trong `App.tsx` + `PetScene`: nạp VRM lazy (không vào bundle của popup), nền trong suốt, vẽ theo `useMotionPolicy`, `dispose`, đường lui 2D khi không có WebGL | P2 | 3 |
 | P4 | ui | Bảng trạng thái → biểu cảm/động tác: bộ tạo dáng theo giải phẫu (7.10) cho tư thế tĩnh, VRMA cho chuyển động; chớp mắt, nhìn theo con trỏ, ngủ; test tay trên model VRM0 và VRM1 | P3 | 3 |
