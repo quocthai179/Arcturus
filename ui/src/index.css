@@ -17,6 +17,22 @@
   --risk-medium-fg: #ffd27a;
   --risk-high-bg: #3a1a16;
   --risk-high-fg: #ff9f87;
+  /* Hình khối, khoảng cách, chuyển động: mọi kiểu dáng mới dùng token, không viết số cứng (docs/UI_EXTENSION.md). */
+  --radius-xs: 3px;
+  --radius-sm: 6px;
+  --radius-md: 8px;
+  --radius-lg: 10px;
+  --radius-xl: 14px;
+  --radius-pill: 999px;
+  --space-1: 4px;
+  --space-2: 8px;
+  --space-3: 12px;
+  --space-4: 16px;
+  --space-5: 24px;
+  --motion-fast: 150ms;
+  --motion-base: 250ms;
+  --motion-pop: 450ms;
+  --ease-out: ease-out;
   --font-ui: 'Be Vietnam Pro', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   color-scheme: dark;
@@ -57,7 +73,7 @@ body {
 .banner {
   margin: 0 0 8px;
   padding: 6px 10px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   background: var(--raised);
 }
 
@@ -90,7 +106,7 @@ body {
   background: var(--surface);
   border: 1px solid var(--border);
   border-left: 4px solid var(--approval);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   padding: 10px;
 }
 
@@ -128,7 +144,7 @@ body {
 
 .risk-badge {
   padding: 2px 8px;
-  border-radius: 999px;
+  border-radius: var(--radius-pill);
   font-size: 12px;
   font-weight: 600;
   white-space: nowrap;
@@ -167,7 +183,7 @@ body {
 .flag {
   background: var(--risk-high-bg);
   color: var(--risk-high-fg);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 1px 6px;
   font-size: 12px;
 }
@@ -208,7 +224,7 @@ body {
   font-size: 12.5px;
   background: var(--bg);
   border: 1px solid var(--border);
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   padding: 8px;
   margin: 6px 0;
   white-space: pre-wrap;
@@ -220,7 +236,7 @@ body {
   background: var(--risk-high-bg);
   color: var(--risk-high-fg);
   text-decoration: underline wavy;
-  border-radius: 3px;
+  border-radius: var(--radius-xs);
 }
 
 .extra {
@@ -250,7 +266,7 @@ body {
 
 .btn {
   font: inherit;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
   padding: 6px 12px;
   border: 1px solid var(--border);
   background: var(--raised);
@@ -322,7 +338,7 @@ body {
 .countdown {
   margin: 6px 0;
   padding: 6px 8px;
-  border-radius: 6px;
+  border-radius: var(--radius-sm);
   background: var(--risk-medium-bg);
   color: var(--risk-medium-fg);
   font-size: 12px;
@@ -333,7 +349,7 @@ body {
   margin: 8px 0;
   padding: 10px;
   border: 1px dashed var(--working);
-  border-radius: 10px;
+  border-radius: var(--radius-lg);
   background: var(--surface);
 }
 
@@ -344,4 +360,13 @@ body {
 .suggestion__actions {
   display: flex;
   gap: 8px;
+}
+
+/* Chính sách chuyển động (useMotionPolicy): trang ẩn hoặc người dùng chọn giảm chuyển động thì tắt mọi animation và
+   transition, cho cả hiệu ứng viết sau này. Hiệu ứng mới không cần tự xử lý lại điều này. */
+:root[data-motion='off'] *,
+:root[data-motion='off'] *::before,
+:root[data-motion='off'] *::after {
+  animation: none !important;
+  transition: none !important;
 }

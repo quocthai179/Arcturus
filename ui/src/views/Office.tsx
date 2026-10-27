@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react';
-import { AgentDesk } from '../components/AgentDesk';
 import { QueueList } from '../components/QueueList';
+import { DEFAULT_SCENE, OFFICE_SCENES } from '../components/scenes';
 import { SuggestionList } from '../components/SuggestionList';
 import { TeamControls } from '../components/TeamControls';
 import { approvalInput } from '../hub';
@@ -13,6 +13,7 @@ import './Office.css';
 export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupViewProps) {
   const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf, suggestions, answerSuggestion } =
     useApprovalQueue(state, send, minReviewMs);
+  const Scene = OFFICE_SCENES[DEFAULT_SCENE];
   const { desks, support } = officeRoster(Object.values(state.agents), state.team.roster_max);
   const queueRef = useRef<HTMLElement>(null);
   const [hidden, setHidden] = useState(() => document.hidden);
@@ -57,39 +58,15 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
       {notice && <p className="banner banner--error" role="alert">{notice}</p>}
       {state.feed[0] && <p className="banner" role="status">{state.feed[0].text}</p>}
       <div className="office__layout">
-        <section aria-labelledby="desks-heading">
-          <h2 id="desks-heading">Đội hình chính</h2>
-          {desks.length === 0 && (
-            <p className="muted">Chưa có agent nào. Các phiên kết nối hub sẽ xuất hiện ở đây.</p>
-          )}
-          <div className="office__desks">
-            {desks.map((a) => {
-              const canSelect = a.mood === 'approval' && (
-                state.queue.some((q) => q.agent_id === a.id) ||
-                state.handoffs.some((h) => h.agent_id === a.id)
-              );
-              return <AgentDesk key={a.id} agent={a} onSelect={canSelect ? () => selectAgent(a.id) : undefined} />;
-            })}
-            {support.length > 0 && (
-              <article className="desk support" aria-label="Phòng hỗ trợ">
-                <h3>Phòng hỗ trợ</h3>
-                <p>{support.length} agent đang rảnh</p>
-                <ul className="support__agents">
-                  {support.map((a) => (
-                    <li key={a.id}>
-                      <span
-                        className="support__dot"
-                        style={{ backgroundColor: /^#[0-9a-fA-F]{6}$/.test(a.palette.outfit) ? a.palette.outfit : '#8B7CF6' }}
-                        aria-hidden="true"
-                      />
-                      {a.name}
-                    </li>
-                  ))}
-                </ul>
-              </article>
-            )}
-          </div>
-        </section>
+        <Scene
+          desks={desks}
+          support={support}
+          canSelect={(a) =>
+            a.mood === 'approval' &&
+            (state.queue.some((q) => q.agent_id === a.id) || state.handoffs.some((h) => h.agent_id === a.id))
+          }
+          onSelect={selectAgent}
+        />
         <aside className="office__queue" ref={queueRef} aria-labelledby="queue-heading">
           <h2 id="queue-heading">Hàng đợi duyệt</h2>
           {state.queue.length === 0 && state.handoffs.length === 0 && (
