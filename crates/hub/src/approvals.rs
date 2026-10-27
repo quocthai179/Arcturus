@@ -12,17 +12,19 @@
 
 use std::collections::{HashMap, VecDeque};
 use std::fmt;
-use std::sync::{Mutex, MutexGuard};
+use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 
 use hub_core::hook::HookInput;
 use hub_core::persona::fnv1a;
 use hub_core::policy::assess;
 use hub_core::policy::danger::{DangerConfig, DangerRules};
+use hub_core::policy::group::group_key;
+use hub_core::policy::trust::{self, TrustBook, TrustEvent};
 pub use hub_core::protocol::DecideOrigin;
-use hub_core::protocol::{ApprovalView, HandoffView, ServerMsg};
+use hub_core::protocol::{ApprovalView, HandoffView, ServerMsg, TrustSuggestionView};
 use hub_core::schema::{AgentId, DecidedBy, Decision, Event, EventKind, RequestId, Risk};
-use hub_core::store::{EventRecord, StoreHandle};
+use hub_core::store::{BatchRow, EventRecord, StoreHandle};
 use serde_json::{json, Value};
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, oneshot};
@@ -111,6 +113,15 @@ pub trait ApprovalStore: Send + Sync {
 
     /// Ghi một sự kiện hook (`raw`: JSON gốc). Không chặn; kênh đầy thì bỏ (§3.5).
     fn record_event(&self, _ev: &Event, _raw: &Value) {}
+
+    /// Lưu một batch rule (T9). Không chặn.
+    fn batch_set(&self, _row: BatchRow) {}
+
+    /// Xóa batch rule của một nhóm (T9). Không chặn.
+    fn batch_delete(&self, _group_key: &str) {}
+
+    /// Lưu các thay đổi trust (grant, chuỗi duyệt, nhật ký; T10). Không chặn.
+    fn trust_update(&self, _update: &trust::Update) {}
 }
 
 /// Không ghi gì (test, hoặc khi không cần lưu): mọi AutoAllow rơi về hỏi người vì không có xác nhận ghi.
@@ -138,6 +149,26 @@ impl ApprovalStore for StoreHandle {
 
     fn record_event(&self, ev: &Event, raw: &Value) {
         self.event(EventRecord::new(ev, raw));
+    }
+
+    fn batch_set(&self, row: BatchRow) {
+        StoreHandle::batch_set(self, row);
+    }
+
+    fn batch_delete(&self, group_key: &str) {
+        StoreHandle::batch_delete(self, group_key);
+    }
+
+    fn trust_update(&self, update: &trust::Update) {
+        for g in &update.grants {
+            self.trust_grant(g.clone());
+        }
+        for st in &update.streaks {
+            self.trust_streak(st.clone());
+        }
+        for e in &update.log {
+            StoreHandle::trust_log(self, e.clone());
+        }
     }
 }
 
@@ -209,6 +240,19 @@ pub enum DecideResult {
     Held(HeldReason),
     /// Id là thẻ "duyệt trong terminal": hub không bao giờ quyết định cho nó.
     HandedOff,
+}
+
+/// Kết quả [`Approvals::decide_group`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct GroupResult {
+    /// Yêu cầu đang chờ cùng nhóm lúc bắt đầu.
+    pub matched: usize,
+    /// Đã quyết định.
+    pub decided: usize,
+    /// Giữ nguyên vì chưa đủ điều kiện (sàn thời gian, chưa mở bản đầy đủ, ...).
+    pub held: usize,
+    /// Yêu cầu Critical ở lại hàng đợi.
+    pub critical_left: usize,
 }
 
 /// JSON trả cho Claude Code. Đây là chỗ duy nhất sinh `allow`; mọi nhánh khác là `{}`.
@@ -440,6 +484,8 @@ pub struct Approvals {
     store: Box<dyn ApprovalStore>,
     inner: Mutex<Inner>,
     tx: broadcast::Sender<ServerMsg>,
+    /// Chuỗi duyệt và grant (T10). Cùng bộ với allowance của `RulesPolicy`.
+    trust: Arc<TrustBook>,
 }
 
 impl Approvals {
@@ -450,6 +496,18 @@ impl Approvals {
         store: Box<dyn ApprovalStore>,
         tx: broadcast::Sender<ServerMsg>,
     ) -> Self {
+        let trust = Arc::new(TrustBook::new(&hub_core::config::TrustConfig::default()));
+        Self::with_trust(cfg, policy, store, tx, trust)
+    }
+
+    /// Như [`Approvals::new`], với bộ trust do hub cấp (cùng bộ đã cắm vào policy).
+    pub fn with_trust(
+        cfg: ApprovalsConfig,
+        policy: Box<dyn Policy>,
+        store: Box<dyn ApprovalStore>,
+        tx: broadcast::Sender<ServerMsg>,
+        trust: Arc<TrustBook>,
+    ) -> Self {
         Approvals {
             rules: DangerRules::new(&cfg.danger),
             cfg,
@@ -457,6 +515,7 @@ impl Approvals {
             store,
             inner: Mutex::new(Inner::default()),
             tx,
+            trust,
         }
     }
 
@@ -644,6 +703,7 @@ impl Approvals {
 
         let ctx = ApprovalCtx {
             agent_id: &ev.agent.id,
+            subject: agent_name,
             tool: &tool,
             tool_input: &tool_input,
             cwd: &cwd,
@@ -835,6 +895,7 @@ impl Approvals {
         let risk = assess(
             &ApprovalCtx {
                 agent_id: &ev.agent.id,
+                subject: agent_name,
                 tool: &tool,
                 tool_input: &tool_input,
                 cwd: &cwd,
@@ -987,6 +1048,75 @@ impl Approvals {
         ok
     }
 
+    pub fn trust(&self) -> &Arc<TrustBook> {
+        &self.trust
+    }
+
+    /// Lưu các thay đổi trust và báo cho UI: đề xuất mới (`Suggestion`), hạ mức/thu hồi (`Feed`).
+    pub fn apply_trust(&self, update: trust::Update) {
+        if update.is_empty() {
+            return;
+        }
+        self.store.trust_update(&update);
+        for event in update.events {
+            let msg = match event {
+                TrustEvent::Suggest(s) => ServerMsg::Suggestion {
+                    suggestion: TrustSuggestionView::from(&s),
+                },
+                TrustEvent::Demoted { subject, pattern, to, .. } => feed(format!(
+                    "{subject}: hạ quyền tự chạy \"{pattern}\" xuống mức {to} (hỏi kèm đếm ngược) vì bạn từ chối"
+                )),
+                TrustEvent::Revoked { subject, pattern, .. } => feed(format!(
+                    "{subject}: đã thu hồi quyền tự chạy \"{pattern}\" vì bạn từ chối"
+                )),
+            };
+            let _ = self.tx.send(msg);
+        }
+    }
+
+    /// Lưu hoặc xóa batch rule ở store (T9). Hub gọi sau khi đổi bộ nhớ.
+    pub fn batch_set(&self, row: BatchRow) {
+        self.store.batch_set(row);
+    }
+
+    pub fn batch_delete(&self, group_key: &str) {
+        self.store.batch_delete(group_key);
+    }
+
+    /// `DecideGroup` (T9): áp `decision` cho mọi yêu cầu đang chờ cùng `group_key`, **trừ Critical** (ở lại hàng đợi, duyệt
+    /// từng cái; quy tắc bất biến 2). Mỗi yêu cầu đi qua [`Approvals::decide`], tức [`allow_gate`] (sàn thời gian duyệt,
+    /// thẻ cắt phải mở bản đầy đủ, đội tạm dừng): yêu cầu chưa đủ điều kiện được giữ nguyên và đếm vào `held`. Chỉ
+    /// `origin: user`; đếm ngược không có đường duyệt gộp.
+    pub fn decide_group(&self, group_key: &str, decision: Decision) -> GroupResult {
+        let mut ids: Vec<(RequestId, Risk, OffsetDateTime)> = {
+            let inner = self.lock();
+            inner
+                .entries
+                .values()
+                .filter(|e| e.view.group_key == group_key)
+                .map(|e| (e.info.request_id.clone(), e.info.risk, e.info.created_at))
+                .collect()
+        };
+        ids.sort_by_key(|(_, _, created)| *created);
+        let mut result = GroupResult {
+            matched: ids.len(),
+            ..GroupResult::default()
+        };
+        for (id, risk, _) in ids {
+            if risk == Risk::Critical {
+                result.critical_left += 1;
+                continue;
+            }
+            match self.decide(&id, decision, DecideOrigin::User, None) {
+                DecideResult::Resolved => result.decided += 1,
+                DecideResult::Held(_) => result.held += 1,
+                // Đã được quyết ở nơi khác giữa hai bước: không còn trong nhóm.
+                DecideResult::Expired | DecideResult::HandedOff => {}
+            }
+        }
+        result
+    }
+
     /// Lệnh `Decide` từ UI (T5 gọi).
     pub fn decide(
         &self,
@@ -1032,6 +1162,12 @@ impl Approvals {
             Decision::Allow => ApprovalStatus::Allowed,
             Decision::Deny => ApprovalStatus::Denied,
         };
+        // Chủ thể và nhóm của quyết định, cho chuỗi duyệt của người (T10).
+        let trust_key = (
+            entry.view.agent_name.clone(),
+            entry.view.group_key.clone(),
+            entry.view.risk,
+        );
         let Entry { info, reply, .. } = entry;
         match reply.send(Decided {
             decision,
@@ -1046,6 +1182,12 @@ impl Approvals {
                     decision: Some(decision),
                     decided_by: by,
                 });
+                // Chỉ quyết định của **người** được đếm (đếm ngược, policy, batch thì không): chuỗi phải phản ánh việc người
+                // đã xem và đồng ý.
+                if by == DecidedBy::User {
+                    let (name, key, risk) = trust_key;
+                    self.apply_trust(self.trust.record(&name, &key, decision, risk));
+                }
                 DecideResult::Resolved
             }
             // Handler đã đi (không xảy ra khi guard chạy đúng): coi như hủy.
@@ -1222,7 +1364,7 @@ fn card_detail(
         command_original,
         command_normalized,
         risk,
-        group_key: tool.to_owned(),
+        group_key: group_key(tool, tool_input),
         created_at,
     }
 }
@@ -1280,6 +1422,14 @@ impl Drop for CancelOnDrop<'_> {
             self.approvals
                 .finish(entry, ApprovalStatus::Cancelled, DecidedBy::Cancelled, None);
         }
+    }
+}
+
+/// `Feed` cho mọi client (dựng tại đây để dùng chung với hub).
+fn feed(text: String) -> ServerMsg {
+    ServerMsg::Feed {
+        text,
+        ts: OffsetDateTime::now_utc(),
     }
 }
 

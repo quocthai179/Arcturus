@@ -31,15 +31,15 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | T5c · ARC-43 | hub | Trần byte cho `tool_input` đang giữ (`held_input_max_bytes` 8 MiB), đặt chỗ trước khi đọc body, giới hạn độ dài trường | T5 | 1 | done |
 | T5d · ARC-44 | hub | F6: `--ui-token-stdout`, sàn thời gian duyệt `min_review_ms`, luật danger cho T8, ghi giới hạn bảo mật | T5c | 1 | done |
 | T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | done |
-| T7 · ARC-28 | hub | Đối soát `claude agents --json` mỗi 30 s, dọn phiên chết | T4 | 1 | todo |
+| T7 · ARC-28 | hub | Đối soát `claude agents --json` mỗi 30 s, dọn phiên chết | T4 | 1 | review |
 | T8 · ARC-29 | policy | Danger list + chuẩn hóa lệnh (bỏ ký tự ẩn/bidi), tính `risk` | T2 | 2 | done |
-| T9 · ARC-30 | policy | Batch rule ("cho phép mẫu X trong N phút") + gom yêu cầu giống nhau | T8 | 2 | todo |
-| T10 · ARC-31 | policy | Trust grant cơ bản: đếm chuỗi duyệt liên tiếp, đề xuất nâng mức, tự hạ khi bị deny/hoàn tác | T8, T6 | 3 | todo |
+| T9 · ARC-30 | policy | Batch rule ("cho phép mẫu X trong N phút") + gom yêu cầu giống nhau | T8 | 2 | review |
+| T10 · ARC-31 | policy | Trust grant cơ bản: đếm chuỗi duyệt liên tiếp, đề xuất nâng mức, tự hạ khi bị deny/hoàn tác | T8, T6 | 3 | review |
 | T11 · ARC-32 | ui | Component nhân vật SVG (mood × palette), port từ mockup | T0 | 1 | done |
 | T12 · ARC-33 | ui | Tray + badge số người giơ tay; popup Lite (hàng đợi, duyệt/từ chối, duyệt gộp) | T5, T11 | 3 | done |
 | T13 · ARC-34 | ui | Văn phòng 2D: lưới bàn, trạng thái, "phòng hỗ trợ" gom agent rảnh (đội hình chính ≤5) | T5, T11 | 3 | review |
 | T14 · ARC-35 | ui | Nút "Tạm dừng cả đội" (chỉ UI, hub ở T5), "Giờ tập trung"; đếm ngược phủ quyết cho yêu cầu đảo ngược được | T12 | 2 | review |
-| T15 · ARC-36 | lab | `tools/replay`: phát lại fixture với số phiên/tốc độ tùy chọn | T2 | 1 | todo |
+| T15 · ARC-36 | lab | `tools/replay`: phát lại fixture với số phiên/tốc độ tùy chọn | T2 | 1 | review |
 | T16 · ARC-37 | lab | Kịch bản đo ngân sách + bảng lịch sử trong BUDGET.md; chạy trên máy yếu | T15, T5 | 1 | todo |
 | T17 · ARC-38 | lab | Test e2e: Claude Code thật (headless `-p`) + hub, kiểm tra allow/deny/timeout | T3 | 2 | review |
 
@@ -88,7 +88,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | ID · YouTrack | Làn | Task | Phụ thuộc | Ước lượng | Trạng thái |
 |---|---|---|---|---|---|
 | T18 · ARC-39 | lab | `hooks/arcturus-dogfood.json` + hướng dẫn cài/gỡ; bật dogfood | T5, T12 | 1 | review |
-| T19 · ARC-40 | hub | Standup sinh từ template (sự kiện + git log), 0 token | T6 | 2 | todo |
+| T19 · ARC-40 | hub | Standup sinh từ template (sự kiện + git log), 0 token | T6 | 2 | review |
 | T20 · ARC-41 | lab | Đo chỉ số: thời gian xử lý trung bình mỗi yêu cầu, thời gian agent tự chạy; so trước/sau | T18 | 1 | todo |
 | T21 · ARC-42 | main | `/milestone-gate v0` | tất cả | 1 | todo |
 
@@ -121,3 +121,8 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - 2026-10-26 · ui · T13/ARC-34: Office + AgentDesk, sắp mood/thời gian, phòng hỗ trợ chỉ gom idle vượt roster_max (không giấu agent đang hoạt động hoặc agent con); chọn agent cuộn/focus thẻ; dùng chung kết nối và điều kiện duyệt với popup. Test UI/build và Chromium với hub thật: Allow/Deny, handoff, 7 agent/roster 3, mobile 390px, xóa agent. Profiler sau mô phỏng Page Visibility hidden 1,2 s: 0 Paint/FireAnimationFrame/TimerFire. · Vướng: chưa đo CPU/RSS và vòng đời webview/ẩn cửa sổ trên Tauri Windows thật; chi tiết docs/OFFICE.md.
 - 2026-10-26 · ui · T14/ARC-35 (nhánh `arc-35-pause-focus`): `TeamControls` (tạm dừng/tiếp tục, giờ tập trung) ở popup và Office, đếm ngược phủ quyết (`countdown.ts`, `useApprovalQueue`: chỉ Low/Medium + reversible + không tạm dừng, gửi `origin: countdown` đúng một lần, "Dừng lại"/"Chạy ngay" gửi `origin: user`), reducer xóa `countdown_ms` khi tạm dừng; tray: chấm báo/tooltip theo giờ tập trung và mục menu. UI +13 test, app +1 test. · Vướng: không (giờ tập trung chỉ ẩn chấm báo/tooltip và đồng hồ đếm ngược tính từ lúc thẻ hiện đã được chốt vào đặc tả PLAN §T14); hub chưa gửi `countdown_ms` thật tới khi T10 xong nên đếm ngược mới được kiểm bằng test UI; chưa thử trên app Tauri thật.
 - 2026-10-27 · lab · T17/ARC-38 (nhánh `arc-38-e2e-claude`): `crates/hub/tests/e2e_claude.rs`, 4 kịch bản `#[ignore]` với Claude Code 2.1.308 thật (allow, deny, hết giờ, hub tắt): 4/4 đạt trong 39 giây; xác nhận trên máy thật hết giờ và lỗi kết nối không bao giờ allow. · Vướng: chưa kiểm phản hồi non-2xx; không chạy trong CI mặc định; còn lại một câu "CHƯA kiểm chứng" trong CLAUDE.md cần người cập nhật.
+- 2026-10-27 · policy · T9/ARC-30 (nhánh `arc-30-batch-group`): `policy/group.rs` (`group_key`, lệnh ghép có hậu tố), `policy/batch.rs` (`BatchRules` + `Allowance`), `Approvals::decide_group` qua `allow_gate`, `Hub::batch_open/close/restore_batch`, migration v2 `batch_rules`, WebSocket `decide_group`/`batch_open`/`batch_close`, UI "Duyệt cả N" gửi một `decide_group`; 18 test đơn vị + 13 tích hợp + 2 UI. · Vướng: chưa có UI mở/đóng batch và Snapshot chưa liệt kê quy tắc đang mở (đổi hợp đồng §3.4); migration v3 sẽ do T10 thêm (lệch nhẹ với PLAN "v2 (T9, T10)").
+- 2026-10-27 · policy · T10/ARC-31 (nhánh `arc-31-trust-grant`, chồng lên `arc-30-batch-group`): `policy/trust.rs` (`TrustBook` + `Allowance`: mức 6 tự duyệt, mức 5 đếm ngược 10 giây, chỉ tới Medium), `ApprovalCtx.subject`, `ServerMsg::Suggestion`, migration v3 (`trust_grants`, `streaks`, `trust_log`), hub nạp lại khi khởi động, `SuggestionAnswer`, UI `SuggestionList`; 14 test đơn vị + 9 tích hợp + 5 UI. · Vướng: PR phải merge sau T9; chưa có UI thu hồi grant; hoàn tác tự động chờ đo được; `declined_until` chỉ trong bộ nhớ.
+- 2026-10-27 · hub · T7/ARC-28 (nhánh `arc-28-reconcile`): `hub/src/reconcile.rs` (`claude agents --json`, parse chịu lỗi, dọn phiên vắng hai lần quan sát thành công liên tiếp và đã im lặng >= 2 chu kỳ, bằng `SessionEnd` giả qua `Hub::ingest`), `TeamState::sessions()`, trả lời một phần Q8; không chạy `claude` khi hub không có phiên; 7 test đơn vị + 6 tích hợp + 1 test `#[ignore]` với `claude` thật (270 ms). · Vướng: chưa biết phiên `-p` và `--bg` có được liệt kê không (Q8, kiểm ở T17); chưa đo ngân sách hub với task đối soát.
+- 2026-10-27 · hub · T19/ARC-40 (nhánh `arc-40-standup`): `hub-core/src/standup.rs` (đếm theo persona, template tiếng Việt, làm sạch chuỗi không tin cậy), `StoreReader::events_since`, `hub/src/standup.rs` (`SystemGit` có timeout), `GET /standup?hours=` (token UI, `no-store`), `Hub::set_db_path`; 8 test đơn vị + 6 tích hợp (SQLite và `git log` thật). · Vướng: chưa có UI hiển thị (v1); "task xong" đếm theo lượt trả lời, chưa theo ticket.
+- 2026-10-27 · lab · T15/ARC-36 (nhánh `arc-36-replay`): `tools/replay` gửi fixture tới hub (số phiên, tốc độ, thời lượng, `--permission-mode allow|skip`, người duyệt giả qua WebSocket, p50/p95/p99, `--assert-p99-ms`), tách thư viện + binary; 9 test đơn vị + 6 test tích hợp với hub thật. Hub release, 5 phiên, 200/giây: p99 0,93 ms. · Vướng: không.

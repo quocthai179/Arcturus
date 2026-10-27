@@ -25,10 +25,11 @@ use serde_json::Value;
 use time::format_description::BorrowedFormatItem;
 use time::{OffsetDateTime, PrimitiveDateTime, UtcOffset};
 
+use crate::policy::trust::{Streak, TrustGrant, TrustLogEntry};
 use crate::schema::{AgentId, DecidedBy, Event, RequestId, Risk};
 
 /// Phiên bản schema mới nhất (`PRAGMA user_version`).
-pub const DB_VERSION: i32 = 1;
+pub const DB_VERSION: i32 = 3;
 
 /// Tối đa sự kiện chờ ghi trong kênh (§3.5).
 pub const EVENT_QUEUE_MAX: usize = 1024;
@@ -43,7 +44,8 @@ pub const PURGE_INTERVAL: Duration = Duration::from_secs(6 * 3600);
 /// Chờ khóa ghi tối đa (một kết nối khác đang ghi).
 pub const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
-const MIGRATIONS: [(i32, &str); 1] = [(
+const MIGRATIONS: [(i32, &str); 3] = [
+    (
     1,
     "CREATE TABLE events (
        id TEXT PRIMARY KEY, ts TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -59,7 +61,31 @@ const MIGRATIONS: [(i32, &str); 1] = [(
        decided_by TEXT, created_at TEXT NOT NULL, decided_at TEXT, latency_ms INTEGER, channel TEXT
      );
      CREATE INDEX approvals_created ON approvals(created_at);",
-)];
+    ),
+    (
+        2,
+        // T9: quy tắc "cho phép mẫu X trong N phút". Bảng của T10 (trust_grants, streaks, trust_log) thêm ở migration sau.
+        "CREATE TABLE batch_rules (
+           group_key TEXT PRIMARY KEY, opened_at TEXT NOT NULL, expires_at TEXT NOT NULL
+         );",
+    ),
+    (
+        3,
+        // T10: trust grant (docs/PLAN.md §3.5).
+        "CREATE TABLE trust_grants (
+           id TEXT PRIMARY KEY, subject TEXT NOT NULL, pattern TEXT NOT NULL, level INTEGER NOT NULL,
+           granted_at TEXT NOT NULL, expires_at TEXT NOT NULL, reason TEXT NOT NULL, revoked_at TEXT
+         );
+         CREATE TABLE streaks (
+           subject TEXT NOT NULL, pattern TEXT NOT NULL, approved_in_row INTEGER NOT NULL DEFAULT 0,
+           first_at TEXT, last_at TEXT, last_incident_at TEXT, PRIMARY KEY (subject, pattern)
+         );
+         CREATE TABLE trust_log (
+           id TEXT PRIMARY KEY, ts TEXT NOT NULL, subject TEXT, pattern TEXT,
+           from_level INTEGER, to_level INTEGER, reason TEXT NOT NULL
+         );",
+    ),
+];
 
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
@@ -270,6 +296,14 @@ fn channel_of(d: Option<DecidedBy>) -> Option<&'static str> {
     }
 }
 
+/// Một batch rule đã lưu (T9).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct BatchRow {
+    pub group_key: String,
+    pub opened_at: OffsetDateTime,
+    pub expires_at: OffsetDateTime,
+}
+
 // ---------------------------------------------------------------------------------------------------------------
 // Mở, migration
 // ---------------------------------------------------------------------------------------------------------------
@@ -353,6 +387,11 @@ pub type Ack = Box<dyn FnOnce(Result<(), StoreError>) + Send>;
 enum Cmd {
     Event(EventRecord),
     Approval(ApprovalRecord, Option<Ack>),
+    BatchSet(BatchRow),
+    BatchDelete(String),
+    TrustGrantSet(TrustGrant),
+    StreakSet(Streak),
+    TrustLogAdd(TrustLogEntry),
     Purge(OffsetDateTime),
     Flush(mpsc::Sender<()>),
     Close,
@@ -467,6 +506,45 @@ impl StoreHandle {
             if let Some(ack) = ack {
                 ack(Err(StoreError::Closed));
             }
+        }
+    }
+
+    /// Lưu (hoặc thay) một batch rule (T9). Không chặn; thread ghi đã dừng thì chỉ log.
+    pub fn batch_set(&self, row: BatchRow) {
+        if self.tx.send(Cmd::BatchSet(row)).is_err() {
+            tracing::warn!("thread ghi SQLite đã dừng: mất bản ghi batch rule");
+        }
+    }
+
+    /// Lưu hoặc thay một trust grant (T10).
+    pub fn trust_grant(&self, g: TrustGrant) {
+        self.send_trust(Cmd::TrustGrantSet(g));
+    }
+
+    /// Lưu hoặc thay chuỗi duyệt của một cặp (persona, nhóm).
+    pub fn trust_streak(&self, s: Streak) {
+        self.send_trust(Cmd::StreakSet(s));
+    }
+
+    /// Ghi một dòng `trust_log`.
+    pub fn trust_log(&self, e: TrustLogEntry) {
+        self.send_trust(Cmd::TrustLogAdd(e));
+    }
+
+    fn send_trust(&self, cmd: Cmd) {
+        if self.tx.send(cmd).is_err() {
+            tracing::warn!("thread ghi SQLite đã dừng: mất bản ghi trust");
+        }
+    }
+
+    /// Xóa batch rule của `group_key`.
+    pub fn batch_delete(&self, group_key: &str) {
+        if self
+            .tx
+            .send(Cmd::BatchDelete(group_key.to_owned()))
+            .is_err()
+        {
+            tracing::warn!("thread ghi SQLite đã dừng: mất lệnh xóa batch rule");
         }
     }
 
@@ -616,6 +694,67 @@ fn apply(conn: &Connection, cmd: &Cmd) -> rusqlite::Result<()> {
             Ok(())
         }
         Cmd::Approval(rec, _) => write_approval(conn, rec),
+        Cmd::BatchSet(r) => {
+            conn.execute(
+                "INSERT OR REPLACE INTO batch_rules (group_key, opened_at, expires_at) VALUES (?1, ?2, ?3)",
+                params![r.group_key, format_ts(r.opened_at), format_ts(r.expires_at)],
+            )?;
+            Ok(())
+        }
+        Cmd::TrustGrantSet(g) => {
+            conn.execute(
+                "INSERT OR REPLACE INTO trust_grants
+                   (id, subject, pattern, level, granted_at, expires_at, reason, revoked_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![
+                    g.id,
+                    g.subject,
+                    g.pattern,
+                    i64::from(g.level),
+                    format_ts(g.granted_at),
+                    format_ts(g.expires_at),
+                    g.reason,
+                    g.revoked_at.map(format_ts),
+                ],
+            )?;
+            Ok(())
+        }
+        Cmd::StreakSet(st) => {
+            conn.execute(
+                "INSERT OR REPLACE INTO streaks
+                   (subject, pattern, approved_in_row, first_at, last_at, last_incident_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                params![
+                    st.subject,
+                    st.pattern,
+                    i64::from(st.approved_in_row),
+                    st.first_at.map(format_ts),
+                    st.last_at.map(format_ts),
+                    st.last_incident_at.map(format_ts),
+                ],
+            )?;
+            Ok(())
+        }
+        Cmd::TrustLogAdd(e) => {
+            conn.execute(
+                "INSERT OR IGNORE INTO trust_log (id, ts, subject, pattern, from_level, to_level, reason)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+                params![
+                    e.id,
+                    format_ts(e.ts),
+                    e.subject,
+                    e.pattern,
+                    e.from_level.map(i64::from),
+                    e.to_level.map(i64::from),
+                    e.reason,
+                ],
+            )?;
+            Ok(())
+        }
+        Cmd::BatchDelete(key) => {
+            conn.execute("DELETE FROM batch_rules WHERE group_key = ?1", params![key])?;
+            Ok(())
+        }
         Cmd::Purge(before) => {
             conn.execute(
                 "DELETE FROM events WHERE ts < ?1",
@@ -848,6 +987,139 @@ impl StoreReader {
         })
     }
 
+    /// Trust grant còn hiệu lực tại `now` (chưa thu hồi, chưa hết hạn). Hàng hỏng bị bỏ qua.
+    pub fn trust_grants(&self, now: OffsetDateTime) -> Result<Vec<TrustGrant>, StoreError> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT id, subject, pattern, level, granted_at, expires_at, reason
+                 FROM trust_grants WHERE revoked_at IS NULL AND expires_at > ?1 ORDER BY granted_at",
+            )?;
+            let rows = st.query_map(params![format_ts(now)], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, i64>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, subject, pattern, level, granted, expires, reason) = row?;
+                if let (Ok(level), Some(granted_at), Some(expires_at)) =
+                    (u8::try_from(level), parse_ts(&granted), parse_ts(&expires))
+                {
+                    out.push(TrustGrant {
+                        id,
+                        subject,
+                        pattern,
+                        level,
+                        granted_at,
+                        expires_at,
+                        reason,
+                        revoked_at: None,
+                    });
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    /// Chuỗi duyệt đã lưu.
+    pub fn streaks(&self) -> Result<Vec<Streak>, StoreError> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT subject, pattern, approved_in_row, first_at, last_at, last_incident_at FROM streaks",
+            )?;
+            let rows = st.query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, i64>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (subject, pattern, n, first, last, incident) = row?;
+                out.push(Streak {
+                    subject,
+                    pattern,
+                    approved_in_row: u32::try_from(n).unwrap_or(0),
+                    first_at: first.as_deref().and_then(parse_ts),
+                    last_at: last.as_deref().and_then(parse_ts),
+                    last_incident_at: incident.as_deref().and_then(parse_ts),
+                });
+            }
+            Ok(out)
+        })
+    }
+
+    /// Dòng `trust_log`, mới nhất trước (kiểm toán, test).
+    pub fn trust_log(&self, limit: usize) -> Result<Vec<TrustLogEntry>, StoreError> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT id, ts, subject, pattern, from_level, to_level, reason FROM trust_log
+                 ORDER BY ts DESC, rowid DESC LIMIT ?1",
+            )?;
+            let rows = st.query_map(params![limit_i64(limit)], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, Option<String>>(2)?,
+                    r.get::<_, Option<String>>(3)?,
+                    r.get::<_, Option<i64>>(4)?,
+                    r.get::<_, Option<i64>>(5)?,
+                    r.get::<_, String>(6)?,
+                ))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (id, ts, subject, pattern, from, to, reason) = row?;
+                if let Some(ts) = parse_ts(&ts) {
+                    out.push(TrustLogEntry {
+                        id,
+                        ts,
+                        subject: subject.unwrap_or_default(),
+                        pattern: pattern.unwrap_or_default(),
+                        from_level: from.and_then(|v| u8::try_from(v).ok()),
+                        to_level: to.and_then(|v| u8::try_from(v).ok()),
+                        reason,
+                    });
+                }
+            }
+            Ok(out)
+        })
+    }
+
+    /// Batch rule đã lưu còn hạn tại `now` (hàng hỏng bị bỏ qua).
+    pub fn batch_rules(&self, now: OffsetDateTime) -> Result<Vec<BatchRow>, StoreError> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT group_key, opened_at, expires_at FROM batch_rules WHERE expires_at > ?1 ORDER BY group_key",
+            )?;
+            let rows = st.query_map(params![format_ts(now)], |r| {
+                Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?))
+            })?;
+            let mut out = Vec::new();
+            for row in rows {
+                let (group_key, opened, expires) = row?;
+                if let (Some(opened_at), Some(expires_at)) = (parse_ts(&opened), parse_ts(&expires)) {
+                    out.push(BatchRow {
+                        group_key,
+                        opened_at,
+                        expires_at,
+                    });
+                }
+            }
+            Ok(out)
+        })
+    }
+
     pub fn event_count(&self) -> Result<u64, StoreError> {
         self.with(|c| c.query_row("SELECT COUNT(*) FROM events", [], |r| r.get::<_, i64>(0)))
             .map(|n| u64::try_from(n).unwrap_or(0))
@@ -856,6 +1128,22 @@ impl StoreReader {
     pub fn approval_count(&self) -> Result<u64, StoreError> {
         self.with(|c| c.query_row("SELECT COUNT(*) FROM approvals", [], |r| r.get::<_, i64>(0)))
             .map(|n| u64::try_from(n).unwrap_or(0))
+    }
+
+    /// Sự kiện từ `since` trở đi (không kèm `raw_json`), cũ trước, tối đa `limit` (T19).
+    pub fn events_since(
+        &self,
+        since: OffsetDateTime,
+        limit: usize,
+    ) -> Result<Vec<EventRow>, StoreError> {
+        self.with(|c| {
+            let mut st = c.prepare(
+                "SELECT id, ts, session_id, kind, event_json, NULL FROM events
+                 WHERE ts >= ?1 ORDER BY ts, rowid LIMIT ?2",
+            )?;
+            let rows = st.query_map(params![format_ts(since), limit_i64(limit)], event_row)?;
+            rows.collect()
+        })
     }
 
     /// Sự kiện của một phiên, cũ trước (cùng mili giây: theo thứ tự ghi, vì chỉ có một thread ghi).
@@ -1317,6 +1605,116 @@ mod tests {
         assert_eq!(c, "2026-10-23T09:00:01.000Z");
         assert!(a < b && b < c);
         assert_eq!(parse_ts(&b), Some(datetime!(2026-10-23 09:00:00.5 UTC)));
+    }
+
+    #[test]
+    fn batch_rules_persist_replace_delete_and_skip_expired() {
+        let dir = TempDir::new();
+        let t0 = datetime!(2026-10-27 10:00 UTC);
+        let row = |k: &str, mins: i64| BatchRow {
+            group_key: k.to_owned(),
+            opened_at: t0,
+            expires_at: t0 + time::Duration::minutes(mins),
+        };
+        let s = Store::open(&dir.db(), 30).unwrap();
+        let h = s.handle();
+        h.batch_set(row("Bash:cargo test", 30));
+        h.batch_set(row("Bash:ls", 5));
+        h.batch_set(row("Bash:ls", 10)); // thay
+        h.batch_set(row("Bash:old", 1));
+        h.batch_set(row("Bash:gone", 60));
+        h.batch_delete("Bash:gone");
+        h.flush().unwrap();
+        s.close();
+        // Sống qua lần khởi động lại; hàng hết hạn không được trả về.
+        let r = StoreReader::open(&dir.db()).unwrap();
+        let rows = r.batch_rules(t0 + time::Duration::minutes(2)).unwrap();
+        let keys: Vec<&str> = rows.iter().map(|b| b.group_key.as_str()).collect();
+        assert_eq!(keys, ["Bash:cargo test", "Bash:ls"]);
+        assert_eq!(rows[1].expires_at, t0 + time::Duration::minutes(10));
+        assert!(r
+            .batch_rules(t0 + time::Duration::minutes(31))
+            .unwrap()
+            .is_empty());
+    }
+
+    #[test]
+    fn trust_grants_streaks_and_log_persist() {
+        let dir = TempDir::new();
+        let t0 = datetime!(2026-10-27 10:00 UTC);
+        let grant = |id: &str, level: u8, days: i64, revoked: bool| TrustGrant {
+            id: id.to_owned(),
+            subject: "Khoa".to_owned(),
+            pattern: "Bash:npm test".to_owned(),
+            level,
+            granted_at: t0,
+            expires_at: t0 + time::Duration::days(days),
+            reason: "20 lần duyệt liên tiếp".to_owned(),
+            revoked_at: revoked.then_some(t0 + time::Duration::hours(1)),
+        };
+        let s = Store::open(&dir.db(), 30).unwrap();
+        let h = s.handle();
+        h.trust_grant(grant("g1", 6, 30, false));
+        h.trust_grant(grant("g1", 5, 30, false)); // thay (hạ mức)
+        h.trust_grant(grant("g2", 6, 30, true)); // đã thu hồi
+        h.trust_grant(grant("g3", 6, 1, false)); // sẽ hết hạn
+        h.trust_streak(Streak {
+            subject: "Khoa".to_owned(),
+            pattern: "Bash:npm test".to_owned(),
+            approved_in_row: 7,
+            first_at: Some(t0),
+            last_at: Some(t0 + time::Duration::hours(2)),
+            last_incident_at: None,
+        });
+        h.trust_log(TrustLogEntry {
+            id: "trl_1".to_owned(),
+            ts: t0,
+            subject: "Khoa".to_owned(),
+            pattern: "Bash:npm test".to_owned(),
+            from_level: Some(6),
+            to_level: Some(5),
+            reason: "người từ chối".to_owned(),
+        });
+        h.flush().unwrap();
+        s.close();
+        let r = StoreReader::open(&dir.db()).unwrap();
+        let grants = r.trust_grants(t0 + time::Duration::days(2)).unwrap();
+        assert_eq!(grants.len(), 1, "g2 đã thu hồi, g3 đã hết hạn: {grants:?}");
+        assert_eq!((grants[0].id.as_str(), grants[0].level), ("g1", 5));
+        let streaks = r.streaks().unwrap();
+        assert_eq!(streaks.len(), 1);
+        assert_eq!(streaks[0].approved_in_row, 7);
+        assert_eq!(streaks[0].last_incident_at, None);
+        let log = r.trust_log(10).unwrap();
+        assert_eq!((log[0].from_level, log[0].to_level), (Some(6), Some(5)));
+        assert_eq!(log[0].reason, "người từ chối");
+    }
+
+    #[test]
+    fn upgrade_from_v1_database_adds_batch_rules_and_keeps_data() {
+        let dir = TempDir::new();
+        // Dựng CSDL ở phiên bản 1 (chỉ migration 1), ghi một sự kiện, rồi mở bằng hub hiện tại.
+        {
+            let mut conn = Connection::open(dir.db()).unwrap();
+            let tx = conn.transaction().unwrap();
+            tx.execute_batch(MIGRATIONS[0].1).unwrap();
+            tx.pragma_update(None, "user_version", 1).unwrap();
+            tx.execute(
+                "INSERT INTO events (id, ts, session_id, kind, event_json) VALUES ('e1', '2026-10-27T10:00:00.000Z', 's', 'k', '{}')",
+                [],
+            )
+            .unwrap();
+            tx.commit().unwrap();
+        }
+        let s = Store::open(&dir.db(), 30).unwrap();
+        s.close();
+        let r = StoreReader::open(&dir.db()).unwrap();
+        assert_eq!(r.user_version().unwrap(), DB_VERSION);
+        assert_eq!(r.event_count().unwrap(), 1, "dữ liệu cũ còn nguyên");
+        assert!(r
+            .batch_rules(datetime!(2026-10-27 10:00 UTC))
+            .unwrap()
+            .is_empty());
     }
 
     #[test]

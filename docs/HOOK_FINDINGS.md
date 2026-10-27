@@ -19,7 +19,7 @@ về hub ở `127.0.0.1:7879`.
 | Q5 | Phiên nền (`claude --bg`, Agent View) có chạy HTTP hook như phiên thường không? | Đa phiên | | |
 | Q6 | Trả `deny` kèm `message` thì Claude nhận lý do ở đâu, có tự đổi hướng không? | UX từ chối | | |
 | Q7 | Nhiều phiên cùng gọi hook một lúc: có giới hạn đồng thời phía Claude Code không? | Hub phải chịu tải | | |
-| Q8 | `claude agents --json` trả những trường nào, trạng thái `waitingFor` khớp với PermissionRequest không? | Đối soát | | |
+| Q8 | `claude agents --json` trả những trường nào, trạng thái `waitingFor` khớp với PermissionRequest không? | Đối soát | *Một phần* (v2.1.308, 2026-10-27, một phiên tương tác đang bận): mảng JSON, mỗi phần tử `{pid, cwd, kind: "interactive", startedAt (ms epoch), sessionId, name, status: "busy"}`; `sessionId` là khóa nối với `session_id` của hook; chạy mất khoảng 270 ms. **Chưa quan sát** `waitingFor` (không có trường này khi phiên bận) và chưa biết phiên `claude -p` hay phiên nền (`--bg`) có được liệt kê không. T7 chỉ dùng `sessionId`, parse chịu lỗi, và chỉ dọn phiên đã im lặng ≥2 chu kỳ để một phiên không được liệt kê mà vẫn bắn hook không bị dọn nhầm. | |
 | Q9 | Agent teams (`CLAUDE_CODE_EXPERIMENTAL_AGENT_TEAMS=1`): `TeammateIdle`, `TaskCreated`, `TaskCompleted` có dữ liệu gì? | Bảng task đội | | |
 | Q10 | Hook `Notification` bắn khi nào, trùng với PermissionRequest không? | Tránh báo trùng | *Một phần, chưa kết luận:* ở phiên tương tác, `Notification` `{notification_type: "permission_prompt", message: "Claude needs your permission"}` tới ~6 s sau `PermissionRequest` của cùng yêu cầu, không có `tool_name`. Chưa thử các loại notification khác. | `fixtures/hooks/Notification/01M5FMQM4X9CTXY61KY2MW7M16.json` |
 

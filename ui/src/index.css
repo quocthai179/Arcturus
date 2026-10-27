@@ -327,3 +327,21 @@ body {
   color: var(--risk-medium-fg);
   font-size: 12px;
 }
+
+/* T10: đề xuất nâng mức tin cậy. */
+.suggestion {
+  margin: 8px 0;
+  padding: 10px;
+  border: 1px dashed var(--working);
+  border-radius: 10px;
+  background: var(--surface);
+}
+
+.suggestion p {
+  margin: 0 0 8px;
+}
+
+.suggestion__actions {
+  display: flex;
+  gap: 8px;
+}

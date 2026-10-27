@@ -14,22 +14,26 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
-use hub_core::protocol::{ClientMsg, ServerMsg};
+use hub_core::policy::batch::{self, BatchError};
+use hub_core::policy::trust::{self, Answered, TrustError};
+use hub_core::protocol::{ClientMsg, ServerMsg, TrustSuggestionView};
 use hub_core::schema::Decision;
+use serde::Deserialize;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 
-use crate::approvals::{DecideResult, HeldReason};
+use crate::approvals::{DecideResult, GroupResult, HeldReason};
 use crate::auth;
 use crate::hub::Hub;
+use crate::standup::{self, StandupError, SystemGit};
 
 /// Origin được phép mở WebSocket: webview Tauri (Windows / macOS, Linux).
 pub const ALLOWED_ORIGINS: [&str; 3] = [
@@ -141,6 +145,7 @@ pub fn router(hub: Arc<Hub>, ui_token: String, port: u16, cfg: WsConfig) -> (Rou
     let router = Router::new()
         .route("/ws", get(ws_upgrade))
         .route("/approvals/{request_id}/input", get(approval_input))
+        .route("/standup", get(standup_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_ui_token,
@@ -254,6 +259,61 @@ async fn approval_input(
     }
 }
 
+#[derive(Deserialize)]
+struct StandupQuery {
+    /// Số giờ gần nhất (1–168, mặc định 24).
+    hours: Option<u32>,
+}
+
+/// `GET /standup?hours=24` (T19): standup sinh từ sự kiện đã lưu và `git log`, không LLM. Chỉ token UI; `Cache-Control:
+/// no-store` vì có tiêu đề commit và lệnh test của người dùng.
+async fn standup_handler(
+    State(st): State<Arc<WsState>>,
+    Query(q): Query<StandupQuery>,
+) -> Response {
+    let hours = q.hours.unwrap_or(standup::DEFAULT_HOURS);
+    if !(1..=standup::MAX_HOURS).contains(&hours) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("hours phải trong khoảng 1..={}", standup::MAX_HOURS),
+        )
+            .into_response();
+    }
+    let hub = st.hub.clone();
+    // Đọc SQLite và chạy `git` đều chặn: đưa ra khỏi luồng async.
+    let result = tokio::task::spawn_blocking(move || {
+        standup::standup_for(&hub, hours, OffsetDateTime::now_utc(), &SystemGit)
+    })
+    .await;
+    match result {
+        Ok(Ok(s)) => (
+            StatusCode::OK,
+            [
+                (
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                ),
+                (
+                    header::X_CONTENT_TYPE_OPTIONS,
+                    HeaderValue::from_static("nosniff"),
+                ),
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+            serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_owned()),
+        )
+            .into_response(),
+        Ok(Err(StandupError::NoDatabase)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Ok(Err(StandupError::Store(err))) => {
+            tracing::warn!(%err, "standup: lỗi đọc cơ sở dữ liệu");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(err) => {
+            tracing::warn!(%err, "standup: task bị hủy");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+    }
+}
+
 /// Serialize mỗi `ServerMsg` một lần cho mọi client.
 async fn fanout(
     mut rx: broadcast::Receiver<ServerMsg>,
@@ -327,6 +387,11 @@ async fn client(st: Arc<WsState>, socket: WebSocket) {
     if !send!(snapshot(&st.hub)) {
         return;
     }
+    for m in suggestions(&st.hub) {
+        if !send!(m) {
+            return;
+        }
+    }
     let mut ping =
         tokio::time::interval_at(Instant::now() + st.cfg.ping_interval, st.cfg.ping_interval);
     let mut missed_pongs = 0u32;
@@ -382,6 +447,16 @@ async fn client(st: Arc<WsState>, socket: WebSocket) {
                     if !send!(snapshot(&st.hub)) {
                         break "ghi quá giờ";
                     }
+                    let mut sent = true;
+                    for m in suggestions(&st.hub) {
+                        if !send!(m) {
+                            sent = false;
+                            break;
+                        }
+                    }
+                    if !sent {
+                        break "ghi quá giờ";
+                    }
                 }
                 Err(broadcast::error::RecvError::Closed) => break "kênh đóng",
             },
@@ -409,6 +484,18 @@ fn snapshot(hub: &Hub) -> Message {
     text(&msg)
 }
 
+/// Đề xuất đang chờ, gửi ngay sau `Snapshot` để client mới (hoặc client vừa tụt kênh) cũng thấy.
+fn suggestions(hub: &Hub) -> Vec<Message> {
+    hub.pending_suggestions()
+        .iter()
+        .map(|s| {
+            text(&ServerMsg::Suggestion {
+                suggestion: TrustSuggestionView::from(s),
+            })
+        })
+        .collect()
+}
+
 fn feed(text_: &str) -> Message {
     text(&ServerMsg::Feed {
         text: text_.to_owned(),
@@ -421,6 +508,31 @@ fn text(msg: &ServerMsg) -> Message {
     Message::Text(Utf8Bytes::from(
         serde_json::to_string(msg).unwrap_or_else(|_| "{\"t\":\"feed\",\"text\":\"\"}".to_owned()),
     ))
+}
+
+/// Chữ cho UI sau `DecideGroup`.
+fn group_feed(decision: Decision, r: GroupResult) -> String {
+    if r.matched == 0 {
+        return "Không có yêu cầu nào trong nhóm này".to_owned();
+    }
+    let verb = match decision {
+        Decision::Allow => "duyệt",
+        Decision::Deny => "từ chối",
+    };
+    let mut text = format!("Đã {verb} {} yêu cầu", r.decided);
+    if r.held > 0 {
+        text.push_str(&format!(
+            ", {} yêu cầu chưa đủ điều kiện (xem kỹ rồi bấm lại)",
+            r.held
+        ));
+    }
+    if r.critical_left > 0 {
+        text.push_str(&format!(
+            ", {} yêu cầu vùng khóa ở lại, duyệt từng cái",
+            r.critical_left
+        ));
+    }
+    text
 }
 
 /// Xử lý một lệnh từ client; trả các `Feed` gửi riêng cho client đó. Mọi thay đổi trạng thái đi qua kênh broadcast.
@@ -489,9 +601,59 @@ fn handle(st: &WsState, conn: u64, raw: &str, limiter: &mut Limiter) -> Vec<Mess
             st.hub.set_focus(on);
             Vec::new()
         }
+        // Duyệt gộp và batch rule (T9) chung giới hạn với Decide: mỗi lệnh có thể quyết định nhiều yêu cầu.
         ClientMsg::DecideGroup { .. }
         | ClientMsg::BatchOpen { .. }
         | ClientMsg::BatchClose { .. }
-        | ClientMsg::SuggestionAnswer { .. } => vec![feed("Lệnh này chưa được hỗ trợ")],
+            if !limiter.allow() =>
+        {
+            vec![feed("Quá nhiều lệnh duyệt, hãy thử lại sau")]
+        }
+        ClientMsg::DecideGroup {
+            group_key,
+            decision,
+        } => {
+            let r = st.hub.approvals.decide_group(&group_key, decision);
+            tracing::info!(conn, group = ?group_key, ?decision, ?r, "UI duyệt gộp");
+            if decision == Decision::Allow && r.decided > 0 {
+                tracing::warn!(conn, group = ?group_key, decided = r.decided, "UI allow gộp");
+            }
+            vec![feed(&group_feed(decision, r))]
+        }
+        ClientMsg::BatchOpen { group_key, minutes } => {
+            match st.hub.batch_open(&group_key, minutes) {
+                // `batch_open` đã broadcast `Feed` cho mọi client.
+                Ok(_) => Vec::new(),
+                Err(BatchError::BadMinutes) => vec![feed(&format!(
+                    "Thời hạn phải từ {} tới {} phút",
+                    batch::MIN_MINUTES,
+                    batch::MAX_MINUTES
+                ))],
+                Err(BatchError::BadKey) => vec![feed("Nhóm không hợp lệ")],
+                Err(BatchError::Compound) => vec![feed(
+                    "Lệnh ghép (nhiều lệnh hoặc có biến/lệnh con) không được cho phép theo nhóm",
+                )],
+                Err(BatchError::TooMany) => vec![feed("Đã mở quá nhiều quy tắc, hãy tắt bớt")],
+            }
+        }
+        ClientMsg::BatchClose { group_key } => {
+            if st.hub.batch_close(&group_key) {
+                Vec::new()
+            } else {
+                vec![feed("Không có quy tắc nào đang mở cho nhóm này")]
+            }
+        }
+        ClientMsg::SuggestionAnswer { .. } if !limiter.allow() => {
+            vec![feed("Quá nhiều lệnh duyệt, hãy thử lại sau")]
+        }
+        ClientMsg::SuggestionAnswer { id, accept } => match st.hub.trust_answer(&id, accept) {
+            // Chấp nhận: `trust_answer` đã broadcast `Feed`.
+            Ok(Answered::Granted(_)) => Vec::new(),
+            Ok(Answered::Declined) => vec![feed(&format!(
+                "Sẽ không đề xuất lại trong {} ngày",
+                trust::DECLINE_DAYS
+            ))],
+            Err(TrustError::UnknownSuggestion) => vec![feed("Đề xuất không còn hiệu lực")],
+        },
     }
 }

@@ -3,13 +3,14 @@
 
 use std::net::SocketAddr;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::Duration;
 
 use anyhow::Context;
 use clap::Parser;
 use hub::hub::Hub;
 use hub::record::{self, RecordConfig};
-use hub::{auth, hooks, server, ui_token, ws};
+use hub::{auth, hooks, reconcile, server, ui_token, ws};
 use hub_core::config::Config;
 use hub_core::policy::danger::DangerConfig;
 use hub_core::store::{self, Store};
@@ -135,6 +136,7 @@ async fn main() -> anyhow::Result<()> {
             );
         }
         let timeout_s = cfg.hub.approval_timeout_secs;
+        let reconcile_every = Duration::from_secs(cfg.hub.reconcile_interval_secs);
         let n_personas = cfg.personas.len();
         // Token UI riêng (D1): sinh mới, ghi vào file chỉ người dùng đọc được; không bao giờ log giá trị.
         let ui_token =
@@ -177,6 +179,38 @@ async fn main() -> anyhow::Result<()> {
         };
         let (hub, _tasks) =
             Hub::start_full(cfg, personas, hostname(), danger, Box::new(db.handle()));
+        // Nạp lại grant và chuỗi duyệt từ lần chạy trước (T10). Lỗi đọc chỉ làm mất quyền tự chạy (an toàn: hỏi người).
+        match store::StoreReader::open(&db_path).and_then(|r| {
+            let now = time::OffsetDateTime::now_utc();
+            Ok((r.trust_grants(now)?, r.streaks()?))
+        }) {
+            Ok((grants, streaks)) => {
+                let n = hub.restore_trust(grants, streaks);
+                if n > 0 {
+                    tracing::info!(n, "đã nạp lại trust grant");
+                }
+            }
+            Err(err) => tracing::warn!(%err, "không nạp lại được trust grant"),
+        }
+        // Nạp lại batch rule còn hạn từ lần chạy trước (T9). Lỗi đọc chỉ làm mất quy tắc (an toàn: mọi thứ hỏi người).
+        match store::StoreReader::open(&db_path)
+            .and_then(|r| r.batch_rules(time::OffsetDateTime::now_utc()))
+        {
+            Ok(rows) => {
+                let n = hub.restore_batch(rows);
+                if n > 0 {
+                    tracing::info!(n, "đã nạp lại batch rule");
+                }
+            }
+            Err(err) => tracing::warn!(%err, "không nạp lại được batch rule"),
+        }
+        // Đối soát phiên (T7): chỉ chạy `claude agents --json` khi hub đang có phiên.
+        let _reconcile = reconcile::spawn(
+            Arc::downgrade(&hub),
+            reconcile::ClaudeAgents::default(),
+            reconcile_every,
+        );
+        hub.set_db_path(db_path.clone());
         let (ui, ws_handle) = ws::router(hub.clone(), ui_token, port, ws::WsConfig::default());
         let app = hooks::router(hub.clone(), token).merge(ui);
         tracing::info!(
