@@ -1104,7 +1104,7 @@ nhóm Critical không có nút duyệt gộp; `hidden_chars` hiện nhãn cảnh
   của lần tạo (≈200 ms nếu bấm sau 300 ms, ≈350 ms nếu bấm ngay). Quy tắc "không giữ webview khi popup đóng" giờ có ngoại lệ ngắn
   (≤ 8 s sau khi rê chuột, tạm ≈360 MB WS).
 - Test: `tray::tests` (4: điều kiện hẹn tạo sẵn, đồng hồ "UI vẽ xong" trước/sau lúc bấm), `measure::tests`; chế độ đo chạy qua đúng `hover_enter`/`hover_leave`
-  (`-HoverMs 500`, kiểm cả popup bỏ dở bị hủy). Người dùng đã tự kiểm bằng chuột thật trên bản release (2026-10-27, cờ `ARCTURUS_MEASURE_LOG=1`): prewarm chạy, `popup_ready` dưới 300 ms.
+  (`-HoverMs 500`, kiểm cả popup bỏ dở bị hủy). Người dùng đã tự kiểm bằng chuột thật trên bản release (2026-10-27, cờ `ARCTURUS_MEASURE_LOG=1`): xác nhận prewarm chạy (có `popup_prewarmed` trước `popup_shown`); số `popup_ready` thật chưa được ghi lại.
 
 ### T13 · ARC-34 · Văn phòng 2D
 
