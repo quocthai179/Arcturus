@@ -1,0 +1,7 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "pet",
+  "description": "Cửa sổ trợ lý (docs/adr/0001-pet-v1.md): chỉ core. Kéo cửa sổ, chọn model và mở popup đi qua lệnh của app (pet_*), không mở quyền core:window cho webview",
+  "windows": ["pet"],
+  "permissions": ["core:default"]
+}
