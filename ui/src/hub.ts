@@ -31,3 +31,11 @@ export async function approvalInput(requestId: string): Promise<string> {
   }
   return invoke<string>('approval_input', { requestId });
 }
+
+/** Báo app rằng popup đã dựng xong khung đầu tiên (đo T16 "popup mở ≤300 ms"). Ngoài app hoặc lỗi thì bỏ qua. */
+export function reportPopupReady(): void {
+  if (!isTauri()) {
+    return;
+  }
+  invoke('popup_ready').catch(() => undefined);
+}

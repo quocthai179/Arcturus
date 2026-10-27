@@ -51,6 +51,7 @@ jobs:
       # jq và shellcheck có sẵn trên runner. Bài test chỉ dùng thư mục tạm, không đụng ~/.claude.
       - run: shellcheck -x scripts/*.sh
       - run: ./scripts/test-dogfood.sh
+      - run: ./scripts/test-measure.sh
 
   # crates/app (Tauri) KHÔNG build trên CI ở v0: trên Ubuntu cần libwebkit2gtk-4.1, libsoup và các thư viện GTK
   # mà runner không có sẵn, và app không chứa logic nghiệp vụ. Build tay trên máy dev; xem lại ở T12.

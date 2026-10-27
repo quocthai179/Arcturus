@@ -1094,6 +1094,18 @@ nhóm Critical không có nút duyệt gộp; `hidden_chars` hiện nhãn cảnh
 - Chưa đo được trong container (không có tray thật, không có GPU): popup mở ≤300 ms và RSS sau khi đóng popup; số đo
   hiện có ở `docs/BUDGET.md`, cần đo lại trên máy chuẩn Windows.
 
+**Đã làm thêm ở T12 khi đo bằng T16 (2026-10-27): prewarm khi rê chuột**
+- Đo bản release trên Windows: tạo webview WebView2 nguội mất ≈285 ms, nên popup mở ≈340–400 ms kể từ lúc bấm (không đạt ≤300 ms). Cờ
+  `--disable-gpu`/`--in-process-gpu` chỉ giảm ≈50 ms nên không dùng.
+- `tray.rs`: con trỏ vào icon (`TrayIconEvent::Enter`, và `Move` vì Windows chỉ phát `Leave` sau ít nhất một `Move`) và dừng ≥150 ms thì tạo
+  sẵn popup **ẩn** (`build_popup`); bấm thì chỉ `show_popup`. Sau một cú bấm không tạo sẵn lại cho tới lần rê sau. Rời icon mà không bấm
+  trong 3 s, hoặc 8 s kể từ lúc tạo dù không có `Leave`, thì destroy (RSS về mức Lite). Click trái, mất focus, đóng và đường nguội
+  không đổi. Đo: bấm 500 ms sau lúc con trỏ vào icon thì khung đầu tiên sau trung vị 44 ms (tối đa 66 ms); bấm sớm hơn thì chờ phần còn lại
+  của lần tạo (≈200 ms nếu bấm sau 300 ms, ≈350 ms nếu bấm ngay). Quy tắc "không giữ webview khi popup đóng" giờ có ngoại lệ ngắn
+  (≤ 8 s sau khi rê chuột, tạm ≈360 MB WS).
+- Test: `tray::tests` (4: điều kiện hẹn tạo sẵn, đồng hồ "UI vẽ xong" trước/sau lúc bấm), `measure::tests`; chế độ đo chạy qua đúng `hover_enter`/`hover_leave`
+  (`-HoverMs 500`, kiểm cả popup bỏ dở bị hủy). Người dùng đã tự kiểm bằng chuột thật trên bản release (2026-10-27, cờ `ARCTURUS_MEASURE_LOG=1`): prewarm chạy, `popup_ready` dưới 300 ms.
+
 ### T13 · ARC-34 · Văn phòng 2D
 
 `views/Office.tsx` trong cửa sổ `office` (mở từ menu tray, destroy khi đóng).
@@ -1176,6 +1188,17 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
 
 `scripts/measure.sh` (Linux/macOS) và `scripts/measure.ps1` (Windows) theo kịch bản `docs/BUDGET.md`; xuất CSV
 `ts,rss_kb,cpu_pct` và một dòng tóm tắt. Agent `budget-guard` dùng các script này.
+
+**Đã làm ở T16** (lệch so với trên: thêm hai cột CSV và chế độ đo trong app)
+- `scripts/measure.ps1` (hub và app) và `scripts/measure.sh` (hub; app Tauri chưa đo được trên Linux/macOS ở v0). CSV `ts,rss_kb,cpu_pct,priv_kb,phase`
+  (thêm bộ nhớ riêng và tên pha); một dòng tóm tắt `measure target=… verdict=PASS|FAIL`, mã thoát 1 khi vượt ngân sách. Phần phân tích tách
+  riêng (`-Analyze <csv>` / `--analyze <csv>`) và có test bằng CSV giả: `scripts/test-measure.ps1` (12 kiểm tra), `scripts/test-measure.sh` (9).
+- Hub: khởi động hub release trên cổng riêng với CSDL tạm, idle 60 s, `replay` 20 phiên 50 yêu cầu/s trong 120 s (`--permission-mode skip`), nghỉ 60 s;
+  chỉ đo tiến trình hub (con của hub như `conhost` hay `claude agents --json` của reconcile không tính). p99 lấy từ đầu ra của replay.
+- App: không thể bấm tray tự động, nên `crates/app/src-tauri/src/measure.rs` thêm chế độ đo, chỉ bật khi có `ARCTURUS_MEASURE_POPUP=<số lần>`
+  (`_DELAY_SEC`, `_HOLD_SEC`): app tự mở/đóng popup và ghi `[measure] t=… event=…` ra stderr. `popup_ready` là thời gian từ lúc bắt đầu `open_popup` tới khi UI
+  gọi lệnh Tauri `popup_ready` (một `requestAnimationFrame` sau khi `LitePopup` mount; ngoài chế độ đo là lệnh rỗng). Test: `measure::tests` (3) và `ui/src/hub.test.ts` (3).
+- Kết quả đo thật 2026-10-27 ở `docs/BUDGET.md`: hub đạt; app tray và sau đóng đạt, popup mở vượt (WS 367 MB, 396 ms).
 
 ### T17 · ARC-38 · E2E với Claude Code thật
 
