@@ -14,7 +14,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::extract::ws::{CloseFrame, Message, Utf8Bytes, WebSocket, WebSocketUpgrade};
-use axum::extract::{Path, Request, State};
+use axum::extract::{Path, Query, Request, State};
 use axum::http::{header, HeaderValue, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
@@ -24,6 +24,7 @@ use futures_util::{SinkExt, StreamExt};
 use hub_core::policy::batch::{self, BatchError};
 use hub_core::protocol::{ClientMsg, ServerMsg};
 use hub_core::schema::Decision;
+use serde::Deserialize;
 use time::OffsetDateTime;
 use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
@@ -31,6 +32,7 @@ use tokio::time::Instant;
 use crate::approvals::{DecideResult, GroupResult, HeldReason};
 use crate::auth;
 use crate::hub::Hub;
+use crate::standup::{self, StandupError, SystemGit};
 
 /// Origin được phép mở WebSocket: webview Tauri (Windows / macOS, Linux).
 pub const ALLOWED_ORIGINS: [&str; 3] = [
@@ -142,6 +144,7 @@ pub fn router(hub: Arc<Hub>, ui_token: String, port: u16, cfg: WsConfig) -> (Rou
     let router = Router::new()
         .route("/ws", get(ws_upgrade))
         .route("/approvals/{request_id}/input", get(approval_input))
+        .route("/standup", get(standup_handler))
         .route_layer(middleware::from_fn_with_state(
             state.clone(),
             require_ui_token,
@@ -252,6 +255,61 @@ async fn approval_input(
         )
             .into_response(),
         None => StatusCode::NOT_FOUND.into_response(),
+    }
+}
+
+#[derive(Deserialize)]
+struct StandupQuery {
+    /// Số giờ gần nhất (1–168, mặc định 24).
+    hours: Option<u32>,
+}
+
+/// `GET /standup?hours=24` (T19): standup sinh từ sự kiện đã lưu và `git log`, không LLM. Chỉ token UI; `Cache-Control:
+/// no-store` vì có tiêu đề commit và lệnh test của người dùng.
+async fn standup_handler(
+    State(st): State<Arc<WsState>>,
+    Query(q): Query<StandupQuery>,
+) -> Response {
+    let hours = q.hours.unwrap_or(standup::DEFAULT_HOURS);
+    if !(1..=standup::MAX_HOURS).contains(&hours) {
+        return (
+            StatusCode::BAD_REQUEST,
+            format!("hours phải trong khoảng 1..={}", standup::MAX_HOURS),
+        )
+            .into_response();
+    }
+    let hub = st.hub.clone();
+    // Đọc SQLite và chạy `git` đều chặn: đưa ra khỏi luồng async.
+    let result = tokio::task::spawn_blocking(move || {
+        standup::standup_for(&hub, hours, OffsetDateTime::now_utc(), &SystemGit)
+    })
+    .await;
+    match result {
+        Ok(Ok(s)) => (
+            StatusCode::OK,
+            [
+                (
+                    header::CONTENT_TYPE,
+                    HeaderValue::from_static("application/json"),
+                ),
+                (
+                    header::X_CONTENT_TYPE_OPTIONS,
+                    HeaderValue::from_static("nosniff"),
+                ),
+                (header::CACHE_CONTROL, HeaderValue::from_static("no-store")),
+            ],
+            serde_json::to_string(&s).unwrap_or_else(|_| "{}".to_owned()),
+        )
+            .into_response(),
+        Ok(Err(StandupError::NoDatabase)) => StatusCode::SERVICE_UNAVAILABLE.into_response(),
+        Ok(Err(StandupError::Store(err))) => {
+            tracing::warn!(%err, "standup: lỗi đọc cơ sở dữ liệu");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
+        Err(err) => {
+            tracing::warn!(%err, "standup: task bị hủy");
+            StatusCode::INTERNAL_SERVER_ERROR.into_response()
+        }
     }
 }
 

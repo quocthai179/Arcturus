@@ -5,7 +5,8 @@
 //! Thứ tự xử lý một sự kiện: luồng duyệt trước (hủy/thay yêu cầu), trạng thái agent sau, nên khi `SessionEnd` UI nhận
 //! `ApprovalResolved` trước `AgentRemoved`.
 
-use std::sync::{Arc, Mutex, MutexGuard};
+use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
 use hub_core::config::Config;
@@ -48,6 +49,8 @@ pub struct Hub {
     team: Mutex<()>,
     /// Batch rule đang mở (T9). `RulesPolicy` giữ một bản `Arc` để tự duyệt theo nhóm.
     batch: Arc<BatchRules>,
+    /// Đường dẫn cơ sở dữ liệu SQLite, để `GET /standup` mở kết nối đọc khi cần (T19). `main` đặt một lần.
+    db_path: OnceLock<PathBuf>,
 }
 
 /// Các task nền của hub; drop không dừng chúng (dừng khi `Hub` bị drop và kênh đóng).
@@ -136,6 +139,7 @@ impl Hub {
             recent: Mutex::new(EventRing::default()),
             team: Mutex::new(()),
             batch,
+            db_path: OnceLock::new(),
         });
         let tasks = HubTasks {
             events: tokio::spawn(event_loop(Arc::downgrade(&hub), events_rx)),
@@ -239,6 +243,15 @@ impl Hub {
             text,
             ts: OffsetDateTime::now_utc(),
         }]);
+    }
+
+    /// Cho biết cơ sở dữ liệu nằm ở đâu (gọi một lần sau khi mở store; lần sau bị bỏ qua).
+    pub fn set_db_path(&self, path: PathBuf) {
+        let _ = self.db_path.set(path);
+    }
+
+    pub fn db_path(&self) -> Option<&Path> {
+        self.db_path.get().map(PathBuf::as_path)
     }
 
     pub fn subscribe(&self) -> broadcast::Receiver<ServerMsg> {
@@ -348,6 +361,11 @@ impl Hub {
     /// Mọi agent hiện có (cho `Snapshot`, T5b).
     pub fn agent_views(&self) -> Vec<hub_core::protocol::AgentView> {
         self.lock_state().views()
+    }
+
+    /// Phiên đang giữ kèm sự kiện gần nhất (đối soát, T7).
+    pub fn sessions(&self) -> Vec<(String, OffsetDateTime)> {
+        self.lock_state().sessions()
     }
 
     /// Tắt hub: trả `{}` cho mọi yêu cầu đang chờ.
