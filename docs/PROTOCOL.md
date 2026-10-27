@@ -159,7 +159,12 @@ Tin nhắn cho người dùng, thường **chỉ gửi cho client vừa gửi l�
 | `Lý do từ chối quá dài (tối đa 500 ký tự)` | `message` quá dài; yêu cầu vẫn chờ |
 | `Quá nhiều lệnh duyệt, hãy thử lại sau` | quá 20 `decide`/giây |
 | `Quá nhiều lệnh, hãy thử lại sau` | quá 20 lệnh/giây tính cả `team_pause`, `team_resume`, `focus_set` |
-| `Lệnh này chưa được hỗ trợ` | `decide_group`, `batch_open`, `batch_close`, `suggestion_answer` (T9, T10) |
+| `Đã duyệt N yêu cầu` / `Đã từ chối N yêu cầu` (+ `, M yêu cầu chưa đủ điều kiện (xem kỹ rồi bấm lại)`, + `, K yêu cầu vùng khóa ở lại, duyệt từng cái`) | kết quả `decide_group` |
+| `Không có yêu cầu nào trong nhóm này` | `decide_group` không khớp yêu cầu nào |
+| `Thời hạn phải từ 1 tới 240 phút` / `Nhóm không hợp lệ` / `Lệnh ghép (…) không được cho phép theo nhóm` / `Đã mở quá nhiều quy tắc, hãy tắt bớt` | `batch_open` bị từ chối |
+| `Không có quy tắc nào đang mở cho nhóm này` | `batch_close` không có gì để đóng |
+| `Quá nhiều lệnh duyệt, hãy thử lại sau` | quá 20 lệnh/giây tính cả `decide_group`, `batch_open`, `batch_close` |
+| `Lệnh này chưa được hỗ trợ` | `suggestion_answer` (T10) |
 | `Thông điệp không hợp lệ` | JSON sai hoặc `t` không biết |
 | `Chỉ nhận thông điệp JSON dạng text` | frame nhị phân |
 
@@ -176,12 +181,25 @@ Thông điệp sai không làm đóng kết nối.
 {"t":"team_pause"}
 {"t":"team_resume"}
 {"t":"focus_set","on":true}
-{"t":"decide_group","group_key":"Bash","decision":"allow"}      // T9
-{"t":"batch_open","group_key":"Bash","minutes":60}              // T9
-{"t":"batch_close","group_key":"Bash"}                          // T9
+{"t":"decide_group","group_key":"Bash:npm test","decision":"allow"}   // T9
+{"t":"batch_open","group_key":"Bash:npm test","minutes":60}           // T9
+{"t":"batch_close","group_key":"Bash:npm test"}                       // T9
 {"t":"suggestion_answer","id":"…","accept":true}                // T10
 ```
 
+- `group_key` (`ApprovalView.group_key`): Bash/PowerShell: `<tool>:<[lệnh bọc ]chương trình[ lệnh con]>` (bỏ đường dẫn, chữ
+  thường), ví dụ `Bash:npm test`, `Bash:cargo test`, `Bash:git push`, `Bash:sudo apt update`; tool khác `<tool>:*`. Lệnh
+  **ghép** (nhiều lệnh, có `$(…)`, cờ nghi ngờ, không phân tích được) mang hậu tố ` (ghép)` và chỉ gom với nhau.
+- `decide_group`: áp `decision` cho mọi yêu cầu đang chờ cùng `group_key` **trừ Critical** (ở lại hàng đợi). Mỗi yêu cầu qua
+  đúng các điều kiện của `decide` với `origin: user` (sàn `min_review_ms`, thẻ cắt phải mở bản đầy đủ, đội tạm dừng); yêu cầu
+  chưa đủ điều kiện được giữ nguyên, không bị từ chối. Kết quả từng yêu cầu đến qua `approval_resolved`; client gửi lệnh nhận
+  thêm một `feed` tóm tắt. Không có `origin: countdown` cho duyệt gộp.
+- `batch_open {group_key, minutes}`: trong `minutes` (1–240) phút, yêu cầu **trùng khóa** và có risk ≤ Medium được hub tự duyệt
+  (`decided_by: policy`, lý do `batch:<group_key>`); High và Critical không bao giờ; khóa ghép bị từ chối; đội đang tạm
+  dừng thì không tự duyệt gì. Mở lại cùng khóa là gia hạn (tính từ lúc đó). Tối đa 64 quy tắc. Quy tắc được lưu (bảng
+  `batch_rules`) và nạp lại khi hub khởi động; hết hạn thì hub broadcast `feed` "Hết thời hạn cho phép …" (một timer duy nhất
+  cho mỗi quy tắc, không polling). `batch_open` thành công và `batch_close` đều broadcast `feed` cho mọi client. Snapshot
+  chưa có danh sách quy tắc đang mở (cần đổi hợp đồng, chưa làm).
 - Kết quả của `decide` thành công đến qua `approval_resolved` (broadcast cho mọi client), không có trả lời riêng.
 - `team_pause` xóa đếm ngược của mọi yêu cầu đang chờ (snapshot sau đó có `countdown_ms: null`); `team_resume` không
   khôi phục. Lệnh của cùng một kết nối được xử lý đúng thứ tự gửi.

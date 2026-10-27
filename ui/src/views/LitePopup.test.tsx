@@ -123,32 +123,25 @@ describe('LitePopupView', () => {
     expect(sent).toEqual([]);
   });
 
-  it('group_button_allows_each_non_critical_request', () => {
+  it('group_button_sends_one_decide_group_message_and_hub_applies_the_gates', () => {
     const queue = [
       approval({ request_id: 'req_a', group_key: 'Bash:npm test', risk: 'low', created_at: '2026-10-23T09:00:01Z' }),
       approval({ request_id: 'req_b', group_key: 'Bash:npm test', risk: 'medium', created_at: '2026-10-23T09:00:02Z' }),
     ];
     const { sent } = popup(stateWith(queue));
     fireEvent.click(screen.getByRole('button', { name: /Duyệt cả 2/ }));
-    expect(sent).toEqual([
-      { t: 'decide', request_id: 'req_a', decision: 'allow', origin: 'user' },
-      { t: 'decide', request_id: 'req_b', decision: 'allow', origin: 'user' },
-    ]);
+    expect(sent).toEqual([{ t: 'decide_group', group_key: 'Bash:npm test', decision: 'allow' }]);
   });
 
-  it('group_button_reports_partial_send_when_connection_drops', () => {
-    const queue = ['a', 'b', 'c'].map((s, i) =>
+  it('group_button_reports_failure_when_not_connected', () => {
+    const queue = ['a', 'b'].map((s, i) =>
       approval({ request_id: `req_${s}`, group_key: 'Bash:npm test', risk: 'low', created_at: `2026-10-23T09:00:0${i}Z` }),
     );
-    const sent: ClientMsg[] = [];
-    const send = vi.fn((m: ClientMsg) => {
-      sent.push(m);
-      return sent.length <= 1; // lần gửi thứ hai trở đi: socket đã đứt
-    });
+    const send = vi.fn(() => false);
     render(<LitePopupView state={stateWith(queue)} send={send} loadFull={() => Promise.resolve('{}')} minReviewMs={0} />);
-    fireEvent.click(screen.getByRole('button', { name: /Duyệt cả 3/ }));
-    expect(send).toHaveBeenCalledTimes(2); // dừng ở lần lỗi đầu tiên, không thử nốt yêu cầu thứ ba
-    expect(screen.getByText(/Mới gửi 1\/3 yêu cầu/)).toBeTruthy();
+    fireEvent.click(screen.getByRole('button', { name: /Duyệt cả 2/ }));
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(screen.getByText('Chưa kết nối hub, chưa gửi được')).toBeTruthy();
   });
 
   it('critical_group_has_no_batch_button', () => {

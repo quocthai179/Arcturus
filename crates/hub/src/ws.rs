@@ -21,6 +21,7 @@ use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
+use hub_core::policy::batch::{self, BatchError};
 use hub_core::protocol::{ClientMsg, ServerMsg};
 use hub_core::schema::Decision;
 use serde::Deserialize;
@@ -28,7 +29,7 @@ use time::OffsetDateTime;
 use tokio::sync::{broadcast, watch};
 use tokio::time::Instant;
 
-use crate::approvals::{DecideResult, HeldReason};
+use crate::approvals::{DecideResult, GroupResult, HeldReason};
 use crate::auth;
 use crate::hub::Hub;
 use crate::standup::{self, StandupError, SystemGit};
@@ -481,6 +482,31 @@ fn text(msg: &ServerMsg) -> Message {
     ))
 }
 
+/// Chữ cho UI sau `DecideGroup`.
+fn group_feed(decision: Decision, r: GroupResult) -> String {
+    if r.matched == 0 {
+        return "Không có yêu cầu nào trong nhóm này".to_owned();
+    }
+    let verb = match decision {
+        Decision::Allow => "duyệt",
+        Decision::Deny => "từ chối",
+    };
+    let mut text = format!("Đã {verb} {} yêu cầu", r.decided);
+    if r.held > 0 {
+        text.push_str(&format!(
+            ", {} yêu cầu chưa đủ điều kiện (xem kỹ rồi bấm lại)",
+            r.held
+        ));
+    }
+    if r.critical_left > 0 {
+        text.push_str(&format!(
+            ", {} yêu cầu vùng khóa ở lại, duyệt từng cái",
+            r.critical_left
+        ));
+    }
+    text
+}
+
 /// Xử lý một lệnh từ client; trả các `Feed` gửi riêng cho client đó. Mọi thay đổi trạng thái đi qua kênh broadcast.
 fn handle(st: &WsState, conn: u64, raw: &str, limiter: &mut Limiter) -> Vec<Message> {
     let msg: ClientMsg = match serde_json::from_str(raw) {
@@ -547,9 +573,48 @@ fn handle(st: &WsState, conn: u64, raw: &str, limiter: &mut Limiter) -> Vec<Mess
             st.hub.set_focus(on);
             Vec::new()
         }
+        // Duyệt gộp và batch rule (T9) chung giới hạn với Decide: mỗi lệnh có thể quyết định nhiều yêu cầu.
         ClientMsg::DecideGroup { .. }
         | ClientMsg::BatchOpen { .. }
         | ClientMsg::BatchClose { .. }
-        | ClientMsg::SuggestionAnswer { .. } => vec![feed("Lệnh này chưa được hỗ trợ")],
+            if !limiter.allow() =>
+        {
+            vec![feed("Quá nhiều lệnh duyệt, hãy thử lại sau")]
+        }
+        ClientMsg::DecideGroup {
+            group_key,
+            decision,
+        } => {
+            let r = st.hub.approvals.decide_group(&group_key, decision);
+            tracing::info!(conn, group = ?group_key, ?decision, ?r, "UI duyệt gộp");
+            if decision == Decision::Allow && r.decided > 0 {
+                tracing::warn!(conn, group = ?group_key, decided = r.decided, "UI allow gộp");
+            }
+            vec![feed(&group_feed(decision, r))]
+        }
+        ClientMsg::BatchOpen { group_key, minutes } => {
+            match st.hub.batch_open(&group_key, minutes) {
+                // `batch_open` đã broadcast `Feed` cho mọi client.
+                Ok(_) => Vec::new(),
+                Err(BatchError::BadMinutes) => vec![feed(&format!(
+                    "Thời hạn phải từ {} tới {} phút",
+                    batch::MIN_MINUTES,
+                    batch::MAX_MINUTES
+                ))],
+                Err(BatchError::BadKey) => vec![feed("Nhóm không hợp lệ")],
+                Err(BatchError::Compound) => vec![feed(
+                    "Lệnh ghép (nhiều lệnh hoặc có biến/lệnh con) không được cho phép theo nhóm",
+                )],
+                Err(BatchError::TooMany) => vec![feed("Đã mở quá nhiều quy tắc, hãy tắt bớt")],
+            }
+        }
+        ClientMsg::BatchClose { group_key } => {
+            if st.hub.batch_close(&group_key) {
+                Vec::new()
+            } else {
+                vec![feed("Không có quy tắc nào đang mở cho nhóm này")]
+            }
+        }
+        ClientMsg::SuggestionAnswer { .. } => vec![feed("Lệnh này chưa được hỗ trợ")],
     }
 }

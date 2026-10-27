@@ -489,9 +489,10 @@ async fn ws_decide_errors_are_private_feeds() {
 
     send(
         &mut ws,
-        json!({ "t": "decide_group", "group_key": "Bash", "decision": "allow" }),
+        json!({ "t": "suggestion_answer", "id": "sug_1", "accept": true }),
     )
     .await;
+    // T10 chưa làm: lệnh chưa hỗ trợ trả Feed riêng (T9 đã hỗ trợ decide_group/batch_open/batch_close).
     assert_eq!(
         next_of(&mut ws, &["feed"]).await["text"],
         "Lệnh này chưa được hỗ trợ"

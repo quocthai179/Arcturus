@@ -13,6 +13,7 @@
 use std::collections::BTreeMap;
 
 use hub_core::policy::danger::{is_shell_tool, HitSpan};
+use hub_core::policy::group::group_key;
 use hub_core::policy::normalize::{display, quick_suspicions, value_has_hidden, Display};
 pub use hub_core::policy::normalize::{escape_hidden, is_hidden};
 use hub_core::policy::Assessment;
@@ -57,7 +58,7 @@ pub fn approval_view(p: &PendingApproval, agent_name: &str, a: &Assessment) -> A
         truncated,
         risk: p.risk,
         reversible: a.reversible,
-        group_key: p.tool.clone(),
+        group_key: group_key(&p.tool, &p.tool_input),
         created_at: p.created_at,
         deadline_at: p.deadline_at,
         countdown_ms: p
@@ -405,7 +406,7 @@ mod tests {
         assert_eq!(v.command_original, long);
         assert!(!v.truncated);
         assert_eq!(v.agent_name, "Khoa");
-        assert_eq!(v.group_key, "Bash");
+        assert_eq!(v.group_key, "Bash:echo");
         assert_eq!(v.countdown_ms, None);
     }
 
