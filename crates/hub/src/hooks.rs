@@ -7,6 +7,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::extract::{DefaultBodyLimit, Request, State};
 use axum::http::{header, StatusCode};
+use axum::middleware::Next;
 use axum::response::{IntoResponse, Response};
 use axum::routing::{get, post};
 use axum::{middleware, Json, Router};
@@ -17,8 +18,27 @@ use crate::auth;
 use crate::hub::Hub;
 use crate::record::MAX_BODY_BYTES;
 
-/// Router cho hook. `token` là token của hook (`ARCTURUS_TOKEN`).
+/// Router cho hook. `token` là token của hook (`ARCTURUS_TOKEN`). Không kiểm `Host`; hub thật dùng [`router_on_port`].
 pub fn router(hub: Arc<Hub>, token: String) -> Router {
+    build(hub, token, None)
+}
+
+/// Như [`router`], và route hook từ chối (403) mọi yêu cầu có `Host` không phải loopback của hub trên `port`
+/// (chặn DNS rebinding; token vẫn bắt buộc).
+pub fn router_on_port(hub: Arc<Hub>, token: String, port: u16) -> Router {
+    build(hub, token, Some(port))
+}
+
+async fn require_local_host(State(port): State<u16>, req: Request, next: Next) -> Response {
+    if crate::ws::host_is_local(req.headers(), port) {
+        next.run(req).await
+    } else {
+        tracing::warn!("từ chối hook: Host không phải loopback của hub");
+        StatusCode::FORBIDDEN.into_response()
+    }
+}
+
+fn build(hub: Arc<Hub>, token: String, port: Option<u16>) -> Router {
     let token: Arc<str> = Arc::from(token);
     let hooks = Router::new()
         .route("/hooks/event", post(hook_event))
@@ -26,6 +46,10 @@ pub fn router(hub: Arc<Hub>, token: String) -> Router {
         .layer(DefaultBodyLimit::max(MAX_BODY_BYTES))
         .route_layer(middleware::from_fn_with_state(token, auth::require_bearer))
         .with_state(hub);
+    let hooks = match port {
+        Some(port) => hooks.route_layer(middleware::from_fn_with_state(port, require_local_host)),
+        None => hooks,
+    };
     Router::new()
         .route("/healthz", get(|| async { "ok" }))
         .merge(hooks)
@@ -127,7 +151,7 @@ fn overloaded() -> Response {
 async fn hook_event(State(hub): State<Arc<Hub>>, body: Bytes) -> Response {
     match HookInput::from_slice(&body) {
         Ok(input) => {
-            hub.enqueue_event(input);
+            hub.enqueue_event(input, parse_estimate(&body));
             StatusCode::NO_CONTENT.into_response()
         }
         Err(err) => bad_json(err),

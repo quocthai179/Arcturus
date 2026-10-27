@@ -212,7 +212,7 @@ async fn main() -> anyhow::Result<()> {
         );
         hub.set_db_path(db_path.clone());
         let (ui, ws_handle) = ws::router(hub.clone(), ui_token, port, ws::WsConfig::default());
-        let app = hooks::router(hub.clone(), token).merge(ui);
+        let app = hooks::router_on_port(hub.clone(), token, port).merge(ui);
         tracing::info!(
             %bind,
             timeout_s,

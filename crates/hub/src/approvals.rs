@@ -1102,17 +1102,34 @@ impl Approvals {
             matched: ids.len(),
             ..GroupResult::default()
         };
+        // Một lần bấm "duyệt gộp" là một quyết định của người: mỗi (agent, nhóm) chỉ cộng MỘT lần vào chuỗi trust, không
+        // cộng N lần (nếu không, một cú bấm nâng đủ ngưỡng đề xuất tự chạy).
+        let mut trust_keys: Vec<(String, String, Risk)> = Vec::new();
         for (id, risk, _) in ids {
             if risk == Risk::Critical {
                 result.critical_left += 1;
                 continue;
             }
-            match self.decide(&id, decision, DecideOrigin::User, None) {
+            match self.decide_inner(
+                &id,
+                decision,
+                DecideOrigin::User,
+                None,
+                Some(&mut trust_keys),
+            ) {
                 DecideResult::Resolved => result.decided += 1,
                 DecideResult::Held(_) => result.held += 1,
                 // Đã được quyết ở nơi khác giữa hai bước: không còn trong nhóm.
                 DecideResult::Expired | DecideResult::HandedOff => {}
             }
+        }
+        let mut seen: Vec<(String, String)> = Vec::new();
+        for (name, key, risk) in trust_keys {
+            if seen.iter().any(|(n, k)| *n == name && *k == key) {
+                continue;
+            }
+            self.apply_trust(self.trust.record(&name, &key, decision, risk));
+            seen.push((name, key));
         }
         result
     }
@@ -1124,6 +1141,19 @@ impl Approvals {
         decision: Decision,
         origin: DecideOrigin,
         message: Option<String>,
+    ) -> DecideResult {
+        self.decide_inner(request_id, decision, origin, message, None)
+    }
+
+    /// `defer_trust`: `Some` thì quyết định của người **không** ghi vào chuỗi trust ngay mà đẩy khóa vào vec cho người gọi
+    /// ghi một lần ([`Approvals::decide_group`]); `None` thì ghi ngay.
+    fn decide_inner(
+        &self,
+        request_id: &str,
+        decision: Decision,
+        origin: DecideOrigin,
+        message: Option<String>,
+        defer_trust: Option<&mut Vec<(String, String, Risk)>>,
     ) -> DecideResult {
         let entry = {
             let mut inner = self.lock();
@@ -1185,8 +1215,13 @@ impl Approvals {
                 // Chỉ quyết định của **người** được đếm (đếm ngược, policy, batch thì không): chuỗi phải phản ánh việc người
                 // đã xem và đồng ý.
                 if by == DecidedBy::User {
-                    let (name, key, risk) = trust_key;
-                    self.apply_trust(self.trust.record(&name, &key, decision, risk));
+                    match defer_trust {
+                        Some(keys) => keys.push(trust_key),
+                        None => {
+                            let (name, key, risk) = trust_key;
+                            self.apply_trust(self.trust.record(&name, &key, decision, risk));
+                        }
+                    }
                 }
                 DecideResult::Resolved
             }

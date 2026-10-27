@@ -228,6 +228,18 @@ Thông điệp sai không làm đóng kết nối.
   khôi phục. Lệnh của cùng một kết nối được xử lý đúng thứ tự gửi.
 - Không có `return_to_terminal`: terminal luôn hỏi song song (Q1), và hub tự trả lệnh quá dài về terminal.
 
+## HTTP cho hook (Claude Code → hub)
+
+`POST /hooks/event` (trả `204`, xử lý sau) và `POST /hooks/permission` (giữ tới khi có quyết định hoặc hết giờ, trả `200` + JSON).
+Cả hai cần `Authorization: Bearer <token hook>` (`ARCTURUS_TOKEN`); token UI không được chấp nhận ở đây.
+
+- `Host` phải là loopback của chính hub (`127.0.0.1:<cổng>`, `localhost:<cổng>`, `[::1]:<cổng>`), nếu không `403` (chặn DNS rebinding;
+  cùng luật với `/ws`). Token hook nằm trong môi trường của agent nên không coi là bí mật với agent.
+- Body tối đa 1 MiB. `/hooks/permission` đặt chỗ trong ngân sách byte của hàng đợi duyệt trước khi đọc body (hết chỗ thì `200 {}`).
+  `/hooks/event` có ngân sách byte riêng cho hàng đợi chờ xử lý (8 MiB ước lượng sau parse): vượt thì **bỏ sự kiện** (vẫn `204`,
+  có log); không bao giờ ảnh hưởng luồng duyệt.
+- `GET /healthz` → `200 ok`, không cần token, không có dữ liệu (dùng để kiểm hub sống).
+
 ## HTTP cho UI
 
 ```

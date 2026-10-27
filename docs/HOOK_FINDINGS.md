@@ -46,8 +46,8 @@ về hub ở `127.0.0.1:7879`.
 
 ## Đã biết từ tài liệu (cần xác nhận lại trên máy)
 
-- HTTP hook: non-2xx, lỗi kết nối, hết giờ là lỗi không chặn; luồng bình thường tiếp tục. *(T1 mới xác nhận trường hợp
-  2xx `{}` ở Q2; non-2xx, lỗi kết nối và hết giờ chưa thử trực tiếp, để T17.)*
+- HTTP hook: non-2xx, lỗi kết nối, hết giờ là lỗi không chặn; luồng bình thường tiếp tục. *(T1 xác nhận 2xx `{}` ở Q2; lỗi kết nối,
+  hết giờ và non-2xx đã thử trên máy thật ở T17, xem Nhật ký bên dưới.)*
 - `PermissionRequest`: exit code 2 không có tác dụng; quyết định nằm trong `hookSpecificOutput.decision.behavior`.
 - Hook allow không vượt được deny rule trong settings.
 - Timeout mặc định của http hook: 600 giây.
@@ -81,5 +81,8 @@ về hub ở `127.0.0.1:7879`.
 - 2026-10-27 · T17 · kịch bản e2e với hub trong tiến trình test và `claude -p --permission-mode default --settings <file>` (Claude Code
   2.1.308, Windows, model haiku, dự án tạm có `npm test` ghi `marker.txt`): **allow** → lệnh chạy; **deny** → không chạy; **hub hết giờ 5 giây
   (`{}`)** → không chạy; **không có gì lắng nghe (lỗi kết nối)** → không chạy và `claude -p` không treo. Cả bốn đúng như CLAUDE.md đã ghi;
-  hai nhánh mới được kiểm chứng trên máy thật: lỗi kết nối và hết giờ không bao giờ dẫn tới allow. Chưa kiểm non-2xx. Test:
+  hai nhánh mới được kiểm chứng trên máy thật: lỗi kết nối và hết giờ không bao giờ dẫn tới allow. Test:
   `crates/hub/tests/e2e_claude.rs`.
+- 2026-10-28 · T17 (bổ sung) · **non-2xx**: máy chủ giả trả `500` rồi `401` (sai token) cho `/hooks/permission`, cùng cách chạy trên
+  (`e2e_non_2xx_never_allows_and_claude_does_not_hang`, Claude Code 2.1.308, Windows, model haiku): lệnh **không** chạy và `claude -p` không
+  treo (19 giây cho hai lượt). Non-2xx là lỗi không chặn, rơi về hộp thoại terminal, đúng như tài liệu.
