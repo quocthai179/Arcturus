@@ -30,7 +30,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | T5 · ARC-26 | hub | WebSocket `/ws`: snapshot + delta; viết `docs/PROTOCOL.md`; xác thực token; xử lý `TeamPause`/`TeamResume` phía hub; `GET /approvals/{id}/input` | T3, T4 | 2 | done |
 | T5c · ARC-43 | hub | Trần byte cho `tool_input` đang giữ (`held_input_max_bytes` 8 MiB), đặt chỗ trước khi đọc body, giới hạn độ dài trường | T5 | 1 | done |
 | T5d · ARC-44 | hub | F6: `--ui-token-stdout`, sàn thời gian duyệt `min_review_ms`, luật danger cho T8, ghi giới hạn bảo mật | T5c | 1 | done |
-| T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | review |
+| T6 · ARC-27 | hub | SQLite WAL: events (TTL 30 ngày), approvals; ring buffer trong RAM | T2 | 2 | done |
 | T7 · ARC-28 | hub | Đối soát `claude agents --json` mỗi 30 s, dọn phiên chết | T4 | 1 | done |
 | T8 · ARC-29 | policy | Danger list + chuẩn hóa lệnh (bỏ ký tự ẩn/bidi), tính `risk` | T2 | 2 | done |
 | T9 · ARC-30 | policy | Batch rule ("cho phép mẫu X trong N phút") + gom yêu cầu giống nhau | T8 | 2 | done |
@@ -40,7 +40,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 | T13 · ARC-34 | ui | Văn phòng 2D: lưới bàn, trạng thái, "phòng hỗ trợ" gom agent rảnh (đội hình chính ≤5) | T5, T11 | 3 | review |
 | T14 · ARC-35 | ui | Nút "Tạm dừng cả đội" (chỉ UI, hub ở T5), "Giờ tập trung"; đếm ngược phủ quyết cho yêu cầu đảo ngược được | T12 | 2 | done |
 | T15 · ARC-36 | lab | `tools/replay`: phát lại fixture với số phiên/tốc độ tùy chọn | T2 | 1 | done |
-| T16 · ARC-37 | lab | Kịch bản đo ngân sách + bảng lịch sử trong BUDGET.md; chạy trên máy yếu | T15, T5 | 1 | todo |
+| T16 · ARC-37 | lab | Kịch bản đo ngân sách + bảng lịch sử trong BUDGET.md; chạy trên máy yếu | T15, T5 | 1 | review |
 | T17 · ARC-38 | lab | Test e2e: Claude Code thật (headless `-p`) + hub, kiểm tra allow/deny/timeout | T3 | 2 | done |
 
 **Tiêu chí chấp nhận chính**
@@ -127,3 +127,4 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - 2026-10-27 · hub · T19/ARC-40 (nhánh `arc-40-standup`): `hub-core/src/standup.rs` (đếm theo persona, template tiếng Việt, làm sạch chuỗi không tin cậy), `StoreReader::events_since`, `hub/src/standup.rs` (`SystemGit` có timeout), `GET /standup?hours=` (token UI, `no-store`), `Hub::set_db_path`; 8 test đơn vị + 6 tích hợp (SQLite và `git log` thật). · Vướng: chưa có UI hiển thị (v1); "task xong" đếm theo lượt trả lời, chưa theo ticket.
 - 2026-10-27 · lab · T15/ARC-36 (nhánh `arc-36-replay`): `tools/replay` gửi fixture tới hub (số phiên, tốc độ, thời lượng, `--permission-mode allow|skip`, người duyệt giả qua WebSocket, p50/p95/p99, `--assert-p99-ms`), tách thư viện + binary; 9 test đơn vị + 6 test tích hợp với hub thật. Hub release, 5 phiên, 200/giây: p99 0,93 ms. · Vướng: không.
 - 2026-10-27 · main · Đồng bộ bảng với YouTrack sau khi merge PR #16–#22: T7, T9, T10, T15, T17, T19 và T14 → `done`. T6 (ARC-27) và T12 (ARC-33) trở về `review` vì tiêu chí ngân sách còn chưa đo đủ trên Windows (hub idle 18,2 MB WS so với 15 MB; popup bản release chưa đo, bản dev 300–380 ms so với ≤300 ms); T13 (ARC-34) và T18 (ARC-39) giữ `review` (profiler tab ẩn, cài/gỡ trên máy sạch). Còn `todo`: T16, T20, T21. Chi tiết ở comment từng ticket. · Vướng: không.
+- 2026-10-27 · lab · T16/ARC-37 (nhánh `arc-37-measure`): `scripts/measure.ps1`, `scripts/measure.sh`, chế độ đo popup trong app (`ARCTURUS_MEASURE_POPUP`), test của script. Đo lại trên Windows: hub ĐẠT (idle 13,4 MB, đỉnh 16,7 MB, p99 0,32 ms) nên T6/ARC-27 → `done`. T12/ARC-33 vẫn `review`: sau đóng popup 32,2 MB đạt nhưng popup mở 396 ms (trung vị) so với ≤300 ms và WS 367 MB so với ≤150 MB. Chi tiết ở `docs/BUDGET.md`. · Vướng: tiêu chí popup T12 chưa đạt, cần người quyết định (tối ưu hay nới tiêu chí).

@@ -49,6 +49,8 @@ pub struct TrayState {
 struct PopupTimes {
     opened: Option<Instant>,
     closed: Option<Instant>,
+    /// Lúc bắt đầu mở cửa sổ (trước khi tạo webview), để đo "popup mở" (T16). Lấy đi một lần khi UI báo xong.
+    started: Option<Instant>,
 }
 
 /// Vẽ chấm tròn màu `approval` (#FFB020) góc trên phải của icon RGBA.
@@ -222,6 +224,29 @@ impl TrayState {
             .is_some_and(|b| b.focus)
     }
 
+    fn mark_started(&self) {
+        self.popup.lock().unwrap_or_else(|e| e.into_inner()).started = Some(Instant::now());
+    }
+
+    /// Mili giây từ lúc bắt đầu mở popup tới giờ; trả một lần cho mỗi lần mở.
+    pub fn take_popup_elapsed_ms(&self) -> Option<u128> {
+        self.popup
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .started
+            .take()
+            .map(|t| t.elapsed().as_millis())
+    }
+
+    /// Mili giây từ lúc bắt đầu mở popup (không lấy đi).
+    fn popup_started_ms(&self) -> Option<u128> {
+        self.popup
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .started
+            .map(|t| t.elapsed().as_millis())
+    }
+
     fn mark_opened(&self) {
         self.popup.lock().unwrap_or_else(|e| e.into_inner()).opened = Some(Instant::now());
     }
@@ -266,6 +291,7 @@ pub fn toggle_popup(app: &AppHandle, anchor: Option<Rect>) {
 }
 
 fn open_popup(app: &AppHandle, state: &TrayState, anchor: Option<Rect>) -> tauri::Result<()> {
+    state.mark_started();
     let window = WebviewWindowBuilder::new(app, POPUP, WebviewUrl::App("index.html".into()))
         .title("Arcturus")
         .inner_size(POPUP_W, POPUP_H)
@@ -296,6 +322,9 @@ fn open_popup(app: &AppHandle, state: &TrayState, anchor: Option<Rect>) -> tauri
     });
     window.show()?;
     window.set_focus()?;
+    if let Some(ms) = state.popup_started_ms() {
+        crate::measure::log("popup_shown", &format!("ms={ms}"));
+    }
     Ok(())
 }
 

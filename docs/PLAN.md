@@ -1177,6 +1177,17 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
 `scripts/measure.sh` (Linux/macOS) và `scripts/measure.ps1` (Windows) theo kịch bản `docs/BUDGET.md`; xuất CSV
 `ts,rss_kb,cpu_pct` và một dòng tóm tắt. Agent `budget-guard` dùng các script này.
 
+**Đã làm ở T16** (lệch so với trên: thêm hai cột CSV và chế độ đo trong app)
+- `scripts/measure.ps1` (hub và app) và `scripts/measure.sh` (hub; app Tauri chưa đo được trên Linux/macOS ở v0). CSV `ts,rss_kb,cpu_pct,priv_kb,phase`
+  (thêm bộ nhớ riêng và tên pha); một dòng tóm tắt `measure target=… verdict=PASS|FAIL`, mã thoát 1 khi vượt ngân sách. Phần phân tích tách
+  riêng (`-Analyze <csv>` / `--analyze <csv>`) và có test bằng CSV giả: `scripts/test-measure.ps1` (12 kiểm tra), `scripts/test-measure.sh` (9).
+- Hub: khởi động hub release trên cổng riêng với CSDL tạm, idle 60 s, `replay` 20 phiên 50 yêu cầu/s trong 120 s (`--permission-mode skip`), nghỉ 60 s;
+  chỉ đo tiến trình hub (con của hub như `conhost` hay `claude agents --json` của reconcile không tính). p99 lấy từ đầu ra của replay.
+- App: không thể bấm tray tự động, nên `crates/app/src-tauri/src/measure.rs` thêm chế độ đo, chỉ bật khi có `ARCTURUS_MEASURE_POPUP=<số lần>`
+  (`_DELAY_SEC`, `_HOLD_SEC`): app tự mở/đóng popup và ghi `[measure] t=… event=…` ra stderr. `popup_ready` là thời gian từ lúc bắt đầu `open_popup` tới khi UI
+  gọi lệnh Tauri `popup_ready` (một `requestAnimationFrame` sau khi `LitePopup` mount; ngoài chế độ đo là lệnh rỗng). Test: `measure::tests` (3) và `ui/src/hub.test.ts` (3).
+- Kết quả đo thật 2026-10-27 ở `docs/BUDGET.md`: hub đạt; app tray và sau đóng đạt, popup mở vượt (WS 367 MB, 396 ms).
+
 ### T17 · ARC-38 · E2E với Claude Code thật
 
 `crates/hub/tests/e2e_claude.rs`, đánh dấu `#[ignore]` (chạy tay hoặc với biến `ARCTURUS_E2E=1`).

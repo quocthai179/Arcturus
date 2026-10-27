@@ -16,20 +16,27 @@ và ghi kết quả vào bảng "Lịch sử đo" bên dưới.
 
 ## Cách đo
 
-Linux/macOS:
+Dùng script (T16 · ARC-37): chúng chạy đúng kịch bản chuẩn bên dưới, ghi CSV `ts,rss_kb,cpu_pct,priv_kb,phase` vào
+`target/measure/`, in một dòng tóm tắt `measure ... verdict=PASS|FAIL` và thoát mã 1 khi vượt ngân sách. Agent
+`budget-guard` chạy chúng thay vì đo tay.
+
 ```bash
-pgrep -f 'target/.*/hub' | xargs -I{} ps -o pid,rss,%cpu,etime,command -p {}
-# RSS tính bằng KB
+scripts/measure.sh                        # Linux/macOS: hub
+pwsh scripts/measure.ps1                  # Windows: hub
+pwsh scripts/measure.ps1 -Target app      # Windows: app bản release (tray, mở/đóng popup, thời gian mở popup)
 ```
 
-Windows (PowerShell):
-```powershell
-Get-Process hub, arcturus | Select-Object Name, Id, @{n='RSS_MB';e={[math]::Round($_.WorkingSet64/1MB,1)}}, CPU
-```
+Chế độ đo của app (`crates/app/src-tauri/src/measure.rs`) chỉ bật khi script đặt `ARCTURUS_MEASURE_POPUP=<số lần>`: app tự
+mở/đóng popup và ghi `[measure] event=...` ra stderr; `popup_ready` là thời gian từ lúc bắt đầu mở cửa sổ tới khung đầu
+tiên đã vẽ. RSS là working set (Windows) hoặc VmRSS (Linux); app tính cả cây webview, không tính hub con.
+
+Đo tay (khi cần soi một tiến trình):
+- Linux/macOS: `pgrep -f 'target/.*/hub' | xargs -I{} ps -o pid,rss,%cpu,etime,command -p {}` (RSS bằng KB).
+- Windows: `Get-Process hub, arcturus-app | Select-Object Name, Id, @{n='RSS_MB';e={[math]::Round($_.WorkingSet64/1MB,1)}}, CPU`.
 
 Kịch bản chuẩn:
 1. Khởi động hub, chờ 60 giây, đo (idle).
-2. `cargo run -p replay -- fixtures/hooks --sessions 20 --rate 50/s --duration 120s`, đo trong lúc chạy.
+2. `cargo run --release -p replay -- fixtures/hooks --sessions 20 --rate 50 --duration 120 --permission-mode skip`, đo trong lúc chạy.
 3. Dừng replay, chờ 60 giây, đo lại. RSS phải quay về gần mức idle (không rò rỉ).
 
 Đo trên ít nhất một máy yếu (ví dụ 4 GB RAM, 2 nhân) trước mỗi mốc phát hành.
@@ -47,3 +54,4 @@ Kịch bản chuẩn:
 | 2026-10-23 | 699e221 | Container Linux 4 vCPU, 16 GB (không phải máy chuẩn Windows; so với main 3cf195d đo cùng máy, cùng lúc) | 8,9 MB RSS (anon 0,9 / file 8,0), CPU 0,00% (12 mẫu/60 s), không client WS; main: 6,0 MB (anon 0,6 / file 5,4) | xấp xỉ kịch bản 8f89d40 bằng script Python (chưa có replay T15), cấu hình mặc định, `--db` tạm: 20 `/hooks/permission` giữ (20 session) + `/hooks/event` ~30 req/s keep-alive (3.566 sự kiện, mọi fixture, 20 session) trong 120 s: đỉnh 14,4 MB (anon 5,7 / file 8,8), CPU TB 2,22% một nhân; sau nghỉ 60 s 14,4 MB, CPU 0,00%. main: 7,1 MB, 1,15%, sau nghỉ 7,1 MB | chưa đo | chưa đo | T8 ARC-29 (2bd289e) + T6 ARC-27 (699e221): policy thật, SQLite, ring buffer. Ingest p50 0,80 ms, p99 2,71 ms (main 0,80 / 3,19). 20 yêu cầu giữ trả `200 {}` khi hết giờ 110 s; Ctrl-C rc=0. DB sau 4 phút: 3.586 events, 20 approvals `timed_out`, 7,2 MiB + WAL. Phần tăng so với main: file +3,3 MB (binary release 7,0 → 10,7 MB: SQLite bundled, regex, bảng Unicode), anon +4,2 MB, trong đó ring buffer ~1,6 MB (đối chứng tắt ring: 13,0 so với 14,6 MB ở kịch bản 90 s), còn lại SQLite (cache 512 KiB) và heap; `MALLOC_ARENA_MAX=1` không đổi gì. Stress ARC-43 (64 Write ~1 MB đồng thời, 4 session, cấu hình mặc định): giữ 8, 56 trả `{}` ngay, 64/64 `200 {}` khi Ctrl-C, rc=0; trong lúc giữ 31,5–32,0 MB (anon 23,4–24,0 / file 8,0), **đỉnh VmHWM 35,2–35,6 MB** (main cùng máy: giữ 24,3–27,3, đỉnh 24,7–27,3 MB). Trước khi thêm bước đo cỡ JSON gốc không cấp phát (`raw_json` > 256 KiB bị serialize dở rồi bỏ), đỉnh lên 38,0 MB. Còn cách trần 40 MB khoảng 4,5 MB: đo lại trên máy chuẩn Windows trước T21 |
 | 2026-10-23 | T12 (nhánh `claude/dreamy-davinci-oue6io`) | Container Linux 4 vCPU, 16 GB, Xvfb, không GPU (không đại diện cho máy chuẩn) | hub con do app khởi động: 9,2 MB | chưa đo | app release chỉ có tray (chưa mở popup): **100 MB RSS, trong đó heap 20 MB**, file-backed 82 MB, gồm `libLLVM` 41 MB + `libgallium` 4 MB (Mesa dựng hình bằng phần mềm vì Xvfb không có GPU), `libwebkit2gtk` 11 MB, GTK 4 MB. Bỏ phần Mesa còn khoảng 57 MB. Popup mở chưa đo được (appindicator trong container không cho click) | chưa đo | T12: app khởi động hub với `--ui-token-stdout --exit-on-stdin-close`, không có file token; kill -9 app khi đang giữ một yêu cầu: hub thoát êm sau 1,2 s, yêu cầu nhận `200 {}` (trước khi sửa `log_internal_errors`: hub không thoát, yêu cầu treo). E2E UI + hub thật (Vite dev, Chromium): thẻ đầu hiện sau 929 ms tính cả biên dịch lần đầu của Vite dev (không phải số của popup trong app). **Cần đo lại trên Windows: popup mở ≤300 ms, RSS tray ≤60 MB, sau khi đóng popup quay về mức tray** |
 | 2026-10-26 | arc-35-pause-focus (sau 47c9598) | Windows 11 Pro 10.0.26200, máy của người dùng (chưa ghi cấu hình CPU/RAM), bản release `cargo build --release -p hub` + `tauri build --no-bundle` | **18,2 MB WS / 2,8 MB private**, CPU 0,000% (30 s sau 20 s chờ), có 1 client WS (link tray của app); bản debug 22–28 MB WS. WS vượt mục tiêu 15 MB nhưng private chỉ 2,8 MB (WS tính cả trang DLL dùng chung): cần đo lại đúng kịch bản chuẩn (không client WS) bằng `budget-guard` | chưa đo | **tray-only (release): 17,0 MB WS / 3,4 MB private**, CPU 0% (30 s). Bản dev (`tauri dev`, debug): 34,6–39,9 MB WS sau khi đóng popup. Đóng popup thì mọi tiến trình `msedgewebview2` biến mất (kiểm sau 3–7 s), app về 34,6 MB; **mở popup (dev): cả cây 437,6 MB WS / 200 MB private** (6 tiến trình msedgewebview2). **Thời gian mở popup (dev, debug + Vite dev, 4 lần): `window.show()` xong sau 380 / 306 / 300 / 319 ms, trang tải xong 452 / 380 / 373 / 393 ms** (lần đầu lạnh): chưa đạt ≤300 ms ở bản dev, **bản release chưa đo** (cần bấm tray tay, xem ghi chú) | chưa đo | T12/T14 chạy thật trên Windows: tray, badge, popup, Tạm dừng/Giờ tập trung, Esc từ chối và khóa 500 ms sau khi thẻ rời hàng đợi, Enter duyệt, đóng popup khi mất focus đều đúng; tooltip tray giờ tập trung đúng chữ; kill -9 app thì hub tự thoát và cổng 7878 được giải phóng. Phát hiện: Enter sau khi bấm nút "Tạm dừng" bấm lại nút (focus còn ở nút), đã sửa trong T14. Đo thời gian bằng `eprintln!` tạm quanh `WebviewWindowBuilder` (đã gỡ). Điểm đo còn thiếu: bấm tray trên bản release 3 lần và đọc log `[popup]`, rồi cập nhật dòng này |
+| 2026-10-27 | 76d274e + T16 (nhánh `arc-37-measure`) | Windows 11 Pro 10.0.26200, máy của người dùng (chưa ghi cấu hình CPU/RAM), bản release `cargo build --release -p hub -p replay` + `tauri build --no-bundle`, đo bằng `scripts/measure.ps1` | **13,4 MB WS**, CPU 0,00% (12 mẫu/60 s, không client WS; chỉ tiến trình hub, không tính `conhost` và tiến trình con của reconcile) | 20 phiên, 50 yêu cầu/s, 120 s (6.000 yêu cầu, 0 lỗi): **đỉnh 16,7 MB WS**, CPU TB 1,29%; sau nghỉ 60 s 16,7 MB, CPU 0%; ingest p50 0,15 ms, p99 0,32 ms | tray-only **16,8 MB WS** (3,6 MB private), CPU 0,00%; **sau khi đóng popup 32,2 MB**; popup mở: **366,6 MB WS** (≈155 MB private, 6 tiến trình msedgewebview2); thời gian mở popup (từ lúc bắt đầu mở tới khung React đầu tiên đã vẽ, 6 lần): trung vị **396 ms**, tối đa 450 ms (cửa sổ hiện sau ≈300 ms, lần đầu nguội 864 ms) | chưa đo | T16 ARC-37. Hub **đạt** ngân sách. App: RSS tray và sau đóng **đạt** (≤60 MB); popup mở **vượt** (WS 367 MB so với ≤150 MB; mét theo private ≈155 MB) và thời gian mở popup **vượt** (396 ms so với ≤300 ms). Lần đo hub đầu ra 43–46 MB vì script tính nhầm `conhost` và tiến trình con `claude agents --json` của reconcile; đã sửa script. Dòng 2026-10-26 (18,2 MB) có 1 client WS và đo tay nên không so trực tiếp. |

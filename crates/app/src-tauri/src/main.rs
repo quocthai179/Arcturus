@@ -9,6 +9,7 @@
 mod http;
 mod hub_proc;
 mod link;
+mod measure;
 mod tray;
 
 use std::sync::{Arc, Mutex};
@@ -118,6 +119,17 @@ async fn approval_input(
     }
 }
 
+/// UI báo popup đã dựng xong khung đầu tiên (T16). Chỉ có tác dụng ở chế độ đo; ngoài ra là lệnh rỗng.
+#[tauri::command]
+fn popup_ready(tray: State<'_, TrayState>) {
+    if !measure::enabled() {
+        return;
+    }
+    if let Some(ms) = tray.take_popup_elapsed_ms() {
+        measure::log("popup_ready", &format!("ms={ms}"));
+    }
+}
+
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
         tray::MENU_OPEN_QUEUE => tray::toggle_popup(app, None),
@@ -184,13 +196,21 @@ fn main() {
 
     let app = tauri::Builder::default()
         .manage(state)
-        .invoke_handler(tauri::generate_handler![hub_info, approval_input])
+        .invoke_handler(tauri::generate_handler![
+            hub_info,
+            approval_input,
+            popup_ready
+        ])
         .on_menu_event(|app, event| on_menu(app, tray::menu_id(&event)))
         .setup(move |app| {
             let t = tray::build(app.handle())?;
             app.manage(t);
             if let Some(rx) = commands_rx.take() {
                 start_link(app.handle().clone(), link_state.clone(), rx);
+            }
+            // Chế độ đo popup (T16): chỉ bật khi script đo đặt ARCTURUS_MEASURE_POPUP.
+            if let Some(cfg) = measure::config_from(|k| std::env::var(k).ok()) {
+                measure::start(app.handle().clone(), cfg);
             }
             Ok(())
         })
