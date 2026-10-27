@@ -5,11 +5,12 @@
 .DESCRIPTION
   -Target hub (mặc định): khởi động hub bản release trên cổng riêng với CSDL tạm, chờ -IdleSec giây (idle), phát lại
   fixture bằng tools/replay (-Sessions phiên, -Rate yêu cầu/giây, -LoadSec giây), nghỉ -RestSec giây (kiểm rò rỉ).
-  -Target app: khởi động app bản release (hub do app tự khởi động) ở chế độ đo popup (ARCTURUS_MEASURE_POPUP): đo tray-only,
+  -Target app (mặc định -HoverMs 500: đường chuột; -HoverMs 0: đường nguội với ngưỡng riêng): khởi động app bản release (hub do app tự khởi động) ở chế độ đo popup (ARCTURUS_MEASURE_POPUP): đo tray-only,
   mở/đóng popup -Popups lần (đo thời gian mở), giữ popup mở rồi đóng, đo lại.
   -Analyze <csv>: chỉ phân tích một tệp CSV đã có (dùng cho test và cho agent budget-guard).
 
-  Mỗi mẫu một dòng CSV: ts,rss_kb,cpu_pct,priv_kb,phase (ba cột đầu theo PLAN; thêm bộ nhớ riêng và tên pha).
+  Mỗi mẫu một dòng CSV: ts,rss_kb,cpu_pct,priv_kb,phase,pws_kb (ba cột đầu theo PLAN; thêm bộ nhớ riêng (commit), tên pha và
+  private working set, cột cuối để người đọc theo vị trí không bị lệch).
   rss_kb là working set (tương đương RSS của Linux); cpu_pct tính theo một nhân. In đúng một dòng tóm tắt bắt đầu bằng
   "measure " (key=value) và kết thúc bằng verdict=PASS|FAIL; mã thoát 1 khi FAIL.
 
@@ -36,7 +37,7 @@ param(
     [int]$Popups = 5,
     [int]$HoldSec = 20,
     [int]$DelaySec = 30,
-    [int]$HoverMs = 0,
+    [int]$HoverMs = 500,
     [string]$OutDir,
     [switch]$NoBuild
 )
@@ -48,10 +49,11 @@ $Budget = @{
     HubIdleMB      = 15.0   # hub, 0 phiên
     HubLoadMB      = 40.0   # hub, 20 phiên hoạt động
     AppLiteMB      = 60.0   # app: tray + popup đóng (app và webview, không tính hub)
-    AppPopupMB     = 150.0  # app: popup mở, tổng
+    AppPopupMB     = 150.0  # app: popup mở, tổng, tính theo private working set (không đếm trùng trang dùng chung giữa các tiến trình WebView2)
     IdleCpuPct     = 0.5    # "≈ 0%" khi rảnh
     P99IngestMs    = 5.0
-    PopupReadyMs   = 300.0  # tiêu chí T12: popup mở ≤ 300 ms
+    PopupReadyMs   = 300.0  # tiêu chí T12: popup mở ≤ 300 ms, đường chuột (con trỏ dừng trên icon rồi bấm; popup được tạo sẵn)
+    PopupReadyColdMs = 500.0  # popup mở ≤ 500 ms, đường nguội (không tạo sẵn: -HoverMs 0, bàn phím, cảm ứng, mở lại ngay sau khi đóng)
     LeakToleranceMB = 5.0   # nghỉ xong, RSS không được cao hơn idle quá chừng này
 }
 
@@ -89,6 +91,8 @@ function Read-Samples([string]$Path) {
             RssMB = [double]$r.rss_kb / 1024.0
             Cpu   = [double]::Parse($r.cpu_pct, [System.Globalization.CultureInfo]::InvariantCulture)
             Phase = $r.phase
+            # Private working set: phần RAM riêng của tiến trình, không đếm trùng trang dùng chung. CSV cũ không có cột này thì dùng working set.
+            PwsMB = if ($r.PSObject.Properties.Name -contains 'pws_kb' -and $r.pws_kb) { [double]$r.pws_kb / 1024.0 } else { [double]$r.rss_kb / 1024.0 }
         }
     }
 }
@@ -122,13 +126,15 @@ function Get-HubSummary($Samples, [double]$IngestP99, [string]$Commit) {
 
 # App: tray, popup_cycle, popup_open, after_close. $ReadyMs: thời gian mở popup (ms) của từng lần.
 # $PrewarmDropped: số lần popup tạo sẵn bị destroy sau khi rê chuột rồi rời đi (-1 = không kiểm, tức không chạy với -HoverMs).
-function Get-AppSummary($Samples, [double[]]$ReadyMs, [string]$Commit, [int]$PrewarmDropped = -1) {
+# $Cold: đo đường nguội (không tạo sẵn popup) nên dùng ngưỡng PopupReadyColdMs.
+function Get-AppSummary($Samples, [double[]]$ReadyMs, [string]$Commit, [int]$PrewarmDropped = -1, [bool]$Cold = $false) {
     $tray = @(Select-Phase $Samples @('tray'))
     $open = @(Select-Phase $Samples @('popup_open'))
     $after = @(Select-Phase $Samples @('after_close'))
     $trayRss = Get-Avg ($tray | ForEach-Object { $_.RssMB })
     $trayCpu = Get-Avg ($tray | ForEach-Object { $_.Cpu })
     $openPeak = Get-Max ($open | ForEach-Object { $_.RssMB })
+    $openPeakPws = Get-Max ($open | ForEach-Object { $_.PwsMB })
     $openCpu = Get-Avg ($open | ForEach-Object { $_.Cpu })
     $afterRss = Get-Avg ($after | ForEach-Object { $_.RssMB })
     $afterCpu = Get-Avg ($after | ForEach-Object { $_.Cpu })
@@ -138,16 +144,18 @@ function Get-AppSummary($Samples, [double[]]$ReadyMs, [string]$Commit, [int]$Pre
     if ($tray.Count -eq 0) { $fail += 'khong_co_mau_tray' }
     if ($trayRss -gt $Budget.AppLiteMB) { $fail += "tray_rss>$($Budget.AppLiteMB)MB" }
     if ($trayCpu -gt $Budget.IdleCpuPct) { $fail += "tray_cpu>$($Budget.IdleCpuPct)%" }
-    if ($open.Count -gt 0 -and $openPeak -gt $Budget.AppPopupMB) { $fail += "popup_rss>$($Budget.AppPopupMB)MB" }
+    if ($open.Count -gt 0 -and $openPeakPws -gt $Budget.AppPopupMB) { $fail += "popup_pws>$($Budget.AppPopupMB)MB" }
     if ($after.Count -gt 0 -and $afterRss -gt $Budget.AppLiteMB) { $fail += "sau_dong_rss>$($Budget.AppLiteMB)MB" }
     if ($ReadyMs.Count -eq 0) { $fail += 'khong_do_duoc_popup_ready' }
-    elseif ($readyMed -gt $Budget.PopupReadyMs) { $fail += "popup_ready_median>$($Budget.PopupReadyMs)ms" }
+    elseif ($Cold -and $readyMed -gt $Budget.PopupReadyColdMs) { $fail += "popup_ready_nguoi_median>$($Budget.PopupReadyColdMs)ms" }
+    elseif (-not $Cold -and $readyMed -gt $Budget.PopupReadyMs) { $fail += "popup_ready_median>$($Budget.PopupReadyMs)ms" }
     if ($PrewarmDropped -eq 0) { $fail += 'prewarm_khong_bi_huy' }
     $verdict = if ($fail.Count -eq 0) { 'PASS' } else { 'FAIL' }
     $reasons = if ($fail.Count -eq 0) { '-' } else { $fail -join ',' }
     $dropText = if ($PrewarmDropped -ge 0) { " prewarm_dropped=$PrewarmDropped" } else { '' }
-    return ("measure target=app commit={0} tray_rss_mb={1} tray_cpu_pct={2} popup_open_rss_mb={3} popup_open_cpu_pct={4} after_close_rss_mb={5} after_close_cpu_pct={6} popup_ready_median_ms={7} popup_ready_max_ms={8} popup_runs={9}{12} reasons={10} verdict={11}" -f `
-        $Commit, (Format-Num $trayRss 1), (Format-Num $trayCpu), (Format-Num $openPeak 1), (Format-Num $openCpu), (Format-Num $afterRss 1), (Format-Num $afterCpu), (Format-Num $readyMed 0), (Format-Num $readyMax 0), $ReadyMs.Count, $reasons, $verdict, $dropText)
+    $pathText = if ($Cold) { 'cold' } else { 'mouse' }
+    return ("measure target=app commit={0} tray_rss_mb={1} tray_cpu_pct={2} popup_open_rss_mb={3} popup_open_pws_mb={13} popup_open_cpu_pct={4} after_close_rss_mb={5} after_close_cpu_pct={6} popup_ready_median_ms={7} popup_ready_max_ms={8} popup_runs={9} path={14}{12} reasons={10} verdict={11}" -f `
+        $Commit, (Format-Num $trayRss 1), (Format-Num $trayCpu), (Format-Num $openPeak 1), (Format-Num $openCpu), (Format-Num $afterRss 1), (Format-Num $afterCpu), (Format-Num $readyMed 0), (Format-Num $readyMax 0), $ReadyMs.Count, $reasons, $verdict, $dropText, (Format-Num $openPeakPws 1), $pathText)
 }
 
 if ($Analyze) {
@@ -158,7 +166,8 @@ if ($Analyze) {
     $ready = @()
     if ($env:MEASURE_POPUP_READY_MS) { $ready = @($env:MEASURE_POPUP_READY_MS.Split(',') | ForEach-Object { [double]::Parse($_, [System.Globalization.CultureInfo]::InvariantCulture) }) }
     $dropped = if ($env:MEASURE_PREWARM_DROPPED) { [int]$env:MEASURE_PREWARM_DROPPED } else { -1 }
-    $line = if ($isApp) { Get-AppSummary $samples $ready 'analyze' $dropped } else { Get-HubSummary $samples $p99 'analyze' }
+    $cold = $env:MEASURE_POPUP_COLD -eq '1'
+    $line = if ($isApp) { Get-AppSummary $samples $ready 'analyze' $dropped $cold } else { Get-HubSummary $samples $p99 'analyze' }
     Write-Output $line
     if ($line -match 'verdict=FAIL') { exit 1 }
     exit 0
@@ -193,14 +202,23 @@ function Get-Descendants([int]$RootId, [string[]]$ExcludeNames) {
 # Một mẫu: tổng working set, bộ nhớ riêng (KB) và CPU (giây) của cây tiến trình.
 function Get-TreeSample([int]$RootId, [string[]]$ExcludeNames) {
     $ws = 0.0; $priv = 0.0; $cpu = 0.0
-    foreach ($id in (Get-Descendants $RootId $ExcludeNames)) {
+    $ids = @(Get-Descendants $RootId $ExcludeNames)
+    # Working set cộng qua nhiều tiến trình (WebView2 có ~6) đếm trùng các trang thư viện dùng chung; private working set thì không.
+    $pws = 0.0
+    try {
+        foreach ($q in (Get-CimInstance Win32_PerfFormattedData_PerfProc_Process -Filter 'WorkingSetPrivate > 0' -ErrorAction Stop)) {
+            if ($ids -contains [int]$q.IDProcess) { $pws += [double]$q.WorkingSetPrivate }
+        }
+    }
+    catch { $pws = 0.0 }
+    foreach ($id in $ids) {
         $p = Get-Process -Id $id -ErrorAction SilentlyContinue
         if ($null -eq $p) { continue }
         $ws += $p.WorkingSet64
         $priv += $p.PrivateMemorySize64
         if ($null -ne $p.CPU) { $cpu += $p.CPU }
     }
-    return [pscustomobject]@{ WsKb = [math]::Round($ws / 1KB); PrivKb = [math]::Round($priv / 1KB); CpuSec = $cpu }
+    return [pscustomobject]@{ WsKb = [math]::Round($ws / 1KB); PrivKb = [math]::Round($priv / 1KB); PwsKb = [math]::Round($pws / 1KB); CpuSec = $cpu }
 }
 
 $script:Rows = New-Object System.Collections.Generic.List[object]
@@ -221,6 +239,7 @@ function Add-Sample([int]$RootId, [string[]]$ExcludeNames, [string]$Phase) {
         cpu_pct = (Format-Num $cpuPct)
         priv_kb = $s.PrivKb
         phase   = $Phase
+        pws_kb  = $s.PwsKb
     }
     $script:Rows.Add($row)
     return $row
@@ -364,7 +383,7 @@ try {
         $csv = Join-Path $OutDir "app-$stamp.csv"
         Save-Csv $csv
         $dropped = if ($HoverMs -gt 0) { @($events | Where-Object { $_ -match 'event=popup_prewarm_dropped' }).Count } else { -1 }
-        $line = Get-AppSummary @(Read-Samples $csv) $ready $commit $dropped
+        $line = Get-AppSummary @(Read-Samples $csv) $ready $commit $dropped ($HoverMs -eq 0)
         Copy-Item $appErr (Join-Path $OutDir "app-$stamp.log") -ErrorAction SilentlyContinue
     }
     Write-Host "CSV: $csv"
