@@ -35,6 +35,8 @@ param(
     [int]$Port = 7899,
     [int]$Popups = 5,
     [int]$HoldSec = 20,
+    [int]$DelaySec = 30,
+    [int]$HoverMs = 0,
     [string]$OutDir,
     [switch]$NoBuild
 )
@@ -314,13 +316,14 @@ try {
         }
         $appOut = Join-Path $work 'app.out'
         $appErr = Join-Path $work 'app.err'
-        $delay = 30
+        $delay = $DelaySec
         $env:ARCTURUS_HUB_BIN = $hubExe
         $env:ARCTURUS_HUB_ADDR = "127.0.0.1:$Port"
         $env:ARCTURUS_UI_TOKEN_FILE = Join-Path $work 'ui-token'
         $env:ARCTURUS_MEASURE_POPUP = "$Popups"
         $env:ARCTURUS_MEASURE_DELAY_SEC = "$delay"
         $env:ARCTURUS_MEASURE_HOLD_SEC = "$HoldSec"
+        $env:ARCTURUS_MEASURE_HOVER_MS = "$HoverMs"
         $app = Start-Process -FilePath $appExe -PassThru -RedirectStandardOutput $appOut -RedirectStandardError $appErr
         $started += $app
         Write-Host "App pid $($app.Id); tray $delay s, rồi $Popups lần mở/đóng popup, giữ mở $HoldSec s"
@@ -368,7 +371,7 @@ finally {
         try { if (-not $p.HasExited) { $p.Kill() } } catch { }
     }
     if ($null -ne $savedToken) { $env:ARCTURUS_TOKEN = $savedToken } else { Remove-Item Env:ARCTURUS_TOKEN -ErrorAction SilentlyContinue }
-    foreach ($n in 'ARCTURUS_HUB_BIN', 'ARCTURUS_HUB_ADDR', 'ARCTURUS_UI_TOKEN_FILE', 'ARCTURUS_MEASURE_POPUP', 'ARCTURUS_MEASURE_DELAY_SEC', 'ARCTURUS_MEASURE_HOLD_SEC') {
+    foreach ($n in 'ARCTURUS_HUB_BIN', 'ARCTURUS_HUB_ADDR', 'ARCTURUS_UI_TOKEN_FILE', 'ARCTURUS_MEASURE_POPUP', 'ARCTURUS_MEASURE_DELAY_SEC', 'ARCTURUS_MEASURE_HOLD_SEC', 'ARCTURUS_MEASURE_HOVER_MS') {
         Remove-Item "Env:$n" -ErrorAction SilentlyContinue
     }
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

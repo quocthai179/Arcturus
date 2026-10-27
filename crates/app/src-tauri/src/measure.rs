@@ -3,7 +3,8 @@
 //!
 //! Chuỗi hành động (mọi mốc ghi một dòng `[measure] t=<unix ms> event=<tên> ...` ra stderr):
 //! 1. chờ `ARCTURUS_MEASURE_DELAY_SEC` giây (mặc định 30) ở trạng thái tray-only;
-//! 2. `cycle_start`, rồi `N` lần: mở popup, chờ 2 s, đóng, chờ 1,5 s;
+//! 2. `cycle_start`, rồi `N` lần: (nếu `ARCTURUS_MEASURE_HOVER_MS` > 0: tạo sẵn popup ẩn như khi con trỏ dừng trên icon và
+//!    chờ chừng đó) mở popup, chờ 2 s, đóng, chờ 1,5 s;
 //! 3. `hold_start`: mở popup và giữ `ARCTURUS_MEASURE_HOLD_SEC` giây (mặc định 20); `hold_end`: đóng;
 //! 4. `done`. App vẫn chạy tiếp để script đo bộ nhớ sau khi đóng.
 //!
@@ -25,6 +26,8 @@ pub struct Config {
     pub cycles: u32,
     pub delay: Duration,
     pub hold: Duration,
+    /// Mô phỏng "con trỏ dừng trên icon" trước khi bấm: tạo sẵn popup rồi chờ chừng này. 0 = không (đường nguội).
+    pub hover: Duration,
 }
 
 /// Đọc cấu hình từ biến môi trường (`get` tách ra để test). `None` nếu không bật hoặc số lần không hợp lệ.
@@ -43,6 +46,12 @@ pub fn config_from(get: impl Fn(&str) -> Option<String>) -> Option<Config> {
         cycles,
         delay: secs("ARCTURUS_MEASURE_DELAY_SEC", 30, 600),
         hold: secs("ARCTURUS_MEASURE_HOLD_SEC", 20, 600),
+        hover: Duration::from_millis(
+            get("ARCTURUS_MEASURE_HOVER_MS")
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(0)
+                .min(5000),
+        ),
     })
 }
 
@@ -74,6 +83,16 @@ pub fn start(app: AppHandle, cfg: Config) {
     }
 }
 
+fn prewarm(app: &AppHandle) {
+    let a = app.clone();
+    if app
+        .run_on_main_thread(move || tray::prewarm_popup(&a, None))
+        .is_err()
+    {
+        eprintln!("arcturus app: không đưa được thao tác prewarm lên thread chính");
+    }
+}
+
 fn toggle(app: &AppHandle) {
     let a = app.clone();
     if app
@@ -84,12 +103,20 @@ fn toggle(app: &AppHandle) {
     }
 }
 
+fn hover(app: &AppHandle, cfg: Config) {
+    if !cfg.hover.is_zero() {
+        prewarm(app);
+        std::thread::sleep(cfg.hover);
+    }
+}
+
 fn run(app: &AppHandle, cfg: Config) {
     log("armed", &format!("cycles={}", cfg.cycles));
     std::thread::sleep(cfg.delay);
     log("cycle_start", "");
     for i in 0..cfg.cycles {
         log("popup_open", &format!("n={}", i + 1));
+        hover(app, cfg);
         toggle(app);
         std::thread::sleep(Duration::from_secs(2));
         toggle(app);
@@ -98,6 +125,7 @@ fn run(app: &AppHandle, cfg: Config) {
         std::thread::sleep(Duration::from_millis(1500));
     }
     log("popup_open", "n=hold");
+    hover(app, cfg);
     toggle(app);
     std::thread::sleep(Duration::from_secs(2));
     log("hold_start", "");
@@ -140,7 +168,8 @@ mod tests {
             Config {
                 cycles: 5,
                 delay: Duration::from_secs(30),
-                hold: Duration::from_secs(20)
+                hold: Duration::from_secs(20),
+                hover: Duration::ZERO
             }
         );
         let c = config_from(env(&[
@@ -151,6 +180,12 @@ mod tests {
         .unwrap();
         assert_eq!(c.delay, Duration::from_secs(5));
         assert_eq!(c.hold, Duration::from_secs(600), "trần 600 giây");
+        let c = config_from(env(&[
+            ("ARCTURUS_MEASURE_POPUP", "2"),
+            ("ARCTURUS_MEASURE_HOVER_MS", "500"),
+        ]))
+        .unwrap();
+        assert_eq!(c.hover, Duration::from_millis(500));
         // Giá trị hỏng rơi về mặc định.
         let c = config_from(env(&[
             ("ARCTURUS_MEASURE_POPUP", "1"),

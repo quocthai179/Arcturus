@@ -125,7 +125,7 @@ fn popup_ready(tray: State<'_, TrayState>) {
     if !measure::enabled() {
         return;
     }
-    if let Some(ms) = tray.take_popup_elapsed_ms() {
+    if let Some(ms) = tray.popup_ui_ready() {
         measure::log("popup_ready", &format!("ms={ms}"));
     }
 }
