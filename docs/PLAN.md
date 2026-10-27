@@ -863,15 +863,15 @@ pub enum Suspicion { HiddenChars, Subshell, Eval, Encoded }   // gửi tới UI 
 | `pipe_to_shell` | segment trước là `curl`/`wget`/`fetch` và segment sau là `sh`/`bash`/`zsh`/`python…`/`node` |
 | `sql_destructive` | `DROP TABLE|DATABASE|SCHEMA`, `TRUNCATE` (không phân biệt hoa thường) |
 | `read_secret` | Read/Grep/Bash(cat, less, head, tail…) trên đường dẫn khớp `.env`, `.env.*`, `*.pem`, `*.key`, `id_rsa*`, `id_ed25519*`, `.ssh/`, `.aws/credentials`, `**/secrets/**` |
-| `write_outside_workspace` | Edit/Write/MultiEdit có `file_path` tuyệt đối không nằm dưới `cwd` (sau khi chuẩn hóa `..`) |
-| `outbound_network` | `curl`, `wget`, `nc`, `ncat`, `ssh`, `scp`, `rsync`, `ftp` tới host không phải `localhost`/`127.0.0.1`/`::1` |
+| `write_outside_workspace` | Edit/Write/MultiEdit có `file_path` tuyệt đối không nằm dưới `cwd` (sau khi chuẩn hóa `..`); lệnh shell ghi/tạo/đổi quyền/**xóa đệ quy** (`rm -r`, `Remove-Item -Recurse`, `rd /s`) vào đường dẫn ngoài `cwd` hoặc không xác định được |
+| `outbound_network` | `curl`, `wget`, `nc`, `ncat`, `ssh`, `scp`, `rsync`, `ftp` tới host không phải `localhost`/`127.0.0.1`/`::1`; `gh`, `Start-BitsTransfer`; tra cứu/dò mạng (`nslookup`, `dig`, `host`, `ping`, `traceroute`, `whois`, `Resolve-DnsName`); `git push/fetch/pull/clone/ls-remote` với remote viết thẳng là URL tới máy khác (`https://…`, `ssh://…`, `git@host:repo`); đưa gói/ảnh lên (`npm|yarn|pnpm|bun|cargo publish`, `docker|podman push`, `twine upload`, `gem push`) |
 | `privilege` | `sudo`, `su `, `chmod 777`, `chown -R` |
 
 **`risk.rs`**
 ```
 Critical  nếu khớp bất kỳ luật danger
 High      nếu có Suspicion (HiddenChars, Subshell, Eval, Encoded) hoặc cài package (npm i, pnpm add, pip install, cargo add/install, brew install, apt)
-Medium    git push (không force), migration, ghi file trong workspace, lệnh không nhận diện
+Medium    git push tới remote đã đặt tên (`origin`) không force, migration, ghi file trong workspace, lệnh không nhận diện
 Low       chỉ đọc trong workspace, chạy test/lint/build (npm test, pnpm test, cargo test, cargo clippy, pytest, go test)
 ```
 `reversible = true` chỉ khi Low hoặc là migration có lệnh rollback được khai trong config (v0: chỉ Low).
@@ -887,7 +887,7 @@ giới hạn ở `docs/ARCHITECTURE.md`).
 **Bất biến:** `Policy::decide` với risk Critical **luôn** trả `AskUser`. Viết test thuộc tính (property-style, lặp
 qua toàn bộ bảng mẫu × mọi trust grant giả và batch rule giả).
 
-**Test bắt buộc:** mỗi luật ≥3 ca khớp và ≥2 ca không khớp (ví dụ `rm -r dir` không phải critical, `git push origin main` là medium);
+**Test bắt buộc:** mỗi luật ≥3 ca khớp và ≥2 ca không khớp (ví dụ `rm -r build` trong workspace không phải critical, `git push origin main` là medium; `rm -r ~` và `git push https://…` là critical);
 `zero_width_inside_rm_still_detected`; `bidi_override_flagged`; `quoted_semicolon_not_split`;
 `critical_never_auto_allowed_with_any_grant_or_batch`;
 `danger_spans_are_char_indices_with_non_ascii` (ví dụ `echo "🚀 thư mục" && rm -rf đầu-ra`: ký tự tiếng Việt và
@@ -947,10 +947,14 @@ ký tự ngoài BMP (🚀) nằm **trước** chỗ khớp, nên span theo byte,
   nhận `127.1`, `0`, `0x7f000001`, số thập phân 9–10 chữ số, `[::ffff:127.0.0.1]`.
 - `write_outside_workspace` thêm `touch`, `mkdir`, `truncate`, `unlink`, `shred`, `mkfifo`, `chmod/chown/chgrp`, `sed -i`, `perl -i`,
   `Set-Content`, `Add-Content`, `Out-File`, `New-Item`, `Clear-Content`.
-- **Chưa làm (chờ người quyết định, `CLAUDE.md` quy tắc 2 so với dòng `rm -r dir` / `git push origin main` Medium ở trên):** `rm -r` và
-  `Remove-Item -Recurse` không kèm `-f` ngoài workspace, `git push` thường tới URL lạ, danh sách "lệnh mạng ra ngoài" (`gh gist`, `npm publish`, `nslookup`…).
+- **Quyết định của người dùng 2026-10-27 (theo `CLAUDE.md` quy tắc 2, đã làm):** `rm -r` / `Remove-Item -Recurse` / `rd /s` có đích ngoài workspace là
+  `write_outside_workspace` (Critical); `git push|fetch|pull|clone|ls-remote` tới URL không cục bộ là `outbound_network` (Critical), còn remote đã đặt
+  tên (`git push origin main`, `HEAD:main`) vẫn Medium; thêm `gh`, `Start-BitsTransfer`, `nslookup`/`dig`/`host`/`ping`/`traceroute`/`whois`/`Resolve-DnsName`,
+  và đưa gói/ảnh lên (`npm|yarn|pnpm|bun|cargo publish`, `docker|podman push`, `twine upload`, `gem push`: mở rộng cùng loại ngoài danh sách người dùng nêu).
+  `rm -r` không kèm `-f` trong workspace (`rm -r build`) và `rm` thường ngoài workspace (`rm /tmp/x`) **không** bị khóa.
 - Test hồi quy: `danger::tests::{abbreviated_long_options_are_still_dangerous, quote_split_cannot_hide_token_state_or_hub_url,
   writes_outside_workspace_beyond_cp_and_redirects}`, `normalize::tests::unquoted_brace_expansion_is_unparsed`,
+  `recursive_delete_outside_workspace_is_write_outside_workspace`, `git_to_a_foreign_url_is_outbound_network`, `publish_and_lookup_commands_are_outbound_network`,
   `policy::tests::brace_expansion_is_never_auto_allowed_even_with_a_grant` và các ca mới trong `critical_samples` (Critical không bao giờ tự duyệt
   dù có grant hay batch).
 

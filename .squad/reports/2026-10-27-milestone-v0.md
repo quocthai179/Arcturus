@@ -43,3 +43,7 @@ Phát hiện 1–3 (mức Cao) đã sửa, kèm test hồi quy, ở nhánh `arc-
 bảng: `rm --rec --forc ~`, `git push --del/--mirr`, `git reset --har`, `git clean --forc`, `Remove-Item -Recurse:$true -Force:$true`,
 `ui-t''oken`, `local''host`, `127.1`, `sed -i … ~/.bashrc`, `touch ~/.bashrc` → Critical; `cat .e{nv,}` → High (không phân tích được).
 Còn mở: phát hiện 4 (`git push`/`rm -r`/"lệnh mạng ra ngoài": người dùng quyết định), 5–7, mục 1, 6, 7, 8 của cổng.
+
+**Quyết định của người dùng (cùng ngày):** theo `CLAUDE.md` quy tắc 2, `rm -r` ngoài workspace, `git push|fetch|pull|clone` tới URL lạ và các lệnh mạng ra
+ngoài (`gh`, `npm publish`, `nslookup/dig/ping`, `Start-BitsTransfer`…) là vùng khóa: đã làm (phát hiện 4 và phần còn lại của phát hiện 3), `PLAN.md` đã đồng bộ.
+Chưa đụng: `git push` tới remote đã đặt tên và `rm -r` trong workspace (vẫn Medium).
