@@ -1282,6 +1282,17 @@ bấm gửi `origin: User`; `paused` dừng mọi đồng hồ đang chạy và 
 `replay metrics` hoặc truy vấn SQL trong `scripts/metrics.sql`: thời gian chờ trung bình mỗi yêu cầu theo ngày,
 tỉ lệ `decided_by=policy`, số deny, số timeout. Baseline (trước Arcturus) đo tay, ghi vào `docs/DOGFOOD.md`.
 
+**Đã làm ở T20**
+- `scripts/metrics.sql` (chỉ đọc, năm truy vấn đánh dấu `-- @query`): `per_day` và `total` (số yêu cầu, chờ trung bình tính riêng phần người duyệt,
+  tỉ lệ `policy`, deny, timeout, trả về terminal, hủy), `auto_approved_risk` và `auto_approved_dangerous` (policy tự allow `high`/`critical`: phải
+  rỗng, tiêu chí "0 tự duyệt sai" của cổng v0), `agent_self_run` (mỗi lượt prompt → trả lời xong, trừ thời gian chờ duyệt, kẹp ≥ 0). Thời gian chờ chỉ tính yêu cầu có
+  quyết định (`allowed`, `denied`): hết giờ 110 s sẽ làm méo trung bình.
+- `scripts/metrics.py`: chạy file SQL trên máy không có `sqlite3` CLI, mở cơ sở dữ liệu chỉ đọc, in bảng.
+- Test: `crates/hub-core/tests/metrics_sql.rs` (7) chạy từng truy vấn trên cơ sở dữ liệu dựng bằng migration thật của `Store`, đáp số tính tay;
+  kiểm đột biến (đổi điều kiện trung bình thì test đỏ).
+- `docs/DOGFOOD.md` mục 10: cách lấy số "sau", cách đo baseline bằng tay, bảng kết quả (baseline và dogfood **chưa có số**: cần người dùng).
+- Chưa làm: baseline trước Arcturus (phải đo tay trên máy người dùng) và số dogfood ≥ 2 tuần.
+
 ### T21 · ARC-42 · Cổng v0
 
 Chạy `/milestone-gate v0`. Không code mới.

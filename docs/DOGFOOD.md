@@ -145,3 +145,48 @@ giữ nguyên. Mục hoặc khóa trở nên rỗng vì việc gỡ thì bị b�
 - Thấy `ARCTURUS_TOKEN` hay hook gây lỗi lạ: ghi lại phiên bản Claude Code (`claude --version`) và dòng log của hub.
 - Hub log ra stdout (hub chạy riêng) hoặc stderr của app (`[hub] …`); không bao giờ có token hay nội dung lệnh ở mức `info`.
 - Số đo cho T20 (thời gian xử lý mỗi yêu cầu, thời gian agent tự chạy) lấy từ bảng `approvals` (`latency_ms`) và `events`.
+
+## 10. Chỉ số của T20 (trước/sau Arcturus)
+
+Cổng v0 (`/milestone-gate v0`, mục Dogfood) đòi: dùng hằng ngày ≥ 2 tuần, **thời gian xử lý trung bình mỗi yêu cầu giảm ≥ 30%
+so với baseline**, **0 lần tự duyệt sai**. Các con số "sau" tính từ nhật ký SQLite của hub bằng `scripts/metrics.sql`; baseline
+(trước Arcturus) phải đo tay vì khi đó không có hub.
+
+### Lấy số "sau"
+
+```bash
+sqlite3 -header -column "<đường dẫn arcturus.db>" < scripts/metrics.sql   # máy có sqlite3
+python scripts/metrics.py                                                 # Windows/không có sqlite3 (mở CHỈ ĐỌC)
+```
+
+Đường dẫn mặc định của hub: Windows `%APPDATA%\arcturus\arcturus.db`, macOS `~/Library/Application Support/arcturus/arcturus.db`,
+Linux `~/.local/share/arcturus/arcturus.db` (hub in `db=...` ở dòng log đầu tiên). Năm truy vấn:
+
+| Truy vấn | Đọc gì | Dùng cho |
+|---|---|---|
+| `per_day` | mỗi ngày: số yêu cầu, chờ trung bình (`avg_wait_user_s` là phần người duyệt), `policy_pct`, deny, timeout | xu hướng, "dùng hằng ngày" (số ngày có dữ liệu) |
+| `total` | một dòng cho cả khoảng dữ liệu | so với baseline |
+| `auto_approved_risk` | số lần policy tự allow theo mức rủi ro | kiểm tự duyệt chỉ ở mức thấp |
+| `auto_approved_dangerous` | policy đã tự allow yêu cầu `high`/`critical` | **phải rỗng** (0 lần tự duyệt sai) |
+| `agent_self_run` | mỗi lượt (prompt → trả lời xong): thời gian cả lượt, tổng chờ duyệt, thời gian agent tự chạy | "thời gian agent tự chạy" |
+
+Chờ = từ lúc yêu cầu vào hub tới lúc có quyết định (`latency_ms`). Yêu cầu hết giờ, bị hủy và "trả về terminal" không có người
+quyết nên không đưa vào trung bình (đếm riêng). Yêu cầu chạy song song cộng dồn thời gian chờ, nên `avg_self_run_s` kẹp ở 0.
+
+### Đo baseline (làm tay, trước khi cài hook)
+
+1. Dùng Claude Code như bình thường, **chưa** chạy `dogfood-install.sh`.
+2. Mỗi lần hộp thoại xin quyền hiện ở terminal, bấm giờ từ lúc nó hiện tới lúc bạn trả lời (đồng hồ điện thoại hoặc ghi giờ
+   hai lần). Ghi ≥ 30 yêu cầu, ít nhất ở 3 ngày khác nhau.
+3. Điền trung bình giây/yêu cầu vào bảng dưới. Mục tiêu: "sau" ≤ 70% của baseline.
+
+### Bảng kết quả
+
+| | Khoảng ngày | Số yêu cầu | Chờ trung bình mỗi yêu cầu (giây) | Tự duyệt sai | Ghi chú |
+|---|---|---|---|---|---|
+| Baseline (trước Arcturus, đo tay) | _chưa đo_ | | | — | cần người dùng đo theo 3 bước trên |
+| Sau (Arcturus, `avg_wait_user_s`) | _chưa có dữ liệu dogfood_ | | | | |
+
+Trạng thái 2026-10-27 (máy phát triển): `arcturus.db` mặc định có 8 yêu cầu trong một ngày (2026-10-26), do thử T12/T14 chứ không phải
+dùng hằng ngày; 2 yêu cầu có người quyết định (trung bình 18 giây), 0 yêu cầu do policy tự duyệt, `auto_approved_dangerous` rỗng,
+chưa có lượt (prompt → trả lời) nào để tính `agent_self_run`. Không dùng các số này làm baseline hay kết quả dogfood.

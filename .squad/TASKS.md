@@ -89,7 +89,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 |---|---|---|---|---|---|
 | T18 · ARC-39 | lab | `hooks/arcturus-dogfood.json` + hướng dẫn cài/gỡ; bật dogfood | T5, T12 | 1 | review |
 | T19 · ARC-40 | hub | Standup sinh từ template (sự kiện + git log), 0 token | T6 | 2 | done |
-| T20 · ARC-41 | lab | Đo chỉ số: thời gian xử lý trung bình mỗi yêu cầu, thời gian agent tự chạy; so trước/sau | T18 | 1 | todo |
+| T20 · ARC-41 | lab | Đo chỉ số: thời gian xử lý trung bình mỗi yêu cầu, thời gian agent tự chạy; so trước/sau | T18 | 1 | review |
 | T21 · ARC-42 | main | `/milestone-gate v0` | tất cả | 1 | todo |
 
 ## Blocked
@@ -128,3 +128,4 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - 2026-10-27 · lab · T15/ARC-36 (nhánh `arc-36-replay`): `tools/replay` gửi fixture tới hub (số phiên, tốc độ, thời lượng, `--permission-mode allow|skip`, người duyệt giả qua WebSocket, p50/p95/p99, `--assert-p99-ms`), tách thư viện + binary; 9 test đơn vị + 6 test tích hợp với hub thật. Hub release, 5 phiên, 200/giây: p99 0,93 ms. · Vướng: không.
 - 2026-10-27 · main · Đồng bộ bảng với YouTrack sau khi merge PR #16–#22: T7, T9, T10, T15, T17, T19 và T14 → `done`. T6 (ARC-27) và T12 (ARC-33) trở về `review` vì tiêu chí ngân sách còn chưa đo đủ trên Windows (hub idle 18,2 MB WS so với 15 MB; popup bản release chưa đo, bản dev 300–380 ms so với ≤300 ms); T13 (ARC-34) và T18 (ARC-39) giữ `review` (profiler tab ẩn, cài/gỡ trên máy sạch). Còn `todo`: T16, T20, T21. Chi tiết ở comment từng ticket. · Vướng: không.
 - 2026-10-27 · lab · T16/ARC-37 (nhánh `arc-37-measure`): `scripts/measure.ps1`, `scripts/measure.sh`, chế độ đo popup trong app (`ARCTURUS_MEASURE_POPUP`), test của script. Đo lại trên Windows: hub ĐẠT (idle 13,4 MB, đỉnh 16,7 MB, p99 0,32 ms) nên T6/ARC-27 → `done`. T12/ARC-33 → `done` sau khi thêm prewarm khi rê chuột: popup mở 44 ms kể từ lúc bấm khi con trỏ đã vào icon 500 ms trước (đường nguội ≈400 ms), sau đóng 32,8 MB; popup mở vẫn 367 MB WS so với ≤150 MB. Chi tiết ở `docs/BUDGET.md`. · Người dùng đã tự kiểm bằng chuột thật trên bản release (2026-10-27): thấy `popup_prewarmed` trước `popup_shown` và `popup_ready` dưới 300 ms. · Vướng: không.
+- 2026-10-27 · lab · T20/ARC-41 (nhánh `arc-41-metrics`): `scripts/metrics.sql` (5 truy vấn), `scripts/metrics.py` (không cần sqlite3 CLI, chỉ đọc), test `hub-core/tests/metrics_sql.rs` (7, kiểm đột biến), `docs/DOGFOOD.md` mục 10. Số liệu thật chưa có: baseline phải đo tay và dogfood ≥ 2 tuần chưa diễn ra (DB trên máy dev chỉ có 8 yêu cầu thử). · Vướng: cần người dùng đo baseline và dùng hằng ngày.
