@@ -22,7 +22,8 @@ use axum::routing::get;
 use axum::Router;
 use futures_util::{SinkExt, StreamExt};
 use hub_core::policy::batch::{self, BatchError};
-use hub_core::protocol::{ClientMsg, ServerMsg};
+use hub_core::policy::trust::{self, Answered, TrustError};
+use hub_core::protocol::{ClientMsg, ServerMsg, TrustSuggestionView};
 use hub_core::schema::Decision;
 use serde::Deserialize;
 use time::OffsetDateTime;
@@ -386,6 +387,11 @@ async fn client(st: Arc<WsState>, socket: WebSocket) {
     if !send!(snapshot(&st.hub)) {
         return;
     }
+    for m in suggestions(&st.hub) {
+        if !send!(m) {
+            return;
+        }
+    }
     let mut ping =
         tokio::time::interval_at(Instant::now() + st.cfg.ping_interval, st.cfg.ping_interval);
     let mut missed_pongs = 0u32;
@@ -441,6 +447,16 @@ async fn client(st: Arc<WsState>, socket: WebSocket) {
                     if !send!(snapshot(&st.hub)) {
                         break "ghi quá giờ";
                     }
+                    let mut sent = true;
+                    for m in suggestions(&st.hub) {
+                        if !send!(m) {
+                            sent = false;
+                            break;
+                        }
+                    }
+                    if !sent {
+                        break "ghi quá giờ";
+                    }
                 }
                 Err(broadcast::error::RecvError::Closed) => break "kênh đóng",
             },
@@ -466,6 +482,18 @@ fn snapshot(hub: &Hub) -> Message {
         team: hub.team_view(),
     };
     text(&msg)
+}
+
+/// Đề xuất đang chờ, gửi ngay sau `Snapshot` để client mới (hoặc client vừa tụt kênh) cũng thấy.
+fn suggestions(hub: &Hub) -> Vec<Message> {
+    hub.pending_suggestions()
+        .iter()
+        .map(|s| {
+            text(&ServerMsg::Suggestion {
+                suggestion: TrustSuggestionView::from(s),
+            })
+        })
+        .collect()
 }
 
 fn feed(text_: &str) -> Message {
@@ -615,6 +643,17 @@ fn handle(st: &WsState, conn: u64, raw: &str, limiter: &mut Limiter) -> Vec<Mess
                 vec![feed("Không có quy tắc nào đang mở cho nhóm này")]
             }
         }
-        ClientMsg::SuggestionAnswer { .. } => vec![feed("Lệnh này chưa được hỗ trợ")],
+        ClientMsg::SuggestionAnswer { .. } if !limiter.allow() => {
+            vec![feed("Quá nhiều lệnh duyệt, hãy thử lại sau")]
+        }
+        ClientMsg::SuggestionAnswer { id, accept } => match st.hub.trust_answer(&id, accept) {
+            // Chấp nhận: `trust_answer` đã broadcast `Feed`.
+            Ok(Answered::Granted(_)) => Vec::new(),
+            Ok(Answered::Declined) => vec![feed(&format!(
+                "Sẽ không đề xuất lại trong {} ngày",
+                trust::DECLINE_DAYS
+            ))],
+            Err(TrustError::UnknownSuggestion) => vec![feed("Đề xuất không còn hiệu lực")],
+        },
     }
 }

@@ -11,7 +11,7 @@ use std::time::Duration;
 
 use futures_util::{SinkExt, StreamExt};
 use hub::approvals::{ApprovalsConfig, NoStore, PermissionOutcome};
-use hub::hub::{approvals_config, Hub, HubTasks};
+use hub::hub::{approvals_config, Automation, Hub, HubTasks};
 use hub::ws::{self, WsConfig};
 use hub::{hooks, server};
 use hub_core::config::Config;
@@ -19,6 +19,7 @@ use hub_core::hook::{self, HookInput};
 use hub_core::persona::PersonaBook;
 use hub_core::policy::batch::BatchRules;
 use hub_core::policy::danger::DangerConfig;
+use hub_core::policy::trust::TrustBook;
 use hub_core::policy::RulesPolicy;
 use hub_core::protocol::ServerMsg;
 use hub_core::schema::Decision;
@@ -74,6 +75,13 @@ fn fake_batch() -> (Arc<BatchRules>, Arc<AtomicI64>) {
     (batch, secs)
 }
 
+fn automation(batch: &Arc<BatchRules>) -> Automation {
+    Automation {
+        batch: batch.clone(),
+        trust: Arc::new(TrustBook::new(&Config::default().trust)),
+    }
+}
+
 fn acfg(min_review: Duration) -> ApprovalsConfig {
     ApprovalsConfig {
         min_review,
@@ -99,7 +107,7 @@ impl H {
             acfg(min_review),
             Box::new(policy),
             Box::new(db.handle()),
-            batch.clone(),
+            automation(&batch),
         );
         H {
             hub,
@@ -446,7 +454,7 @@ async fn expiry_is_announced_once_by_a_single_timer_and_renewal_defers_it() {
         acfg(Duration::ZERO),
         Box::new(policy),
         Box::new(NoStore),
-        batch.clone(),
+        automation(&batch),
     );
     let mut rx = hub.subscribe();
     hub.batch_open("Bash:ls", 1).unwrap();

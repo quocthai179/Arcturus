@@ -57,6 +57,51 @@ pub enum ServerMsg {
     HandoffCleared {
         handoff_id: String,
     },
+    /// Đề xuất nâng mức tin cậy (T10). Trả lời bằng `ClientMsg::SuggestionAnswer`. Client mới kết nối nhận lại các đề xuất đang
+    /// chờ ngay sau `Snapshot`.
+    Suggestion {
+        suggestion: TrustSuggestionView,
+    },
+}
+
+/// Đề xuất cho người dùng (T10). `text` do hub dựng từ template (không LLM); `subject` và `pattern` đã hiện ký tự ẩn.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub struct TrustSuggestionView {
+    pub id: String,
+    /// Tên persona.
+    pub subject: String,
+    /// `group_key` của nhóm lệnh.
+    pub pattern: String,
+    /// Mức đề xuất (6 = tự chạy).
+    pub level: u8,
+    pub approved_in_row: u32,
+    pub window_days: u32,
+    pub grant_days: u32,
+    pub text: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+}
+
+impl From<&crate::policy::trust::TrustSuggestion> for TrustSuggestionView {
+    fn from(s: &crate::policy::trust::TrustSuggestion) -> Self {
+        let subject = crate::policy::normalize::display(&s.subject).text;
+        let pattern = crate::policy::normalize::display(&s.pattern).text;
+        TrustSuggestionView {
+            id: s.id.clone(),
+            text: format!(
+                "{subject} đã được bạn duyệt {} lần liên tiếp cho \"{pattern}\" trong {} ngày. Cho phép tự chạy trong {} ngày? \
+                 (Chỉ yêu cầu rủi ro thấp/vừa; vùng khóa vẫn hỏi bạn.)",
+                s.approved_in_row, s.window_days, s.grant_days
+            ),
+            subject,
+            pattern,
+            level: s.level,
+            approved_in_row: s.approved_in_row,
+            window_days: s.window_days,
+            grant_days: s.grant_days,
+            created_at: s.created_at,
+        }
+    }
 }
 
 /// Thẻ báo cho lệnh trả về terminal. Không phải thẻ duyệt: UI không được hiện nút Allow/Deny cho nó.
@@ -205,6 +250,37 @@ mod tests {
     use super::*;
     use serde_json::json;
     use time::macros::datetime;
+
+    #[test]
+    fn suggestion_wire_format_and_text_escape_hidden_characters() {
+        use crate::policy::trust::TrustSuggestion;
+        let s = TrustSuggestion {
+            id: "sug_1".to_owned(),
+            subject: "Kh\u{202E}oa".to_owned(),
+            pattern: "Bash:npm test".to_owned(),
+            level: 6,
+            approved_in_row: 20,
+            window_days: 7,
+            grant_days: 30,
+            created_at: datetime!(2026-10-27 10:00 UTC),
+        };
+        let msg = ServerMsg::Suggestion {
+            suggestion: TrustSuggestionView::from(&s),
+        };
+        let v = serde_json::to_value(&msg).unwrap();
+        assert_eq!(v["t"], "suggestion");
+        assert_eq!(v["suggestion"]["id"], "sug_1");
+        assert_eq!(v["suggestion"]["level"], 6);
+        assert_eq!(v["suggestion"]["subject"], "Kh⟨U+202E⟩oa");
+        let text = v["suggestion"]["text"].as_str().unwrap();
+        assert!(
+            text.contains("20 lần liên tiếp") && text.contains("\"Bash:npm test\""),
+            "{text}"
+        );
+        assert!(!text.contains('\u{202E}'));
+        let back: ServerMsg = serde_json::from_value(v).unwrap();
+        assert!(matches!(back, ServerMsg::Suggestion { .. }));
+    }
 
     #[test]
     fn server_msg_wire_format() {

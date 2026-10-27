@@ -1,6 +1,14 @@
 // Trạng thái UI dựng từ snapshot + delta của hub (docs/PROTOCOL.md "Vòng đời"): snapshot thay toàn bộ; delta là upsert
 // theo id; xóa id không biết thì bỏ qua. UI không bao giờ tự suy luận trạng thái ngoài các thông điệp này.
-import type { AgentId, AgentView, ApprovalView, HandoffView, ServerMsg, TeamView } from './protocol';
+import type {
+  AgentId,
+  AgentView,
+  ApprovalView,
+  HandoffView,
+  ServerMsg,
+  TeamView,
+  TrustSuggestionView,
+} from './protocol';
 
 export type ConnectionStatus = 'connecting' | 'open' | 'closed';
 
@@ -22,6 +30,8 @@ export interface HubState {
   team: TeamView;
   /** Mới nhất trước, tối đa [`FEED_MAX`]. */
   feed: FeedItem[];
+  /** Đề xuất nâng mức tin cậy đang chờ trả lời (T10). */
+  suggestions: TrustSuggestionView[];
 }
 
 export const FEED_MAX = 5;
@@ -35,6 +45,7 @@ export const initialState: HubState = {
   handoffs: [],
   team: { paused: false, focus: false, roster_max: 5 },
   feed: [],
+  suggestions: [],
 };
 
 export type Action =
@@ -68,6 +79,8 @@ export function applyServer(state: HubState, msg: ServerMsg): HubState {
       return {
         ...state,
         synced: true,
+        // Hub gửi lại các đề xuất còn chờ ngay sau snapshot.
+        suggestions: [],
         agents,
         queue: msg.team.paused ? withoutCountdown(queue) : queue,
         handoffs: [...msg.handoffs].sort(byCreated),
@@ -99,6 +112,8 @@ export function applyServer(state: HubState, msg: ServerMsg): HubState {
     case 'team_updated':
       // Tạm dừng xóa đếm ngược của mọi yêu cầu; tiếp tục không khôi phục (chỉ yêu cầu tới sau mới có).
       return { ...state, team: msg.team, queue: msg.team.paused ? withoutCountdown(state.queue) : state.queue };
+    case 'suggestion':
+      return { ...state, suggestions: upsert(state.suggestions, msg.suggestion, (x) => x.id) };
     case 'feed':
       return { ...state, feed: [{ text: msg.text, ts: msg.ts }, ...state.feed].slice(0, FEED_MAX) };
   }

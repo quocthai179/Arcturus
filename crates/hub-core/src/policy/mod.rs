@@ -13,6 +13,7 @@ pub mod danger;
 pub mod group;
 pub mod normalize;
 pub mod risk;
+pub mod trust;
 
 use std::time::Duration;
 
@@ -26,6 +27,8 @@ use normalize::{normalize, value_has_hidden};
 /// Ngữ cảnh một yêu cầu duyệt, đưa cho policy.
 pub struct ApprovalCtx<'a> {
     pub agent_id: &'a str,
+    /// Tên persona của agent (ổn định qua phiên): chủ thể của trust grant (T10). Rỗng nếu không biết.
+    pub subject: &'a str,
     pub tool: &'a str,
     pub tool_input: &'a Value,
     pub cwd: &'a str,
@@ -257,6 +260,7 @@ mod tests {
         assess(
             &ApprovalCtx {
                 agent_id: "agt_s",
+                subject: "Khoa",
                 tool,
                 tool_input: input,
                 cwd: CWD,
@@ -365,6 +369,7 @@ mod tests {
         for (tool, input) in critical_samples() {
             let ctx = ApprovalCtx {
                 agent_id: "agt_s",
+                subject: "Khoa",
                 tool,
                 tool_input: &input,
                 cwd: CWD,
@@ -402,6 +407,7 @@ mod tests {
         let p = RulesPolicy::new().with(Box::new(AlwaysGrant));
         let ctx = ApprovalCtx {
             agent_id: "a",
+            subject: "Khoa",
             tool: "Bash",
             tool_input: &json!({}),
             cwd: CWD,
@@ -420,6 +426,7 @@ mod tests {
         let ctx_input = json!({});
         let ctx = ApprovalCtx {
             agent_id: "a",
+            subject: "Khoa",
             tool: "Bash",
             tool_input: &ctx_input,
             cwd: CWD,
