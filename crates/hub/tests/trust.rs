@@ -618,3 +618,35 @@ async fn new_clients_get_pending_suggestions_and_can_answer_over_websocket() {
     s.stop().await;
     h.finish();
 }
+
+/// Hồi quy (cổng v0, phát hiện 6): một lần "duyệt gộp" là MỘT quyết định của người, không cộng N lần vào chuỗi trust
+/// (nếu không, một cú bấm đủ ngưỡng đề xuất tự chạy).
+#[tokio::test]
+async fn group_approval_counts_once_in_the_streak() {
+    let h = H::start();
+    let mut rx = h.hub.subscribe();
+    let tasks: Vec<_> = (0..3)
+        .map(|i| {
+            h.request(
+                "Khoa",
+                &format!("sess-gop-{i}"),
+                "Bash",
+                json!({ "command": "npm test" }),
+            )
+        })
+        .collect();
+    h.pending(3).await;
+
+    let r = h.hub.approvals.decide_group(KEY, Decision::Allow);
+    assert_eq!(r.decided, 3, "{r:?}");
+    for t in tasks {
+        done(t).await;
+    }
+
+    assert_eq!(h.trust.streak("Khoa", KEY).unwrap().approved_in_row, 1);
+    assert!(
+        suggestion_ids(&drain(&mut rx)).is_empty(),
+        "3 yêu cầu trong một cú bấm không được đủ ngưỡng 3"
+    );
+    h.finish();
+}

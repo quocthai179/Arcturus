@@ -36,17 +36,36 @@ pub enum StandupError {
 /// Chạy `git log` thật. Lỗi ở mọi bước (không có git, không phải repo, hết giờ) cho kết quả rỗng.
 pub struct SystemGit;
 
+/// `cwd` do agent gửi, không tin cậy: đường UNC (`\\host\share`, `//host/share`) làm Windows mở kết nối SMB tới máy lạ,
+/// nên chỉ chạy `git` ở thư mục cục bộ.
+fn is_local_cwd(cwd: &str) -> bool {
+    !(cwd.is_empty() || cwd.starts_with("\\\\") || cwd.starts_with("//"))
+}
+
 impl GitLog for SystemGit {
     fn commits(&self, cwd: &str, since: OffsetDateTime) -> Vec<String> {
+        if !is_local_cwd(cwd) {
+            return Vec::new();
+        }
         let mut cmd = Command::new("git");
-        cmd.args(["-C", cwd, "-c", "core.fsmonitor=false", "--no-pager", "log"])
-            .args(["--no-merges", "-n", GIT_MAX_COMMITS, "--format=%h %s"])
-            .arg(format!("--since={}", format_ts(since)))
-            .env("GIT_TERMINAL_PROMPT", "0")
-            .env("GIT_OPTIONAL_LOCKS", "0")
-            .stdin(Stdio::null())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::null());
+        // `.git/config` của repo do agent ghi được: `log.showSignature=true` + `gpg.program` sẽ chạy chương trình tùy ý.
+        // `-c` trên dòng lệnh thắng cấu hình repo.
+        cmd.args([
+            "-C",
+            cwd,
+            "-c",
+            "core.fsmonitor=false",
+            "-c",
+            "log.showSignature=false",
+        ])
+        .args(["--no-pager", "log"])
+        .args(["--no-merges", "-n", GIT_MAX_COMMITS, "--format=%h %s"])
+        .arg(format!("--since={}", format_ts(since)))
+        .env("GIT_TERMINAL_PROMPT", "0")
+        .env("GIT_OPTIONAL_LOCKS", "0")
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null());
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
@@ -146,4 +165,115 @@ pub fn standup_for(
         },
         git,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    #![allow(clippy::unwrap_used, clippy::expect_used)]
+
+    use super::*;
+    use std::io::Write;
+    use std::path::{Path, PathBuf};
+
+    fn git(dir: &Path, args: &[&str], stdin: Option<&str>) -> String {
+        let mut child = Command::new("git")
+            .arg("-C")
+            .arg(dir)
+            .args(args)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        if let Some(s) = stdin {
+            child.stdin.take().unwrap().write_all(s.as_bytes()).unwrap();
+        } else {
+            drop(child.stdin.take());
+        }
+        let out = child.wait_with_output().unwrap();
+        assert!(out.status.success(), "git {args:?} lỗi");
+        String::from_utf8(out.stdout).unwrap().trim().to_owned()
+    }
+
+    fn temp_repo(tag: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "arcturus-standup-{tag}-{}-{}",
+            std::process::id(),
+            OffsetDateTime::now_utc().unix_timestamp_nanos()
+        ));
+        std::fs::create_dir_all(&dir).unwrap();
+        git(&dir, &["init", "-q"], None);
+        dir
+    }
+
+    #[test]
+    fn unc_and_empty_cwd_are_not_local() {
+        assert!(!is_local_cwd(""));
+        assert!(!is_local_cwd(r"\\evil\share\repo"));
+        assert!(!is_local_cwd("//evil/share/repo"));
+        assert!(is_local_cwd(r"C:\code\repo"));
+        assert!(is_local_cwd("/home/u/repo"));
+    }
+
+    #[test]
+    fn unc_cwd_returns_nothing_without_spawning_git() {
+        let since = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        assert!(SystemGit
+            .commits(r"\\127.0.0.1\nope\repo", since)
+            .is_empty());
+    }
+
+    /// Hồi quy (cổng v0, phát hiện 5): `.git/config` do agent ghi có `log.showSignature=true` + `gpg.program`; commit mang
+    /// header `gpgsig` làm `git log` chạy chương trình đó. `standup` phải tắt kiểm chữ ký.
+    #[test]
+    fn repo_config_cannot_make_standup_run_gpg_program() {
+        let dir = temp_repo("gpg");
+        let marker = dir.join("gpg-ran");
+        let script = dir.join("fake-gpg.sh");
+        std::fs::write(
+            &script,
+            format!(
+                "#!/bin/sh\ntouch \"{}\"\nexit 1\n",
+                marker.to_string_lossy().replace('\\', "/")
+            ),
+        )
+        .unwrap();
+        git(&dir, &["config", "log.showSignature", "true"], None);
+        git(
+            &dir,
+            &[
+                "config",
+                "gpg.program",
+                &script.to_string_lossy().replace('\\', "/"),
+            ],
+            None,
+        );
+        let tree = git(
+            &dir,
+            &["hash-object", "-t", "tree", "-w", "--stdin"],
+            Some(""),
+        );
+        let ts = OffsetDateTime::now_utc().unix_timestamp();
+        let body = format!(
+            "tree {tree}\nauthor A <a@b.c> {ts} +0000\ncommitter A <a@b.c> {ts} +0000\n\
+             gpgsig -----BEGIN PGP SIGNATURE-----\n \n abcd\n -----END PGP SIGNATURE-----\n\nlam viec\n"
+        );
+        let commit = git(
+            &dir,
+            &["hash-object", "-t", "commit", "-w", "--stdin"],
+            Some(&body),
+        );
+        git(&dir, &["update-ref", "HEAD", &commit], None);
+
+        let since = OffsetDateTime::now_utc() - time::Duration::hours(1);
+        let lines = SystemGit.commits(&dir.to_string_lossy(), since);
+
+        assert!(
+            !marker.exists(),
+            "git log đã chạy gpg.program do repo chỉ định"
+        );
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(lines[0].ends_with("lam viec"), "{lines:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
 }

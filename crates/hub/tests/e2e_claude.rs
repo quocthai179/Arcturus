@@ -396,3 +396,37 @@ async fn e2e_hub_down_never_allows_and_claude_does_not_hang() {
     );
     assert!(run.elapsed < CLAUDE_TIMEOUT, "{}", run.describe());
 }
+
+/// Máy chủ giả trả `status` cho mọi yêu cầu (non-2xx từ hub). Trả cổng; máy chủ chạy tới hết test.
+async fn stub_status(status: u16) -> SocketAddr {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let code = axum::http::StatusCode::from_u16(status).unwrap();
+    let app = axum::Router::new().fallback(move || async move { (code, "stub") });
+    tokio::spawn(async move {
+        let _ = axum::serve(listener, app).await;
+    });
+    addr
+}
+
+/// Non-2xx (CLAUDE.md "CHƯA kiểm chứng", T17): hub lỗi (500) hay sai token (401) là lỗi không chặn; Claude Code không
+/// treo và không bao giờ coi đó là allow.
+#[tokio::test(flavor = "multi_thread")]
+#[ignore = "cần Claude Code thật; chạy tay, xem đầu tệp"]
+async fn e2e_non_2xx_never_allows_and_claude_does_not_hang() {
+    if !claude_available() {
+        return;
+    }
+    for status in [500u16, 401] {
+        let proj = project();
+        let addr = stub_status(status).await;
+        let settings = settings_file(&proj.0, addr);
+        let run = run_claude(&proj, &settings).await;
+        assert!(
+            !marker(&proj),
+            "hub trả {status}: không có allow\n{}",
+            run.describe()
+        );
+        assert!(run.elapsed < CLAUDE_TIMEOUT, "{}", run.describe());
+    }
+}

@@ -128,4 +128,6 @@ messaging) hoặc ghi vào mục "Blocked" trong `.squad/TASKS.md`.
   **không đóng** kết nối HTTP; lệnh chạy ngay, câu trả lời muộn của hub không còn tác dụng. Hub phải tự dọn yêu cầu đó:
   hủy (trả `{}`) khi thấy `PostToolUse`/`PostToolUseFailure` cùng agent và cùng `tool_name` + `tool_input`, hoặc
   `Stop`/`StopFailure`/`UserPromptSubmit`/`SubagentStop` của cùng agent (chi tiết: `docs/HOOK_FINDINGS.md` Q1b).
-- CHƯA kiểm chứng: non-2xx, lỗi kết nối và hết giờ trên máy thật (T17); agent teams (Q9).
+- Đã kiểm chứng ở T17 (v2.1.308, `crates/hub/tests/e2e_claude.rs`, `claude -p`): allow chạy lệnh; deny, hết giờ (`{}`), hub tắt
+  (lỗi kết nối) và non-2xx (500, 401) đều **không** chạy lệnh và Claude Code không treo.
+- CHƯA kiểm chứng: agent teams (Q9).

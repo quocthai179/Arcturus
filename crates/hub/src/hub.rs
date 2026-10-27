@@ -6,6 +6,7 @@
 //! `ApprovalResolved` trước `AgentRemoved`.
 
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 use std::time::Duration;
 
@@ -35,6 +36,11 @@ pub const BROADCAST_CAPACITY: usize = 256;
 
 /// Sức chứa hàng đợi `/hooks/event` (§3.5).
 pub const EVENT_QUEUE: usize = 1024;
+
+/// Trần byte (ước lượng bộ nhớ sau khi parse) của các sự kiện đang chờ trong hàng đợi `/hooks/event`. Token hook nằm trong
+/// môi trường của agent, nên agent gửi dồn sự kiện 1 MiB thì 1.024 mục sẽ ăn cả GiB: quá trần thì bỏ sự kiện (giống hàng
+/// đợi đầy), không bao giờ ảnh hưởng luồng duyệt. Cùng mức với `held_input_max_bytes` mặc định.
+pub const EVENT_QUEUE_MAX_BYTES: usize = 8 * 1024 * 1024;
 
 /// Hai nguồn tự duyệt của policy thật: batch rule (T9) và trust grant (T10). Cùng bộ được cắm vào `RulesPolicy` và đưa vào
 /// hub để lệnh WebSocket thao tác.
@@ -67,7 +73,9 @@ pub struct Hub {
     pub approvals: Approvals,
     state: Mutex<TeamState>,
     tx: broadcast::Sender<ServerMsg>,
-    events: mpsc::Sender<HookInput>,
+    events: mpsc::Sender<(HookInput, usize)>,
+    /// Tổng chi phí byte của các mục đang nằm trong `events` (xem [`EVENT_QUEUE_MAX_BYTES`]).
+    event_bytes: Arc<AtomicUsize>,
     /// Thời điểm cần `tick` sớm nhất (`TeamState::next_wakeup`); `None` thì task tick ngủ, không hẹn giờ.
     wake: watch::Sender<Option<OffsetDateTime>>,
     /// Sự kiện gần nhất trong RAM (tối đa 2.000 / 2 MiB, T6). Khóa riêng, không giữ cùng khóa nào khác.
@@ -155,6 +163,7 @@ impl Hub {
         let Automation { batch, trust } = auto;
         let (tx, _) = broadcast::channel(BROADCAST_CAPACITY);
         let (events, events_rx) = mpsc::channel(EVENT_QUEUE);
+        let event_bytes = Arc::new(AtomicUsize::new(0));
         let (wake, wake_rx) = watch::channel(None);
         let hub = Arc::new(Hub {
             approvals: Approvals::with_trust(approvals_cfg, policy, store, tx.clone(), trust),
@@ -164,6 +173,7 @@ impl Hub {
             state: Mutex::new(TeamState::default()),
             tx,
             events,
+            event_bytes: event_bytes.clone(),
             wake,
             recent: Mutex::new(EventRing::default()),
             team: Mutex::new(()),
@@ -171,7 +181,7 @@ impl Hub {
             db_path: OnceLock::new(),
         });
         let tasks = HubTasks {
-            events: tokio::spawn(event_loop(Arc::downgrade(&hub), events_rx)),
+            events: tokio::spawn(event_loop(Arc::downgrade(&hub), events_rx, event_bytes)),
             tick: tokio::spawn(tick_loop(Arc::downgrade(&hub), wake_rx)),
         };
         (hub, tasks)
@@ -318,8 +328,23 @@ impl Hub {
 
     /// `/hooks/event`: đưa vào hàng đợi, không chờ. Hàng đợi đầy thì bỏ (mất `SessionEnd` chỉ làm yêu cầu đang chờ
     /// hết giờ và trả `{}`, an toàn).
-    pub fn enqueue_event(&self, input: HookInput) {
-        if let Err(err) = self.events.try_send(input) {
+    ///
+    /// `cost` là ước lượng bộ nhớ của `input` ([`crate::hooks::parse_estimate`]). Quá [`EVENT_QUEUE_MAX_BYTES`] thì bỏ sự
+    /// kiện; hàng đợi trống luôn nhận được một mục (dù lớn) để sự kiện hợp lệ lớn không bị bỏ oan.
+    pub fn enqueue_event(&self, input: HookInput, cost: usize) {
+        let cost = cost.min(EVENT_QUEUE_MAX_BYTES);
+        let before = self.event_bytes.fetch_add(cost, Ordering::Relaxed);
+        if before != 0 && before + cost > EVENT_QUEUE_MAX_BYTES {
+            self.event_bytes.fetch_sub(cost, Ordering::Relaxed);
+            tracing::warn!(
+                cost,
+                queued = before,
+                "bỏ sự kiện hook: hàng đợi vượt ngân sách byte"
+            );
+            return;
+        }
+        if let Err(err) = self.events.try_send((input, cost)) {
+            self.event_bytes.fetch_sub(cost, Ordering::Relaxed);
             tracing::warn!(%err, "bỏ sự kiện hook: hàng đợi đầy hoặc đã đóng");
         }
     }
@@ -476,8 +501,13 @@ pub fn approvals_config(cfg: &Config, danger: DangerConfig) -> ApprovalsConfig {
 }
 
 /// Đọc `/hooks/event` theo thứ tự đến. Dừng khi hub bị drop.
-async fn event_loop(hub: std::sync::Weak<Hub>, mut rx: mpsc::Receiver<HookInput>) {
-    while let Some(input) = rx.recv().await {
+async fn event_loop(
+    hub: std::sync::Weak<Hub>,
+    mut rx: mpsc::Receiver<(HookInput, usize)>,
+    event_bytes: Arc<AtomicUsize>,
+) {
+    while let Some((input, cost)) = rx.recv().await {
+        event_bytes.fetch_sub(cost, Ordering::Relaxed);
         let Some(hub) = hub.upgrade() else {
             break;
         };

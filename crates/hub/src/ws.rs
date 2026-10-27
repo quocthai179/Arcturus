@@ -164,25 +164,29 @@ pub fn router(hub: Arc<Hub>, ui_token: String, port: u16, cfg: WsConfig) -> (Rou
     )
 }
 
+/// `Host` là địa chỉ loopback của chính hub (chặn DNS rebinding). Dùng chung cho UI và route hook.
+pub fn host_is_local(headers: &header::HeaderMap, port: u16) -> bool {
+    headers
+        .get(header::HOST)
+        .and_then(|h| h.to_str().ok())
+        .is_some_and(|h| {
+            [
+                format!("127.0.0.1:{port}"),
+                format!("localhost:{port}"),
+                format!("[::1]:{port}"),
+            ]
+            .iter()
+            .any(|ok| h.eq_ignore_ascii_case(ok))
+        })
+}
+
 /// `Host` loopback của chính hub; `Origin` (nếu có) trong danh sách. Sai → 403.
 async fn require_local_origin(
     State(st): State<Arc<WsState>>,
     req: Request,
     next: Next,
 ) -> Response {
-    let host_ok = req
-        .headers()
-        .get(header::HOST)
-        .and_then(|h| h.to_str().ok())
-        .is_some_and(|h| {
-            [
-                format!("127.0.0.1:{}", st.port),
-                format!("localhost:{}", st.port),
-                format!("[::1]:{}", st.port),
-            ]
-            .iter()
-            .any(|ok| h.eq_ignore_ascii_case(ok))
-        });
+    let host_ok = host_is_local(req.headers(), st.port);
     let origin_ok = match req.headers().get(header::ORIGIN) {
         None => true,
         Some(o) => o.to_str().is_ok_and(origin_allowed),
