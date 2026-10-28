@@ -7,11 +7,11 @@
 import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ComponentType } from 'react';
 import { allowGate, RISK_LABELS, SUSPICION_LABELS } from '../components/ApprovalCard';
 import { Character } from '../components/Character';
-import { initialMemory, think, SLEEP_AFTER_MS, type BrainMemory, type BrainOutput } from '../pet/brain';
+import { AWAY_MS, awayDigest, glance, initialMemory, think, SLEEP_AFTER_MS, type BrainMemory, type BrainOutput, type JournalEntry } from '../pet/brain';
 import { helpText, parseCommand, type PetAction, type PetClientMsg } from '../pet/commands';
 import { tauriPetApi, type PetApi } from '../pet/petApi';
 import type { PetSceneProps } from '../pet/scene/PetScene';
-import type { ModelInfo, PetMood, PetSettings } from '../pet/types';
+import { CHATTER_LABELS, CHATTERS, PET_SIZES, SIZE_LABELS, type Chatter, type ModelInfo, type PetMood, type PetSettings, type PetSize } from '../pet/types';
 import { useVoice, voiceAvailable } from '../pet/useVoice';
 import type { ApprovalView, ClientMsg, Mood } from '../protocol';
 import type { HubState } from '../store';
@@ -29,6 +29,18 @@ export const BUBBLE_MAX_CHARS = 280;
 export const BUBBLE_MAX_LINES = 6;
 const SAY_MS = 8_000;
 const PET_COOLDOWN_MS = 20_000;
+/** Sau câu tóm tắt lúc vắng, cú bấm kế tiếp không đè bằng câu trạng thái trong chừng này. */
+const DIGEST_HOLD_MS = 4_000;
+
+function next<T>(list: readonly T[], cur: T): T {
+  const i = list.indexOf(cur);
+  return list[(i + 1) % list.length] ?? cur;
+}
+
+function clock(at: number): string {
+  const d = new Date(at);
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`;
+}
 
 export function fitsBubble(a: ApprovalView): boolean {
   return !a.truncated && Array.from(a.command_normalized).length <= BUBBLE_MAX_CHARS && a.command_normalized.split('\n').length <= BUBBLE_MAX_LINES;
@@ -110,13 +122,14 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
   // --- tầng 0 ---
   const [say, setSay] = useState<Say | null>(null);
   const voice = useVoice(settings?.voice === true);
+  const chatter: Chatter = settings?.chatter ?? 'normal';
   const memory = useRef<BrainMemory>(initialMemory(Date.now()));
   const [brain, setBrain] = useState<BrainOutput>(() => think(state, memory.current, Date.now()));
   const [tick, setTick] = useState(0);
   const [napping, setNapping] = useState(false);
   const speak = voice.speak;
   useEffect(() => {
-    const out = think(state, memory.current, Date.now());
+    const out = think(state, memory.current, Date.now(), SLEEP_AFTER_MS, chatter);
     memory.current = out.memory;
     setBrain(out);
     if (out.speech !== null) {
@@ -124,7 +137,7 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
       setSay({ text: out.speech.text, until: Date.now() + SAY_MS });
       speak(out.speech.text);
     }
-  }, [state, tick, speak]);
+  }, [state, tick, speak, chatter]);
   // Một hẹn giờ duy nhất tới lúc ngủ (theo sự kiện, không polling).
   useEffect(() => {
     if (brain.mood === 'sleep') return undefined;
@@ -155,6 +168,7 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
   const [menu, setMenu] = useState<{ x: number; y: number } | null>(null);
   const [cmdOpen, setCmdOpen] = useState(false);
   const [cmd, setCmd] = useState('');
+  const [journalOpen, setJournalOpen] = useState(false);
   const body = useRef<HTMLDivElement>(null);
 
   const status = useCallback((): string => {
@@ -177,6 +191,43 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
     },
     [speak],
   );
+
+  // Tóm tắt lúc vắng: chỉ khi người dùng quay lại tương tác (không hẹn giờ, không polling).
+  const seenAt = useRef(Date.now());
+  const digestAt = useRef(0);
+  const noteSeen = useCallback(() => {
+    const t = Date.now();
+    if (t - seenAt.current >= AWAY_MS) {
+      const d = awayDigest(memory.current.journal, seenAt.current, brain.visibleCount);
+      if (d !== null) {
+        digestAt.current = t;
+        setNapping(false);
+        tell(d, 12_000);
+      }
+    }
+    seenAt.current = t;
+  }, [tell, brain.visibleCount]);
+
+  const setChatterLevel = async (level: Chatter) => {
+    setMenu(null);
+    await api.setChatter(level).catch(() => undefined);
+    setSettings((s) => (s === null ? s : { ...s, chatter: level }));
+    const note: Record<Chatter, string> = {
+      normal: 'Em nhắc như bình thường.',
+      urgent: 'Em chỉ nhắc việc khẩn thôi.',
+      quiet: 'Em im lặng nhé. Anh xem chip trạng thái và "Lời nhắc gần đây".',
+    };
+    setSay({ text: note[level], until: Date.now() + 3500 });
+  };
+  const setPetSize = async (size: PetSize) => {
+    setMenu(null);
+    try {
+      await api.setSize(size);
+      setSettings((s) => (s === null ? s : { ...s, size }));
+    } catch (e) {
+      tell(e instanceof Error ? e.message : 'Không đổi được cỡ');
+    }
+  };
 
   const run = useCallback(
     async (a: PetAction) => {
@@ -260,8 +311,9 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
   const rub = useRef({ dist: 0, since: 0, last: 0 });
 
   const primary = () => {
+    noteSeen();
     if (approval !== null) void run({ kind: 'open_queue' });
-    else {
+    else if (Date.now() - digestAt.current > DIGEST_HOLD_MS) {
       setNapping(false);
       tell(status());
     }
@@ -317,7 +369,11 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
   useEffect(() => () => {
     if (clickTimer.current !== null) clearTimeout(clickTimer.current);
   }, []);
-  const openMenuAt = (x: number, y: number) => setMenu({ x: Math.min(x, 180), y: Math.min(y, 300) });
+  const openMenuAt = (x: number, y: number) => {
+    noteSeen();
+    // Giữ menu trong cửa sổ ở mọi cỡ; dài quá thì cuộn (`maxHeight` khi vẽ).
+    setMenu({ x: Math.max(4, Math.min(x, window.innerWidth - 190)), y: Math.max(4, Math.min(y, window.innerHeight - 240)) });
+  };
   const onKeyDown = (e: React.KeyboardEvent) => {
     if (e.key === 'Enter' || e.key === ' ') {
       e.preventDefault();
@@ -335,6 +391,7 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
       if (e.key !== 'Escape') return;
       setMenu(null);
       setCmdOpen(false);
+      setJournalOpen(false);
       setSay(null);
     };
     window.addEventListener('keydown', onKey);
@@ -344,6 +401,12 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
   // --- hiển thị ---
   const showApproval = approval !== null && dismissed !== approval.request_id;
   const team = state.team;
+  const chip = glance(state, brain);
+  const onChip = () => {
+    noteSeen();
+    if (chip.action === 'status') tell(status());
+    else void run({ kind: chip.action });
+  };
   const menuItems: { label: string; act: () => void }[] = [
     { label: 'Mở hàng đợi duyệt', act: () => void run({ kind: 'open_queue' }) },
     { label: 'Mở văn phòng', act: () => void run({ kind: 'open_office' }) },
@@ -356,6 +419,12 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
       act: () => void run({ kind: 'send', msg: { t: 'focus_set', on: !team.focus }, done: team.focus ? 'Đã tắt giờ tập trung.' : 'Đã bật giờ tập trung.' }),
     },
     { label: 'Tóm tắt hôm nay', act: () => void run({ kind: 'standup' }) },
+    { label: `Lời nhắc gần đây (${brain.memory.journal.length})`, act: () => (setMenu(null), setJournalOpen(true)) },
+    { label: `Mức nhắc: ${CHATTER_LABELS[chatter]} → ${CHATTER_LABELS[next(CHATTERS, chatter)]}`, act: () => void setChatterLevel(next(CHATTERS, chatter)) },
+    {
+      label: `Cỡ: ${SIZE_LABELS[settings?.size ?? 'normal']} → ${SIZE_LABELS[next(PET_SIZES, settings?.size ?? 'normal')]}`,
+      act: () => void setPetSize(next(PET_SIZES, settings?.size ?? 'normal')),
+    },
     { label: 'Gõ lệnh…', act: () => (setMenu(null), setCmdOpen(true)) },
     { label: mood === 'sleep' ? 'Thức dậy' : 'Ngủ', act: () => void run({ kind: mood === 'sleep' ? 'wake' : 'sleep' }) },
     { label: 'Chọn model…', act: () => void chooseModel() },
@@ -405,6 +474,7 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
             onClose={() => setDismissed(approval.request_id)}
           />
         )}
+        {journalOpen && <JournalPanel entries={brain.memory.journal} onClose={() => setJournalOpen(false)} />}
         {say !== null && (
           <p className={`pet__say${say.long === true ? ' pet__say--long' : ''}`} role="status" onClick={() => setSay(null)}>
             {say.text}
@@ -412,6 +482,10 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
         )}
         {sceneError !== null && settings?.model != null && <p className="pet__say pet__say--muted">Không vẽ được model 3D ({sceneError}). Em dùng hình 2D.</p>}
       </section>
+
+      <button type="button" className={`pet__chip pet__chip--${chip.tone}`} onClick={onChip} aria-label={`Trạng thái: ${chip.text}`}>
+        <span aria-hidden="true">{chip.icon}</span> {chip.text}
+      </button>
 
       <div
         ref={body}
@@ -422,6 +496,7 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerEnter={noteSeen}
         onPointerLeave={() => {
           setPointer(null);
           press.current = null;
@@ -429,7 +504,6 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
         onDoubleClick={onDoubleClick}
         onKeyDown={onKeyDown}
       >
-        {brain.visibleCount > 0 && <span className="pet__badge">{brain.visibleCount}</span>}
         {use3d ? (
           <Suspense fallback={fallback}>
             <Scene {...sceneProps} />
@@ -459,7 +533,7 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
       )}
 
       {menu !== null && (
-        <ul className="pet__menu" role="menu" style={{ left: menu.x, top: menu.y }}>
+        <ul className="pet__menu" role="menu" style={{ left: menu.x, top: menu.y, maxHeight: Math.max(160, window.innerHeight - menu.y - 8) }}>
           {menuItems.map((m) => (
             <li key={m.label} role="none">
               <button type="button" role="menuitem" onClick={m.act}>
@@ -470,6 +544,31 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
         </ul>
       )}
     </main>
+  );
+}
+
+function JournalPanel({ entries, onClose }: { entries: readonly JournalEntry[]; onClose: () => void }) {
+  return (
+    <article className="pet__card pet__journal" aria-label="Lời nhắc gần đây">
+      <header className="pet__card-head">
+        <strong>Lời nhắc gần đây</strong>
+        <button type="button" className="pet__x" aria-label="Đóng lời nhắc gần đây" onClick={onClose}>
+          ×
+        </button>
+      </header>
+      {entries.length === 0 ? (
+        <p className="muted small">Chưa có lời nhắc nào từ lúc mở trợ lý.</p>
+      ) : (
+        <ol className="pet__journal-list">
+          {[...entries].reverse().map((e, i) => (
+            <li key={`${e.at}-${i}`} className={e.priority === 'high' ? 'pet__journal-item pet__journal-item--high' : 'pet__journal-item'}>
+              <time className="muted small">{clock(e.at)}</time> {e.text}
+              {!e.spoken && <span className="muted small"> (chưa nói)</span>}
+            </li>
+          ))}
+        </ol>
+      )}
+    </article>
   );
 }
 

@@ -217,6 +217,24 @@ fn pet_set_voice(window: WebviewWindow, app: AppHandle, on: bool) -> Result<(), 
     Ok(())
 }
 
+#[tauri::command]
+fn pet_set_chatter(
+    window: WebviewWindow,
+    app: AppHandle,
+    level: pet::Chatter,
+) -> Result<(), String> {
+    pet_only(&window)?;
+    pet::set_chatter(&app, level);
+    Ok(())
+}
+
+/// Đổi cỡ cửa sổ pet (gọi từ phía Rust: capability của webview không có quyền đổi kích thước cửa sổ).
+#[tauri::command]
+fn pet_set_size(window: WebviewWindow, app: AppHandle, size: pet::PetSize) -> Result<(), String> {
+    pet_only(&window)?;
+    pet::set_size(&app, &window, size)
+}
+
 /// Kéo cửa sổ pet (gọi từ phía Rust để capability của webview chỉ cần `core:default`).
 #[tauri::command]
 fn pet_drag(window: WebviewWindow) -> Result<(), String> {
@@ -339,6 +357,8 @@ fn main() {
             pet_choose_model,
             pet_remove_model,
             pet_set_voice,
+            pet_set_chatter,
+            pet_set_size,
             pet_drag,
             pet_hide,
             pet_open_queue,

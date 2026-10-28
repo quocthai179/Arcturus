@@ -1541,6 +1541,24 @@ ngược), góc cẳng tay rời mặt phẳng bản lề (lớn = khuỷu bẻ 
 - Lưu ý khi đánh giá ảnh: phụ kiện của model (ví dụ cánh tay robot trên ba lô của Seed-san) dễ bị nhầm là tay; tin số đo
   trên xương humanoid hơn là ảnh.
 
+### 7.11 Nâng cấp v1.1: dễ chịu hơn cho người dùng (2026-10-28)
+
+Chạy thật trên máy người dùng (pet 3D `AvatarSample_B`, bản release) cho thấy pet chạy đúng, nhưng có ba điểm khó chịu: pet
+che nội dung cửa sổ khác; câu nói biến mất sau 8 giây, đi vắng là mất tin; người dùng không chỉnh được pet nói nhiều hay ít.
+Nghiên cứu:
+- **Codex pets** (OpenAI): pet là bề mặt thông báo; một biểu tượng nhìn là hiểu (đồng hồ đỏ: cần người, dấu tích xanh: xong).
+- **Desktop Mate / MateEngine**: thu gọn vào góc khi không dùng, phản ứng khi chuột lại gần, nhiều động tác rảnh.
+- **Bài học Clippy và nghiên cứu về ngắt quãng**: kích hoạt sai thời điểm là thất bại chính; mức chịu ngắt quãng khác nhau
+  theo người và theo lúc, việc khẩn được phép ngắt sớm hơn; nên ngắt ít và cho người dùng tự chọn mức.
+
+| Nâng cấp | Hành vi | Bất biến giữ nguyên |
+|---|---|---|
+| Chip trạng thái | Một dòng nhìn là hiểu phía trên nhân vật: cần duyệt (số), lỗi (tên agent), mất kết nối, tạm dừng, đang làm (số), xong. Bấm chip: cần duyệt → mở hàng đợi; lỗi → mở văn phòng; còn lại → nói trạng thái | Hàm thuần `glance()` ở `brain.ts`, 0 token; chuỗi từ agent qua `cleanText` |
+| Mức nhắc | `Bình thường` (như cũ), `Chỉ việc khẩn` (chỉ câu ưu tiên cao), `Im lặng` (không nói gì chủ động; chip, số đếm, bong bóng duyệt vẫn hiện). Lưu trong `pet.json`; giọng nói theo cùng mức | Giờ tập trung của hub vẫn ép mức `Chỉ việc khẩn`; mức nhắc không bao giờ ẩn bong bóng duyệt |
+| Lời nhắc gần đây | Mọi câu pet định nói (kể cả câu bị bỏ vì mức nhắc, giờ tập trung, giãn cách) vào nhật ký giới hạn 30 mục, xem từ menu | Nhật ký chỉ trong bộ nhớ của cửa sổ pet; đóng pet là mất (không ghi đĩa) |
+| Tóm tắt lúc vắng | Người dùng quay lại tương tác với pet sau ≥10 phút không tương tác và có tin mới: pet tóm tắt một câu (số việc xong, lỗi, yêu cầu còn chờ) | Kích hoạt bằng tương tác của người dùng, không hẹn giờ, không polling |
+| Kích cỡ | Nhỏ 0,75×, Vừa 1×, Lớn 1,25×; đổi cỡ giữ nguyên mép dưới và tâm ngang của cửa sổ; lưu trong `pet.json` | Không click xuyên; vẫn vừa khít nhân vật |
+
 ---
 
 ## Phụ lục A — SVG nhân vật (port sang `Character.tsx`)

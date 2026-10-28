@@ -36,6 +36,47 @@ pub struct Settings {
     pub model: Option<ModelInfo>,
     /// Đọc lời pet bằng giọng của hệ điều hành (P9). Tắt mặc định.
     pub voice: bool,
+    /// Pet nói chủ động nhiều hay ít (PLAN §7.11).
+    pub chatter: Chatter,
+    /// Kích cỡ cửa sổ pet (PLAN §7.11).
+    pub size: PetSize,
+}
+
+/// Mức nhắc: `Normal` như cũ, `Urgent` chỉ câu ưu tiên cao, `Quiet` không nói chủ động. Không ẩn bong bóng duyệt.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum Chatter {
+    #[default]
+    Normal,
+    Urgent,
+    Quiet,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum PetSize {
+    Small,
+    #[default]
+    Normal,
+    Large,
+}
+
+impl PetSize {
+    pub fn scale(self) -> f64 {
+        match self {
+            PetSize::Small => 0.75,
+            PetSize::Normal => 1.0,
+            PetSize::Large => 1.25,
+        }
+    }
+
+    /// Kích thước logic của cửa sổ ở cỡ này.
+    pub fn logical(self) -> (f64, f64) {
+        (
+            (PET_W * self.scale()).round(),
+            (PET_H * self.scale()).round(),
+        )
+    }
 }
 
 /// Thông tin đọc từ phần meta của model, để người dùng tự kiểm giấy phép. Mọi chuỗi là dữ liệu không tin cậy.
@@ -181,9 +222,10 @@ pub fn open(app: &AppHandle) -> tauri::Result<()> {
     }
     let state = app.state::<PetState>();
     *state.opened_at.lock().unwrap_or_else(|e| e.into_inner()) = Some(Instant::now());
+    let (w, h) = state.settings().size.logical();
     let window = WebviewWindowBuilder::new(app, PET, WebviewUrl::App("index.html?view=pet".into()))
         .title("Arcturus — Trợ lý")
-        .inner_size(PET_W, PET_H)
+        .inner_size(w, h)
         .resizable(false)
         .decorations(false)
         .transparent(true)
@@ -424,6 +466,41 @@ pub fn set_voice(app: &AppHandle, on: bool) {
     app.state::<PetState>().update(app, |s| s.voice = on);
 }
 
+pub fn set_chatter(app: &AppHandle, level: Chatter) {
+    app.state::<PetState>().update(app, |s| s.chatter = level);
+}
+
+/// Đổi cỡ cửa sổ pet, giữ mép dưới và tâm ngang (nhân vật đứng yên chỗ cũ, chỉ to/nhỏ đi).
+pub fn set_size(app: &AppHandle, window: &WebviewWindow, size: PetSize) -> Result<(), String> {
+    app.state::<PetState>().update(app, |s| s.size = size);
+    let old_pos = window.outer_position().map_err(|e| e.to_string())?;
+    let old = window.outer_size().map_err(|e| e.to_string())?;
+    let (w, h) = size.logical();
+    let k = window.scale_factor().map_err(|e| e.to_string())?;
+    let (nw, nh) = ((w * k).round() as i64, (h * k).round() as i64);
+    let (x, y) = anchor_resize(
+        (old_pos.x, old_pos.y),
+        (i64::from(old.width), i64::from(old.height)),
+        (nw, nh),
+    );
+    window
+        .set_size(tauri::LogicalSize::new(w, h))
+        .map_err(|e| e.to_string())?;
+    window
+        .set_position(PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+/// Vị trí mới khi đổi cỡ từ `old` sang `new` (pixel vật lý): giữ mép dưới và tâm ngang.
+pub fn anchor_resize(pos: (i32, i32), old: (i64, i64), new: (i64, i64)) -> (i32, i32) {
+    let x = i64::from(pos.0) + (old.0 - new.0) / 2;
+    let y = i64::from(pos.1) + (old.1 - new.1);
+    (
+        x.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+        y.clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32,
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -559,5 +636,43 @@ mod tests {
         let s: Settings = serde_json::from_str(r#"{"enabled":true,"future":1}"#).unwrap();
         assert!(s.enabled && !s.voice && s.model.is_none());
         assert!(!Settings::default().enabled);
+        // pet.json cũ (trước §7.11) không có chatter/size: dùng mặc định.
+        assert_eq!(s.chatter, Chatter::Normal);
+        assert_eq!(s.size, PetSize::Normal);
+    }
+
+    #[test]
+    fn chatter_and_size_round_trip_as_lowercase() {
+        let s: Settings = serde_json::from_str(r#"{"chatter":"quiet","size":"large"}"#).unwrap();
+        assert_eq!((s.chatter, s.size), (Chatter::Quiet, PetSize::Large));
+        let v = serde_json::to_value(&s).unwrap();
+        assert_eq!(v["chatter"], "quiet");
+        assert_eq!(v["size"], "large");
+        // Giá trị lạ: không đọc được cả file thì PetState::load dùng mặc định (pet tắt), không panic.
+        assert!(serde_json::from_str::<Settings>(r#"{"size":"huge"}"#).is_err());
+    }
+
+    #[test]
+    fn size_scales_window() {
+        assert_eq!(PetSize::Normal.logical(), (PET_W, PET_H));
+        assert_eq!(PetSize::Small.logical(), (255.0, 420.0));
+        assert_eq!(PetSize::Large.logical(), (425.0, 700.0));
+    }
+
+    #[test]
+    fn resize_keeps_bottom_edge_and_horizontal_center() {
+        // Thu nhỏ 340x560 → 255x420 tại (1400,300): mép dưới 860 giữ nguyên, tâm ngang 1570 giữ nguyên.
+        let (x, y) = anchor_resize((1400, 300), (340, 560), (255, 420));
+        assert_eq!(y + 420, 300 + 560);
+        assert_eq!(2 * x + 255, 2 * 1400 + 340 - 1);
+        // Phóng to rồi thu lại về đúng chỗ cũ (sai số làm tròn ≤1 px).
+        let (bx, by) = anchor_resize((1400, 300), (340, 560), (426, 700));
+        let (cx, cy) = anchor_resize((bx, by), (426, 700), (340, 560));
+        assert_eq!((cx, cy), (1400, 300));
+        // Màn hình thứ hai bên trái (tọa độ âm).
+        assert_eq!(
+            anchor_resize((-900, 100), (340, 560), (340, 560)),
+            (-900, 100)
+        );
     }
 }

@@ -137,18 +137,74 @@
   text-align: center;
 }
 
-.pet__badge {
+/* Chip trạng thái (PLAN §7.11): một dòng nhìn là hiểu, ngay trên đầu nhân vật. Bong bóng (z-index 3) đè lên khi có. */
+.pet__chip {
   position: absolute;
-  right: var(--space-5);
-  top: var(--space-5);
+  left: 50%;
+  bottom: calc(72vh - var(--space-2));
+  transform: translateX(-50%);
   z-index: 2;
-  min-width: 22px;
-  padding: 0 var(--space-1);
+  max-width: calc(100vw - 2 * var(--space-3));
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  padding: 2px var(--space-3);
   border-radius: var(--radius-pill);
-  background: var(--approval);
-  color: var(--bg);
-  font-weight: 700;
-  text-align: center;
+  border: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--text);
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+}
+
+.pet__chip--attention {
+  border-color: var(--approval);
+  color: var(--approval);
+}
+
+.pet__chip--critical,
+.pet__chip--error,
+.pet__chip--offline {
+  border-color: var(--risk-high-fg);
+  color: var(--risk-high-fg);
+}
+
+.pet__chip--working {
+  border-color: var(--working);
+}
+
+.pet__chip--done {
+  border-color: var(--allow-fg);
+}
+
+.pet__chip--calm,
+.pet__chip--paused {
+  color: var(--muted);
+}
+
+.pet__chip:focus-visible {
+  outline: 2px solid var(--working);
+  outline-offset: 2px;
+}
+
+.pet__journal-list {
+  margin: var(--space-2) 0 0;
+  padding: 0;
+  list-style: none;
+  max-height: 220px;
+  overflow-y: auto;
+  font-size: 12px;
+}
+
+.pet__journal-item {
+  padding: 2px 0;
+  border-bottom: 1px solid var(--border);
+}
+
+.pet__journal-item--high {
+  color: var(--risk-high-fg);
 }
 
 .pet__cmd {
@@ -177,6 +233,7 @@
   padding: var(--space-1);
   list-style: none;
   min-width: 170px;
+  overflow-y: auto;
   background: var(--raised);
   border: 1px solid var(--border);
   border-radius: var(--radius-md);
