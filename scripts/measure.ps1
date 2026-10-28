@@ -7,6 +7,8 @@
   fixture bằng tools/replay (-Sessions phiên, -Rate yêu cầu/giây, -LoadSec giây), nghỉ -RestSec giây (kiểm rò rỉ).
   -Target app (mặc định -HoverMs 500: đường chuột; -HoverMs 0: đường nguội với ngưỡng riêng): khởi động app bản release (hub do app tự khởi động) ở chế độ đo popup (ARCTURUS_MEASURE_POPUP): đo tray-only,
   mở/đóng popup -Popups lần (đo thời gian mở), giữ popup mở rồi đóng, đo lại.
+  -Target pet (PLAN §7.6, P11): như app nhưng mở/đóng cửa sổ trợ lý (ARCTURUS_MEASURE_PET), giữ mở -HoldSec giây rồi đóng. -PetModel <.vrm>
+  nạp model trước (không có thì đo nhân vật 2D). Dùng thư mục dữ liệu pet tạm (ARCTURUS_PET_DIR): không ghi đè pet thật.
   -Analyze <csv>: chỉ phân tích một tệp CSV đã có (dùng cho test và cho agent budget-guard).
 
   Mỗi mẫu một dòng CSV: ts,rss_kb,cpu_pct,priv_kb,phase,pws_kb (ba cột đầu theo PLAN; thêm bộ nhớ riêng (commit), tên pha và
@@ -21,7 +23,7 @@
 #>
 [CmdletBinding()]
 param(
-    [ValidateSet('hub', 'app')][string]$Target = 'hub',
+    [ValidateSet('hub', 'app', 'pet')][string]$Target = 'hub',
     [string]$Analyze,
     [string]$HubBin,
     [string]$ReplayBin,
@@ -38,6 +40,7 @@ param(
     [int]$HoldSec = 20,
     [int]$DelaySec = 30,
     [int]$HoverMs = 500,
+    [string]$PetModel,
     [string]$OutDir,
     [switch]$NoBuild
 )
@@ -54,6 +57,9 @@ $Budget = @{
     P99IngestMs    = 5.0
     PopupReadyMs   = 300.0  # tiêu chí T12: popup mở ≤ 300 ms, đường chuột (con trỏ dừng trên icon rồi bấm; popup được tạo sẵn)
     PopupReadyColdMs = 500.0  # popup mở ≤ 500 ms, đường nguội (không tạo sẵn: -HoverMs 0, bàn phím, cảm ứng, mở lại ngay sau khi đóng)
+    PetOpenMB      = 300.0  # pet hiện: tổng cây tiến trình, private working set (PLAN §7.6, đề xuất, chốt sau P0)
+    PetReadyMs     = 1000.0 # mở pet ≤ 1 s (từ lúc bắt đầu mở cửa sổ tới khung đầu đã vẽ)
+    PetCpuPct      = 2.0    # pet hiện, rảnh: ≤ 2% một nhân (vòng vẽ tự dừng sau mỗi hoạt động)
     LeakToleranceMB = 5.0   # nghỉ xong, RSS không được cao hơn idle quá chừng này
 }
 
@@ -158,8 +164,36 @@ function Get-AppSummary($Samples, [double[]]$ReadyMs, [string]$Commit, [int]$Pre
         $Commit, (Format-Num $trayRss 1), (Format-Num $trayCpu), (Format-Num $openPeak 1), (Format-Num $openCpu), (Format-Num $afterRss 1), (Format-Num $afterCpu), (Format-Num $readyMed 0), (Format-Num $readyMax 0), $ReadyMs.Count, $reasons, $verdict, $dropText, (Format-Num $openPeakPws 1), $pathText)
 }
 
+# Pet: tray, pet_cycle, pet_open, after_close. $ReadyMs: thời gian mở pet (ms) của từng lần; $Kinds: 'vrm' hoặc 'svg' của từng lần.
+function Get-PetSummary($Samples, [double[]]$ReadyMs, [string[]]$Kinds, [string]$Commit) {
+    $tray = @(Select-Phase $Samples @('tray'))
+    $open = @(Select-Phase $Samples @('pet_open'))
+    $after = @(Select-Phase $Samples @('after_close'))
+    $trayRss = Get-Avg ($tray | ForEach-Object { $_.RssMB })
+    $openPeakPws = Get-Max ($open | ForEach-Object { $_.PwsMB })
+    $openPeak = Get-Max ($open | ForEach-Object { $_.RssMB })
+    $openCpu = Get-Avg ($open | ForEach-Object { $_.Cpu })
+    $afterRss = Get-Avg ($after | ForEach-Object { $_.RssMB })
+    $readyMed = Get-Percentile $ReadyMs 50
+    $readyMax = Get-Max $ReadyMs
+    $kind = if (@($Kinds | Where-Object { $_ -eq 'vrm' }).Count -gt 0) { 'vrm' } elseif ($Kinds.Count -gt 0) { 'svg' } else { 'none' }
+    $fail = @()
+    if ($tray.Count -eq 0) { $fail += 'khong_co_mau_tray' }
+    if ($open.Count -eq 0) { $fail += 'khong_co_mau_pet_open' }
+    if ($open.Count -gt 0 -and $openPeakPws -gt $Budget.PetOpenMB) { $fail += "pet_pws>$($Budget.PetOpenMB)MB" }
+    if ($open.Count -gt 0 -and $openCpu -gt $Budget.PetCpuPct) { $fail += "pet_cpu>$($Budget.PetCpuPct)%" }
+    if ($after.Count -gt 0 -and $afterRss -gt $Budget.AppLiteMB) { $fail += "sau_dong_rss>$($Budget.AppLiteMB)MB" }
+    if ($ReadyMs.Count -eq 0) { $fail += 'khong_do_duoc_pet_ready' }
+    elseif ($readyMed -gt $Budget.PetReadyMs) { $fail += "pet_ready_median>$($Budget.PetReadyMs)ms" }
+    $verdict = if ($fail.Count -eq 0) { 'PASS' } else { 'FAIL' }
+    $reasons = if ($fail.Count -eq 0) { '-' } else { $fail -join ',' }
+    return ("measure target=pet commit={0} tray_rss_mb={1} pet_open_rss_mb={2} pet_open_pws_mb={3} pet_open_cpu_pct={4} after_close_rss_mb={5} pet_ready_median_ms={6} pet_ready_max_ms={7} pet_runs={8} kind={9} reasons={10} verdict={11}" -f `
+        $Commit, (Format-Num $trayRss 1), (Format-Num $openPeak 1), (Format-Num $openPeakPws 1), (Format-Num $openCpu), (Format-Num $afterRss 1), (Format-Num $readyMed 0), (Format-Num $readyMax 0), $ReadyMs.Count, $kind, $reasons, $verdict)
+}
+
 if ($Analyze) {
     $samples = @(Read-Samples $Analyze)
+    $isPet = @($samples | Where-Object { $_.Phase -eq 'pet_open' }).Count -gt 0
     $isApp = @($samples | Where-Object { $_.Phase -in @('tray', 'popup_open', 'after_close') }).Count -gt 0
     # Chỉ phân tích CSV: p99/popup_ready lấy từ tham số môi trường nếu có (xem README đầu tệp).
     $p99 = if ($env:MEASURE_INGEST_P99_MS) { [double]::Parse($env:MEASURE_INGEST_P99_MS, [System.Globalization.CultureInfo]::InvariantCulture) } else { 0.0 }
@@ -167,7 +201,8 @@ if ($Analyze) {
     if ($env:MEASURE_POPUP_READY_MS) { $ready = @($env:MEASURE_POPUP_READY_MS.Split(',') | ForEach-Object { [double]::Parse($_, [System.Globalization.CultureInfo]::InvariantCulture) }) }
     $dropped = if ($env:MEASURE_PREWARM_DROPPED) { [int]$env:MEASURE_PREWARM_DROPPED } else { -1 }
     $cold = $env:MEASURE_POPUP_COLD -eq '1'
-    $line = if ($isApp) { Get-AppSummary $samples $ready 'analyze' $dropped $cold } else { Get-HubSummary $samples $p99 'analyze' }
+    $kinds = if ($env:MEASURE_PET_KINDS) { @($env:MEASURE_PET_KINDS.Split(',')) } else { @() }
+    $line = if ($isPet) { Get-PetSummary $samples $ready $kinds 'analyze' } elseif ($isApp) { Get-AppSummary $samples $ready 'analyze' $dropped $cold } else { Get-HubSummary $samples $p99 'analyze' }
     Write-Output $line
     if ($line -match 'verdict=FAIL') { exit 1 }
     exit 0
@@ -333,6 +368,56 @@ try {
         Save-Csv $csv
         $line = Get-HubSummary @(Read-Samples $csv) $p99 $commit
     }
+    elseif ($Target -eq 'pet') {
+        $appExe = Resolve-Bin $AppBin 'crates/app/src-tauri/target/release/arcturus-app.exe' {
+            pnpm -C (Join-Path $root 'crates/app') tauri build --no-bundle
+        }
+        $appOut = Join-Path $work 'app.out'
+        $appErr = Join-Path $work 'app.err'
+        $env:ARCTURUS_HUB_BIN = $hubExe
+        $env:ARCTURUS_HUB_ADDR = "127.0.0.1:$Port"
+        $env:ARCTURUS_UI_TOKEN_FILE = Join-Path $work 'ui-token'
+        $env:ARCTURUS_PET_DIR = Join-Path $work 'pet'
+        $env:ARCTURUS_MEASURE_PET = "$Popups"
+        $env:ARCTURUS_MEASURE_DELAY_SEC = "$DelaySec"
+        $env:ARCTURUS_MEASURE_HOLD_SEC = "$HoldSec"
+        if ($PetModel) { $env:ARCTURUS_MEASURE_PET_MODEL = (Resolve-Path $PetModel).Path }
+        $app = Start-Process -FilePath $appExe -PassThru -RedirectStandardOutput $appOut -RedirectStandardError $appErr
+        $started += $app
+        $what = if ($PetModel) { 'model 3D' } else { 'nhân vật 2D' }
+        Write-Host "App pid $($app.Id); tray $DelaySec s, rồi $Popups lần mở/đóng pet, giữ mở $HoldSec s ($what)"
+        Start-Sleep -Seconds 3
+        $null = Add-Sample $app.Id @('hub', 'conhost') 'tray'
+        $script:Rows.Clear()
+
+        $events = @()
+        $deadline = (Get-Date).AddSeconds($DelaySec + $Popups * 8 + $HoldSec + 90)
+        $doneAt = $null
+        while ((Get-Date) -lt $deadline) {
+            Start-Sleep -Seconds $IntervalSec
+            $events = @()
+            if (Test-Path $appErr) { $events = @(Get-Content $appErr -ErrorAction SilentlyContinue | Where-Object { $_ -match '^\[measure\] ' }) }
+            $holdStart = $events | Where-Object { $_ -match 'event=hold_start' } | Select-Object -First 1
+            $holdEnd = $events | Where-Object { $_ -match 'event=hold_end' } | Select-Object -First 1
+            $cycleStart = $events | Where-Object { $_ -match 'event=cycle_start' } | Select-Object -First 1
+            $phase = 'tray'
+            if ($holdEnd) { $phase = 'after_close' }
+            elseif ($holdStart) { $phase = 'pet_open' }
+            elseif ($cycleStart) { $phase = 'pet_cycle' }
+            $r = Add-Sample $app.Id @('hub', 'conhost') $phase
+            Write-Host ("[{0}] {1,-10} rss={2:N1} MB cpu={3}%" -f $r.ts.Substring(11, 8), $phase, ($r.rss_kb / 1024.0), $r.cpu_pct)
+            if ($holdEnd -and -not $doneAt) { $doneAt = Get-Date }
+            if ($doneAt -and ((Get-Date) - $doneAt).TotalSeconds -ge 30) { break }
+        }
+        $ready = @(); $kinds = @()
+        foreach ($e in $events) {
+            if ($e -match 'event=pet_ready ms=(\d+) kind=(\w+)') { $ready += [double]$Matches[1]; $kinds += $Matches[2] }
+        }
+        $csv = Join-Path $OutDir "pet-$stamp.csv"
+        Save-Csv $csv
+        $line = Get-PetSummary @(Read-Samples $csv) $ready $kinds $commit
+        Copy-Item $appErr (Join-Path $OutDir "pet-$stamp.log") -ErrorAction SilentlyContinue
+    }
     else {
         $appExe = Resolve-Bin $AppBin 'crates/app/src-tauri/target/release/arcturus-app.exe' {
             pnpm -C (Join-Path $root 'crates/app') tauri build --no-bundle
@@ -395,7 +480,7 @@ finally {
         try { if (-not $p.HasExited) { $p.Kill() } } catch { }
     }
     if ($null -ne $savedToken) { $env:ARCTURUS_TOKEN = $savedToken } else { Remove-Item Env:ARCTURUS_TOKEN -ErrorAction SilentlyContinue }
-    foreach ($n in 'ARCTURUS_HUB_BIN', 'ARCTURUS_HUB_ADDR', 'ARCTURUS_UI_TOKEN_FILE', 'ARCTURUS_MEASURE_POPUP', 'ARCTURUS_MEASURE_DELAY_SEC', 'ARCTURUS_MEASURE_HOLD_SEC', 'ARCTURUS_MEASURE_HOVER_MS') {
+    foreach ($n in 'ARCTURUS_HUB_BIN', 'ARCTURUS_HUB_ADDR', 'ARCTURUS_UI_TOKEN_FILE', 'ARCTURUS_MEASURE_PET', 'ARCTURUS_MEASURE_PET_MODEL', 'ARCTURUS_PET_DIR', 'ARCTURUS_MEASURE_POPUP', 'ARCTURUS_MEASURE_DELAY_SEC', 'ARCTURUS_MEASURE_HOLD_SEC', 'ARCTURUS_MEASURE_HOVER_MS') {
         Remove-Item "Env:$n" -ErrorAction SilentlyContinue
     }
     Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue

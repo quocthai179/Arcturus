@@ -357,6 +357,8 @@ fn main() {
             // Chế độ đo popup (T16): chỉ bật khi script đo đặt ARCTURUS_MEASURE_POPUP.
             if let Some(cfg) = measure::config_from(|k| std::env::var(k).ok()) {
                 measure::start(app.handle().clone(), cfg);
+            } else if let Some(cfg) = measure::pet_config_from(|k| std::env::var(k).ok()) {
+                measure::start_pet(app.handle().clone(), cfg);
             } else if std::env::var_os("ARCTURUS_MEASURE_LOG").is_some_and(|v| !v.is_empty()) {
                 measure::enable_logging();
             }

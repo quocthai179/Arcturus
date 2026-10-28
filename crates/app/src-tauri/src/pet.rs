@@ -100,11 +100,25 @@ impl PetState {
     }
 }
 
+/// Thư mục dữ liệu pet thay thế (`ARCTURUS_PET_DIR`): chế độ đo và test dùng thư mục tạm để không ghi đè tùy chọn và
+/// model thật của người dùng.
+fn dir_override() -> Option<PathBuf> {
+    std::env::var_os("ARCTURUS_PET_DIR")
+        .filter(|v| !v.is_empty())
+        .map(PathBuf::from)
+}
+
 fn settings_path(app: &AppHandle) -> Option<PathBuf> {
+    if let Some(d) = dir_override() {
+        return Some(d.join("pet.json"));
+    }
     app.path().app_config_dir().ok().map(|d| d.join("pet.json"))
 }
 
 fn model_dir(app: &AppHandle) -> Result<PathBuf, String> {
+    if let Some(d) = dir_override() {
+        return Ok(d.join("model"));
+    }
     app.path()
         .app_data_dir()
         .map(|d| d.join("pet"))
