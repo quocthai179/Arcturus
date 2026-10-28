@@ -17,7 +17,7 @@ use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use tauri::{AppHandle, PhysicalPosition, PhysicalSize, Position, Rect, Size};
 
-use crate::tray;
+use crate::{pet, tray};
 
 static ENABLED: AtomicBool = AtomicBool::new(false);
 
@@ -28,6 +28,41 @@ pub struct Config {
     pub hold: Duration,
     /// Mô phỏng "con trỏ dừng trên icon" trước khi bấm: tạo sẵn popup rồi chờ chừng này. 0 = không (đường nguội).
     pub hover: Duration,
+}
+
+/// Chế độ đo pet (P11): `ARCTURUS_MEASURE_PET=<số lần>` mở/đóng cửa sổ pet từng lần, rồi giữ mở `HOLD` giây.
+/// `ARCTURUS_MEASURE_PET_MODEL=<đường dẫn .vrm>` nạp model trước (không có thì đo nhân vật 2D). Nên đặt
+/// `ARCTURUS_PET_DIR` sang thư mục tạm để không ghi đè pet thật. Mỗi lần mở UI báo `pet_ready` (`ms=` từ lúc bắt đầu mở,
+/// `kind=vrm|svg`).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PetConfig {
+    pub cycles: u32,
+    pub delay: Duration,
+    pub hold: Duration,
+    pub model: Option<std::path::PathBuf>,
+}
+
+pub fn pet_config_from(get: impl Fn(&str) -> Option<String>) -> Option<PetConfig> {
+    let cycles: u32 = get("ARCTURUS_MEASURE_PET")?.trim().parse().ok()?;
+    if cycles == 0 || cycles > 100 {
+        return None;
+    }
+    let secs = |name: &str, default: u64, max: u64| -> Duration {
+        Duration::from_secs(
+            get(name)
+                .and_then(|v| v.trim().parse::<u64>().ok())
+                .unwrap_or(default)
+                .min(max),
+        )
+    };
+    Some(PetConfig {
+        cycles,
+        delay: secs("ARCTURUS_MEASURE_DELAY_SEC", 30, 600),
+        hold: secs("ARCTURUS_MEASURE_HOLD_SEC", 20, 600),
+        model: get("ARCTURUS_MEASURE_PET_MODEL")
+            .filter(|v| !v.trim().is_empty())
+            .map(|v| std::path::PathBuf::from(v.trim())),
+    })
 }
 
 /// Đọc cấu hình từ biến môi trường (`get` tách ra để test). `None` nếu không bật hoặc số lần không hợp lệ.
@@ -87,6 +122,60 @@ pub fn start(app: AppHandle, cfg: Config) {
     if let Err(e) = spawned {
         eprintln!("arcturus app: không chạy được chế độ đo: {e}");
     }
+}
+
+/// Bật chế độ đo pet và chạy chuỗi hành động ở một thread riêng (việc mở/đóng cửa sổ chạy trên thread chính).
+pub fn start_pet(app: AppHandle, cfg: PetConfig) {
+    ENABLED.store(true, Ordering::Relaxed);
+    let spawned = std::thread::Builder::new()
+        .name("measure-pet".to_owned())
+        .spawn(move || run_pet(&app, &cfg));
+    if let Err(e) = spawned {
+        eprintln!("arcturus app: không chạy được chế độ đo pet: {e}");
+    }
+}
+
+fn on_main(app: &AppHandle, f: impl FnOnce(&AppHandle) + Send + 'static) {
+    let a = app.clone();
+    if app.run_on_main_thread(move || f(&a)).is_err() {
+        eprintln!("arcturus app: không đưa được thao tác pet lên thread chính");
+    }
+}
+
+fn run_pet(app: &AppHandle, cfg: &PetConfig) {
+    log("armed", &format!("pet_cycles={}", cfg.cycles));
+    if let Some(path) = &cfg.model {
+        match pet::import_model(app, path) {
+            Ok(info) => log(
+                "pet_model",
+                &format!("bytes={} vrm={}", info.bytes, info.vrm_version),
+            ),
+            Err(e) => log("pet_model_error", &format!("err={e:?}")),
+        }
+    }
+    std::thread::sleep(cfg.delay);
+    log("cycle_start", "");
+    for i in 0..cfg.cycles {
+        log("pet_open", &format!("n={}", i + 1));
+        on_main(app, |a| {
+            let _ = pet::open(a);
+        });
+        // Đủ để UI nạp model, vẽ khung đầu và để tóm tắt vòng vẽ hoạt động ngắn sau khi mở.
+        std::thread::sleep(Duration::from_secs(5));
+        on_main(app, pet::close);
+        log("pet_closed", &format!("n={}", i + 1));
+        std::thread::sleep(Duration::from_millis(1500));
+    }
+    log("pet_open", "n=hold");
+    on_main(app, |a| {
+        let _ = pet::open(a);
+    });
+    std::thread::sleep(Duration::from_secs(5));
+    log("hold_start", "");
+    std::thread::sleep(cfg.hold);
+    on_main(app, pet::close);
+    log("hold_end", "");
+    log("done", "");
 }
 
 /// Một icon tray giả ở góc màn hình, đủ để chạy đúng đường xử lý rê chuột của tray.
@@ -211,6 +300,33 @@ mod tests {
         ]))
         .unwrap();
         assert_eq!(c.delay, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn pet_mode_is_off_unless_cycles_is_a_sane_number() {
+        assert_eq!(pet_config_from(env(&[])), None);
+        for bad in ["", "0", "abc", "101"] {
+            assert_eq!(
+                pet_config_from(env(&[("ARCTURUS_MEASURE_PET", bad)])),
+                None,
+                "{bad:?}"
+            );
+        }
+        let c = pet_config_from(env(&[
+            ("ARCTURUS_MEASURE_PET", "3"),
+            ("ARCTURUS_MEASURE_HOLD_SEC", "99999"),
+            ("ARCTURUS_MEASURE_PET_MODEL", " C:/m/a.vrm "),
+        ]))
+        .unwrap();
+        assert_eq!(c.cycles, 3);
+        assert_eq!(c.hold, Duration::from_secs(600));
+        assert_eq!(c.model, Some(std::path::PathBuf::from("C:/m/a.vrm")));
+        let none = pet_config_from(env(&[
+            ("ARCTURUS_MEASURE_PET", "1"),
+            ("ARCTURUS_MEASURE_PET_MODEL", "  "),
+        ]))
+        .unwrap();
+        assert_eq!(none.model, None);
     }
 
     #[test]

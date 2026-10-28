@@ -185,7 +185,12 @@ tài khoản người dùng (lệnh đã allow sẵn trong settings, hoặc ngư
 
 ## Mở rộng sau v0
 
-- v1: VRM view (three-vrm, chỉ render khi cửa sổ hiện), giọng nói (whisper.cpp base, Piper), trust ladder 7 mức.
+- v1: VRM view (three-vrm, chỉ render khi cửa sổ hiện), **trợ lý 3D "Pet" kiêm orchestrator** (cửa sổ `pet` trong suốt, opt-in, tương tác; đang làm, `docs/adr/0001-pet-v1.md`, `docs/PLAN.md` §7), giọng nói (whisper.cpp base, Piper), trust ladder 7 mức.
 - v2: adapter Codex (hooks.json, PermissionRequest), OpenCode (plugin), quan sát Gemini/Cursor; `arcturus-agent` trên máy
   remote nối về hub qua WebSocket/MQTT; PWA mobile.
 - v3: thiết bị đồng hành **Izar** (sản phẩm riêng, project IZAR) — ESP32-S3: BLE (tương thích wire protocol Hardware Buddy) hoặc MQTT.
+
+## Giao diện
+
+Các lớp UI, điểm thay thế (bộ vẽ nhân vật, cảnh Văn phòng, token kiểu dáng), luật chuyển động và danh sách kiểm cho PR đổi
+giao diện: `docs/UI_EXTENSION.md`.

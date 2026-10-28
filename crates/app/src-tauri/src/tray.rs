@@ -44,12 +44,14 @@ pub const MENU_OPEN_OFFICE: &str = "open_office";
 pub const MENU_TOGGLE_PAUSE: &str = "toggle_pause";
 pub const MENU_TOGGLE_FOCUS: &str = "toggle_focus";
 pub const MENU_QUIT: &str = "quit";
+pub const MENU_TOGGLE_PET: &str = "toggle_pet";
 
 /// Phần trạng thái của tray trong app.
 pub struct TrayState {
     pub tray: TrayIcon<Wry>,
     pub pause_item: MenuItem<Wry>,
     pub focus_item: MenuItem<Wry>,
+    pub pet_item: MenuItem<Wry>,
     icon_plain: Image<'static>,
     icon_dot: Image<'static>,
     popup: Mutex<PopupTimes>,
@@ -176,10 +178,18 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayState> {
         false,
         None::<&str>,
     )?;
+    let pet_item = MenuItem::with_id(app, MENU_TOGGLE_PET, "Hiện trợ lý", true, None::<&str>)?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Thoát", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
-        &[&open_queue, &open_office, &pause_item, &focus_item, &quit],
+        &[
+            &open_queue,
+            &open_office,
+            &pause_item,
+            &focus_item,
+            &pet_item,
+            &quit,
+        ],
     )?;
 
     let tray = TrayIconBuilder::with_id(TRAY_ID)
@@ -208,6 +218,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayState> {
         tray,
         pause_item,
         focus_item,
+        pet_item,
         icon_plain: base,
         icon_dot,
         popup: Mutex::new(PopupTimes::default()),
@@ -319,6 +330,37 @@ impl TrayState {
             .unwrap_or_else(|e| e.into_inner())
             .opened
             .is_some_and(|t| t.elapsed() < FOCUS_GRACE)
+    }
+}
+
+/// Chữ của mục tray bật/tắt pet (`pet.rs`).
+pub fn set_pet_shown(app: &AppHandle, shown: bool) {
+    if let Some(t) = app.try_state::<TrayState>() {
+        let _ = t.pet_item.set_text(if shown {
+            "Ẩn trợ lý"
+        } else {
+            "Hiện trợ lý"
+        });
+    }
+}
+
+/// Mở popup hàng đợi (không đóng nếu đang mở): pet gọi khi người dùng bấm vào nhân vật.
+pub fn show_queue(app: &AppHandle) {
+    let Some(state) = app.try_state::<TrayState>() else {
+        return;
+    };
+    if let Some(w) = app.get_webview_window(POPUP) {
+        if matches!(w.is_visible(), Ok(true)) {
+            let _ = w.set_focus();
+            return;
+        }
+    }
+    if app.get_webview_window(POPUP).is_some() {
+        toggle_popup(app, None);
+        return;
+    }
+    if let Err(e) = open_popup(app, &state, None) {
+        eprintln!("arcturus app: không mở được popup: {e}");
     }
 }
 

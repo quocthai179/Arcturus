@@ -1,5 +1,6 @@
 import type { AgentView } from '../protocol';
-import { Character, MOOD_LABELS } from './Character';
+import { AgentAvatar } from './AgentAvatar';
+import { MOOD_LABELS } from './Character';
 
 export function AgentDesk({ agent: a, onSelect }: { agent: AgentView; onSelect: (() => void) | undefined }) {
   const context = a.context_pct !== null && Number.isFinite(a.context_pct)
@@ -7,7 +8,7 @@ export function AgentDesk({ agent: a, onSelect }: { agent: AgentView; onSelect: 
   return (
     <article className={`desk desk--${a.mood}`} aria-label={`Bàn của ${a.name}`}>
       <div className="desk__avatar">
-        <Character mood={a.mood} width={88} {...a.palette} label={`${a.name}: ${MOOD_LABELS[a.mood]}`} />
+        <AgentAvatar mood={a.mood} palette={a.palette} size={88} label={`${a.name}: ${MOOD_LABELS[a.mood]}`} />
       </div>
       <h3>
         {onSelect ? (

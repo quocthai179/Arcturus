@@ -6,6 +6,8 @@ Mỗi agent có một nhân vật (2D trước, VRM sau).
 
 Phạm vi hiện tại: **v0** — một máy, chỉ Claude Code, UI Lite + văn phòng 2D, hàng đợi duyệt, policy.
 KHÔNG làm trong v0: VRM 3D, giọng nói, ESP32, Codex/OpenCode adapter, đồng bộ đa máy, cloud.
+Ngoại lệ đã duyệt (2026-10-28, `docs/adr/0001-pet-v1.md`): **v1 Pet** — trợ lý VRM 3D trong cửa sổ `pet` (opt-in) và đọc lời
+bằng giọng hệ điều hành (tùy chọn). Chỉ ở `ui/` và `crates/app/`, không đổi hub. Bất biến riêng: `docs/PLAN.md` §7.2.
 
 ## Kế hoạch triển khai: docs/PLAN.md
 

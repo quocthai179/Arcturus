@@ -12,6 +12,8 @@ với: mục tiêu, file tạo/sửa, thiết kế chi tiết, test bắt buộc
 
 Quy tắc bất biến và định nghĩa "xong" nằm ở `CLAUDE.md` và áp dụng cho mọi task ở đây.
 
+Phần 7 là **đề xuất v1** (trợ lý 3D "Pet" kiêm orchestrator), nằm ngoài phạm vi v0 và chưa được duyệt.
+
 ---
 
 ## 1. Cấu trúc repo khi xong v0
@@ -1316,6 +1318,228 @@ tỉ lệ `decided_by=policy`, số deny, số timeout. Baseline (trước Arctu
 ### T21 · ARC-42 · Cổng v0
 
 Chạy `/milestone-gate v0`. Không code mới.
+
+---
+
+## 7. v1 · Trợ lý 3D "Pet" — đề xuất, chưa nằm trong v0
+
+> Trạng thái: **đang làm** (người dùng duyệt 2026-10-28, `docs/adr/0001-pet-v1.md`; `CLAUDE.md` đã ghi ngoại lệ phạm vi). Thuộc Epic ARC-6 (v1). Các task P0…P11
+> dưới đây chưa có mã ARC (`CLAUDE.md`: đề xuất ticket, không tự tạo). Đã đối chiếu với code trên `main` 808c436
+> (2026-10-28), các điểm lệch và cách xử lý ở 7.9.
+
+### 7.1 Mục tiêu
+
+Một nhân vật **nữ phong cách anime Nhật, dạng 3D (VRM)**, hiện trên **nền trong suốt nổi trên màn hình** như một trợ lý
+(pet), tương tác được, và đóng vai **orchestrator**: gom trạng thái của mọi agent, báo đúng lúc, dẫn người dùng tới yêu cầu
+cần duyệt, nhận lệnh điều phối cả đội.
+
+Tham chiếu: Codex Pets của OpenAI (tháng 5/2026): overlay nổi trên các cửa sổ khác, cho biết Codex đang làm gì, báo khi xong
+hoặc cần nhập, bật/tắt bằng lệnh, tùy biến nhân vật ([Engadget](https://engadget.com/2162796/openai-introduces-ai-generated-pets-for-its-codex-app)).
+Khác biệt của Arcturus: nhân vật 3D, gom **nhiều agent**, và chính nhân vật là bề mặt điều phối (không chỉ trang trí).
+
+Không làm: nhân vật có bản quyền của bên khác (nhân vật phải là nhân vật gốc, tên và tính cách do người dùng chốt); duyệt thay
+người; gọi LLM trong hub (quy tắc bất biến 5); quay hay đọc màn hình.
+
+### 7.2 Bất biến riêng cho Pet (bổ sung, không thay 7 bất biến của `CLAUDE.md`)
+
+1. **Pet không bao giờ tự duyệt.** Pet là một client của hub như popup: quyết định chỉ gửi qua `decide` của
+   `useApprovalQueue` sau `allowGate` (sàn `min_review_ms`, thẻ cắt phải mở bản đầy đủ), với `origin: user` và chỉ khi người
+   dùng bấm hoặc xác nhận rõ. Critical không có đường duyệt từ pet (chỉ báo và mở thẻ). Không có chế độ "pet tự quyết".
+   - **Pet không chạy đếm ngược phủ quyết (T14).** Trên `main`, `useApprovalQueue` tự gửi `allow` với `origin: countdown`
+     ở mọi cửa sổ đang hiện (`ui/src/useApprovalQueue.ts`, effect "Hết giờ thì gửi allow"). Cửa sổ pet luôn hiện, nên nếu
+     dùng nguyên hook thì pet sẽ tự duyệt theo đếm ngược khi người dùng chưa nhìn thẻ. P5 phải thêm tùy chọn tắt phần
+     đếm ngược (ví dụ `useApprovalQueue({ countdown: false })`) và pet luôn dùng tùy chọn đó; đếm ngược chỉ chạy trên thẻ
+     đầy đủ ở popup và Office.
+   - Pet không gửi `decide_group`, `batch_open` (T9, "cho phép mẫu X trong N phút") hay `suggestion_answer` (T10, nâng mức
+     tin cậy). Những việc này chỉ làm trên popup/Office.
+2. **Lời pet nói về yêu cầu duyệt lấy từ dữ liệu có cấu trúc** (`tool`, `risk`, `command_normalized`), không do LLM tóm tắt
+   (quy tắc 3). Lệnh dài hơn bong bóng thì mở thẻ đầy đủ, không cắt.
+3. **0 token mặc định (quy tắc 5).** Tầng 0–1 (7.4) suy từ sự kiện và lệnh có cấu trúc. Tầng 2 dùng LLM là tùy chọn, tắt mặc
+   định, chạy **ngoài hub**, không nhận `tool_input` nếu người dùng chưa cho phép, và không thể tạo quyết định duyệt.
+4. **Fail-safe.** Pet chết, WebGL lỗi hay model hỏng không ảnh hưởng duyệt: tray và popup vẫn là đường duyệt chính. Không có
+   thông báo duyệt nào chỉ tồn tại trên pet.
+5. **Ngân sách (quy tắc 6).** Pet là tính năng opt-in, tắt mặc định, có hàng ngân sách riêng (7.6). Đóng pet thì hủy webview và
+   WebGL context. Không vòng lặp chạy mãi khi rảnh: tôn trọng `useMotionPolicy`, render theo nhu cầu. Không polling (quy tắc
+   6): nếu click xuyên cần theo dõi vị trí con trỏ liên tục thì đó là ngoại lệ phải được người duyệt (7.3).
+6. **Riêng tư.** Không chụp màn hình, không đọc cửa sổ khác. Micro chỉ khi bật giọng nói, xử lý cục bộ.
+7. **Nhân vật chỉ vẽ.** Bộ vẽ 3D đi qua điểm thay thế `AgentAvatar`/`AVATAR_RENDERERS` (`docs/UI_EXTENSION.md`) hoặc cửa sổ
+   riêng; nó không gọi hub, không đọc store. Các điểm thay thế này và `useMotionPolicy` hiện **chỉ có trên nhánh
+   `arc-ui-extensibility`**, chưa merge; P1 đưa chúng lên `main` trước khi viết bộ vẽ.
+
+### 7.3 Kiến trúc
+
+```
+hub (không đổi ở v1 đầu) ──WS──► app (Tauri, crates/app/src-tauri)
+                                  ├─ tray.rs / pet.rs: cửa sổ `pet` (trong suốt, luôn ở trên, không viền, ẩn taskbar)
+                                  ├─ lệnh Rust: hub_info (có sẵn), standup (mới, P7), pet_model (mới, P8)
+                                  └─ ui/ (một bundle, App.tsx chọn view theo `?view=`): `?view=pet` → views/Pet.tsx
+                                       ├─ pet/brain.ts     (hàm thuần: sự kiện đội → ý định: nói gì, biểu cảm gì, ưu tiên)
+                                       ├─ pet/PetScene     (lazy chunk: three.js + @pixiv/three-vrm + three-vrm-animation)
+                                       ├─ bong bóng thoại  (dùng lại ApprovalCard/allowGate, không viết lại logic duyệt)
+                                       └─ menu / hộp lệnh  (ClientMsg qua useHubConnection)
+```
+
+- **Cửa sổ**: tạo ở phía Rust như `popup` và `office` hiện nay (`WebviewWindowBuilder` trong `tray.rs`, nhãn hằng `PET`),
+  với `transparent(true)`, `decorations(false)`, `always_on_top(true)`, `skip_taskbar(true)`, không bóng; đóng thì `destroy()`
+  như popup. Nền trong suốt cần cấu hình ở ba lớp (cửa sổ, webview, HTML/CSS) và canvas WebGL `alpha`. Không prewarm
+  (khác popup): pet mở theo yêu cầu người dùng.
+- **Quyền**: `capabilities/default.json` hiện chỉ cho `popup`, `office` với `core:default`. Pet có capability riêng (không
+  mở rộng quyền của popup); các thao tác cửa sổ đặc biệt (bỏ qua chuột, đặt vị trí) gọi từ lệnh Rust thay vì mở quyền
+  `core:window:*` cho webview.
+- **Click xuyên**: chỉ nhân vật và bong bóng nhận chuột, phần còn lại của khung cho xuyên xuống cửa sổ bên dưới. Có báo cáo
+  `setIgnoreCursorEvents` không hoạt động trên Windows 10 ([tauri#11461](https://github.com/tauri-apps/tauri/issues/11461), chưa xác minh kết quả).
+  Thêm nữa: khi đã bỏ qua chuột thì webview không còn nhận sự kiện, nên muốn bật lại khi con trỏ tới nhân vật phải theo dõi
+  vị trí con trỏ toàn cục, tức là polling, trái quy tắc 6. Vì vậy **mặc định là phương án không xuyên**: cửa sổ vừa khít khung
+  nhân vật (và bong bóng khi hiện), kéo được. Click xuyên chỉ làm nếu P0 đo được chi phí theo dõi con trỏ (chỉ chạy khi pet
+  hiện và không ngủ) và người duyệt chấp nhận ngoại lệ.
+- **CSP**: CSP hiện tại (`tauri.conf.json`) không có `blob:`. GLTFLoader của three.js tạo URL `blob:` cho texture nhúng trong
+  file VRM, nên có thể cần `img-src blob:` (P0 kiểm, chỉ thêm đúng nguồn cần). Model đi kèm app nằm trong `ui/dist` (`'self'`);
+  model của người dùng đọc qua lệnh Rust có kiểm kích thước/định dạng (P8), không mở asset protocol cho cả ổ đĩa.
+- **Render**: three.js + `@pixiv/three-vrm` (VRM 1.0, MToon), animation VRMA (chưa là phụ thuộc của `ui/`, ghim phiên bản ở
+  P0). Nạp muộn bằng `import()` để không vào bundle chung (popup dùng cùng bundle, đường nguội ≤500 ms), render theo nhu cầu
+  (khi có chuyển động/tương tác), 0 FPS khi ngủ hoặc cửa sổ ẩn, ≤15 FPS khi có hoạt động, `dispose()` đầy đủ khi đóng.
+- **Hub**: v1 đầu **không đổi hub**. `GET /standup?hours=` đã có (T19, `crates/hub/src/ws.rs`), cần token UI qua header
+  `Authorization` và không có CORS, nên UI gọi qua một lệnh Rust mới giống `approval_input` (`crates/app/src-tauri/src/http.rs`).
+  Các tầng sau có thể cần thêm `ClientMsg` (đề xuất qua làn `hub`, cập nhật `docs/PROTOCOL.md` cùng commit).
+- **Đường lui**: không có WebGL hoặc model lỗi → hiện nhân vật SVG 2D (`Character`) trong cùng cửa sổ.
+
+### 7.4 Orchestrator: ba tầng
+
+| Tầng | Làm gì | Token | Trạng thái |
+|---|---|---|---|
+| 0 · Người dẫn tin | Báo trạng thái đội bằng văn bản mẫu cố định (tiếng Việt), gom và chống lặp thông báo, tôn trọng "Giờ tập trung", chỉ tới yêu cầu cần duyệt | 0 | trong v1 |
+| 1 · Lệnh có cấu trúc | Menu, hộp lệnh, sau này giọng nói. Mỗi lệnh ánh xạ thẳng tới một thứ có sẵn; ngoài danh sách thì từ chối, không đoán: "tạm dừng đội"/"tiếp tục" → `team_pause`/`team_resume`; "giờ tập trung" → `focus_set`; "tới yêu cầu cũ nhất" → mở popup ở thẻ đó (chỉ UI); "ai đang rảnh" → đọc từ snapshot; "tóm tắt hôm nay" → `GET /standup` qua lệnh Rust. Không có lệnh nào ánh xạ tới `decide`, `decide_group`, `batch_open`, `batch_close`, `suggestion_answer` | 0 | trong v1 |
+| 2 · Điều phối bằng ngôn ngữ tự nhiên | Nhận việc, chia cho các agent (khởi chạy phiên Claude Code trong worktree riêng), theo dõi tiến độ | có (LLM của người dùng) | **chỉ nghiên cứu** (P10) |
+
+Tầng 2 cần ADR bảo mật riêng trước khi code: ai khởi chạy tiến trình, trong thư mục nào, với quyền gì; mọi lần khởi chạy cần
+người xác nhận; policy và deny rule của Claude Code vẫn áp dụng; nội dung gửi tới LLM là dữ liệu không tin cậy; ngân sách
+RAM của tiến trình điều phối. Không đưa vào hub.
+
+### 7.5 Tương tác và biểu cảm
+
+| Hành động | Kết quả |
+|---|---|
+| Kéo thả | Di chuyển, nhớ vị trí theo màn hình, tránh thanh taskbar |
+| Bấm | Mở popup hàng đợi (đang có yêu cầu) hoặc nói trạng thái đội |
+| Bấm đúp | Mở Văn phòng |
+| Chuột phải / menu tray | Hiện/ẩn, Tạm dừng cả đội, Giờ tập trung, Chế độ ngủ, Đổi trang phục, Cài đặt. Tạm dừng và Giờ tập trung đã có trong menu tray (`tray.rs`, `link.rs`, T14); pet dùng cùng đường gửi, không viết đường thứ hai |
+| Di chuột lại gần / vuốt ve | Phản ứng ngắn (một lần), nhìn theo con trỏ chỉ khi con trỏ ở gần |
+| Phím tắt toàn cục (tùy chọn, mặc định tắt) | Hiện/ẩn pet |
+
+Trạng thái đội → biểu cảm (bảng gốc, chỉnh khi làm P4): có yêu cầu duyệt → giơ tay, nhìn người dùng; Critical → nét mặt
+nghiêm, không vui; đội làm việc → ngồi gõ hoặc theo dõi; lỗi → lo lắng; xong → vui; rảnh lâu → ngủ (0 FPS); Giờ tập trung →
+im lặng, chỉ phản ứng High/Critical. Mọi biểu cảm là hiệu ứng ngắn theo sự kiện, không vòng lặp vô hạn khi rảnh.
+
+### 7.6 Tài sản và ngân sách
+
+- **Model**: VRM 1.0 nhân vật gốc, nữ, phong cách anime Nhật; tự tạo (VRoid Studio) hoặc đặt riêng. Bắt buộc có giấy phép cho
+  phép dùng và phân phối trong sản phẩm; kiểm giấy phép từng model, animation và texture. Giới hạn đề xuất: ≤15 MB, ≤70.000
+  tam giác, texture ≤2K, spring bone ≤ vài chục khớp. Cho người dùng nạp model từ thư mục riêng (kiểm kích thước và định dạng).
+- **Ngân sách pet (đề xuất, chốt sau spike P0)**: pet ẩn: không thêm; pet hiện: tổng cây tiến trình ≤300 MB private working
+  set (cùng cách tính với popup, `docs/BUDGET.md`); CPU ≈0% khi ngủ, ≤2% một nhân khi hoạt động; mở pet ≤1 s. Mốc so sánh đã đo
+  trên máy này (2026-10-27/28, bản release, `scripts/measure.ps1`): tray-only 16,8 MB WS; popup 2D đang mở 74,7–75,4 MB
+  private (ngân sách popup ≤150 MB); tạo webview WebView2 nguội ≈285 ms. Chưa đo bản 3D; phần GPU/WebGL nằm ở tiến trình GPU
+  của WebView2 nên phải tính cả cây `msedgewebview2`.
+
+### 7.7 Task đề xuất
+
+| ID | Làn | Task | Phụ thuộc | Ước lượng |
+|---|---|---|---|---|
+| P0 | lab + ui | **Spike** (nhánh bỏ đi, không merge vào `main`): cửa sổ Tauri trong suốt + một VRM + animation VRMA; kiểm click xuyên trên Windows/WebView2 và đo chi phí theo dõi con trỏ; kiểm CSP cần thêm gì; đo RAM/GPU/FPS bằng `scripts/measure.ps1` trên máy này và một máy yếu; kết luận đi/không và chốt ngân sách 7.6 | T21 (cổng v0 đạt) | 2 |
+| P1 | main + ui | ADR + sửa phạm vi (`CLAUDE.md` v1, `ARCHITECTURE.md`); đưa điểm thay thế UI (`AgentAvatar`, `scenes`, `useMotionPolicy`, `docs/UI_EXTENSION.md`) từ nhánh `arc-ui-extensibility` vào nhánh pet; **không** thêm `AvatarStyle = 'vrm'` (ADR 0001 mục 9: VRM chỉ trong cửa sổ pet) | P0 | 2 |
+| P2 | ui | Cửa sổ `pet` tạo ở Rust (`tray.rs` hoặc `pet.rs`, như `popup`/`office`), capability riêng, vòng đời, tray bật/tắt, kéo, nhớ vị trí, đa màn hình/DPI, ẩn khi ứng dụng toàn màn hình, `destroy()` khi đóng | P1 | 3 |
+| P3 | ui | `?view=pet` trong `App.tsx` + `PetScene`: nạp VRM lazy (không vào bundle của popup), nền trong suốt, vẽ theo `useMotionPolicy`, `dispose`, đường lui 2D khi không có WebGL | P2 | 3 |
+| P4 | ui | Bảng trạng thái → biểu cảm/động tác: bộ tạo dáng theo giải phẫu (7.10) cho tư thế tĩnh, VRMA cho chuyển động; chớp mắt, nhìn theo con trỏ, ngủ; test tay trên model VRM0 và VRM1 | P3 | 3 |
+| P5 | ui | `brain.ts` tầng 0 + bong bóng thoại: văn bản mẫu, chống lặp, tôn trọng Giờ tập trung; duyệt qua `decide`/`allowGate` với tùy chọn tắt đếm ngược mới của `useApprovalQueue` | P3 | 3 |
+| P6 | ui | Tương tác: bấm, bấm đúp mở Văn phòng, kéo, vuốt ve, menu chuột phải, bàn phím/tray (đủ truy cập không cần chuột) | P4, P5, T13 | 2 |
+| P7 | ui | Tầng 1: hộp lệnh/menu ánh xạ `team_pause`/`team_resume`/`focus_set` và lệnh chỉ-UI; lệnh Rust mới `standup` gọi `GET /standup` (T19 đã xong) | P5 | 2 |
+| P8 | ui + lab | Tài sản: model gốc, giấy phép, trang phục, nạp model người dùng qua lệnh Rust có kiểm tra | P3 | 3 |
+| P9 | ui | Giọng nói (whisper.cpp, Piper) và lip sync, tùy chọn, riêng ticket | P7 | 4 |
+| P10 | main | **Nghiên cứu** tầng 2: ADR bảo mật, thử giao việc có người xác nhận; không code sản phẩm khi chưa duyệt | P7 | 2 |
+| P11 | lab | `measure.ps1 -Target pet` + chế độ đo pet trong `crates/app/src-tauri/src/measure.rs`; đo ngân sách và dogfood pet (`budget-guard`), ghi hàng riêng ở `docs/BUDGET.md` | P6 | 2 |
+
+Thứ tự: **T21 đạt → P0 → (người duyệt kết quả) → P1 → P2, P3 → P4, P5 → P6 → P7 → P11**; P8 song song từ sau P3; P9, P10
+sau cùng. `docs/WORKFLOW.md` §4 ghi "chưa đạt thì sửa trước, chưa làm VRM", và T21 (ARC-42) đang `review`; muốn chạy spike P0
+sớm hơn thì người duyệt phải quyết rõ. Cổng sau P0: nếu RAM/GPU vượt xa 7.6 trên máy yếu, chỉ làm bản 2D động (không 3D) theo
+`docs/UI_EXTENSION.md`; kế hoạch này vẫn dùng được vì bộ vẽ nằm sau điểm thay thế. Click xuyên không ổn thì không chặn: dùng
+cửa sổ vừa khít (7.3).
+
+**Test bắt buộc (khi làm)**: `brain` là hàm thuần nên test theo bảng (sự kiện → lời nói/biểu cảm, chống lặp, Giờ tập trung);
+pet không bao giờ phát `decide` allow nếu người dùng chưa bấm (test với đội tạm dừng, thẻ Critical, thẻ cắt, mất kết nối);
+**pet không bao giờ gửi `origin: countdown`** kể cả khi cửa sổ pet hiện và có yêu cầu Low/Medium đảo ngược được hết giờ
+đếm ngược; pet không gửi `decide_group`, `batch_open`, `batch_close`, `suggestion_answer`; mọi lệnh tầng 1 chỉ ánh xạ tới
+`ClientMsg` có sẵn và lệnh lạ bị từ chối; model hỏng/không WebGL lui về 2D; đóng pet giải phóng context; chính sách chuyển
+động tắt mọi vòng vẽ khi cửa sổ ẩn; bundle chính (popup) không chứa three.js (kiểm kích thước chunk khi build).
+
+### 7.8 Rủi ro và câu hỏi mở
+
+- Click xuyên và nền trong suốt trên Windows/WebView2 chưa kiểm (P0). macOS và Linux (Wayland không đảm bảo "luôn ở trên")
+  làm sau Windows.
+- RAM/GPU trên "máy yếu" (đối tượng của sản phẩm); pet 3D thường trực mâu thuẫn với tinh thần "nhẹ": vì vậy opt-in và có chế độ
+  ngủ.
+- Pet nổi trên game/ứng dụng toàn màn hình, họp, chia sẻ màn hình: cần tự ẩn và chế độ không làm phiền.
+- Giấy phép model/animation; nhân vật gốc (tên, tính cách, giọng) do người dùng quyết định.
+- "Orchestrator" tầng 2 là rủi ro lớn nhất về an toàn và ngân sách; chỉ làm nghiên cứu có người xác nhận từng bước.
+- Click xuyên cần theo dõi con trỏ toàn cục (polling) để bật lại chuột khi tới nhân vật: trái quy tắc 6 nếu không có ngoại lệ
+  được duyệt. Mặc định cửa sổ vừa khít.
+- Việc cần người quyết trước P0: tên và tính cách nhân vật, nguồn model, hệ điều hành ưu tiên (đề xuất Windows trước), máy
+  yếu để đo, và có chạy spike trước khi cổng v0 (T21) đạt hay không.
+
+### 7.9 Đối chiếu với code (`main` 808c436, 2026-10-28)
+
+| Plan ghi | Code hiện tại | Đã sửa trong plan |
+|---|---|---|
+| P0 phụ thuộc T12, T14 | T12, T14 đã `done`; T21 (cổng v0) đang `review`, WORKFLOW §4 cấm làm VRM khi cổng chưa đạt | P0 phụ thuộc T21 |
+| `AgentAvatar`, `AVATAR_RENDERERS`, `AvatarStyle`, `useMotionPolicy`, `docs/UI_EXTENSION.md` | Chỉ có trên nhánh `arc-ui-extensibility` (1 commit, chậm `main` 40 commit, xung đột 3 file) | P1 đưa lên `main`, ước lượng 1 → 2 |
+| Mọi quyết định đi qua `useApprovalQueue` | Hook tự gửi `allow` `origin: countdown` ở mọi cửa sổ đang hiện | 7.2 mục 1: pet tắt đếm ngược, thêm test |
+| Lệnh tầng 1 ánh xạ `ClientMsg` | `ClientMsg` có `decide`, `decide_group`, `batch_open`, `batch_close`, `suggestion_answer`, `team_pause`, `team_resume`, `focus_set` | Liệt kê lệnh được phép, cấm nhóm duyệt/batch/trust |
+| "Tóm tắt" dùng `GET /standup`, chờ T19 | Đã có `GET /standup?hours=`, cần header token, không CORS; UI chưa dùng | Thêm lệnh Rust `standup` (P7), bỏ phụ thuộc T19 |
+| Cửa sổ `pet` (không nói tạo ở đâu) | `popup`/`office` tạo ở Rust (`tray.rs`), capability chỉ cho hai cửa sổ này, `core:default` | Pet tạo ở Rust, capability riêng, thao tác cửa sổ qua lệnh Rust |
+| Click xuyên bằng `setIgnoreCursorEvents` | Quy tắc 6 cấm polling | Mặc định cửa sổ vừa khít; click xuyên là ngoại lệ cần duyệt |
+| (chưa nói) | CSP không có `blob:`; một bundle cho mọi view | Kiểm `img-src blob:` ở P0; three.js nạp lazy, có test kích thước bundle |
+| Popup 2D ≈200 MB private | Đo lại 74,7–75,4 MB private, ngân sách popup ≤150 MB; đo bằng `scripts/measure.ps1` + `measure.rs` | Cập nhật mốc ở 7.6; P0/P11 dùng script đo có sẵn |
+| Bấm đúp mở Văn phòng | Office (T13) đang `review` | P6 phụ thuộc T13 |
+
+### 7.10 Tạo dáng tay: lỗi "ngược tay" và cách tránh (thử 5 model, 2026-10-28)
+
+Demo thử (không phải code sản phẩm, nằm ngoài repo): three.js 0.180 + `@pixiv/three-vrm` 3.5.5, 5 model mẫu công khai
+(Constraint Twist Sample, Seed-san, AvatarSample_B: VRM1; AliciaSolid 0.51, three-vrm-girl: VRM0) × 6 trạng thái. Mỗi tổ hợp
+được đo tự động trên xương thật sau `vrm.update()`: độ gập khuỷu có dấu theo trục bản lề của chính cánh tay đó (âm = gập
+ngược), góc cẳng tay rời mặt phẳng bản lề (lớn = khuỷu bẻ ngang), và bàn tay cao/thấp hơn vai có đúng trạng thái không.
+
+| Cách tạo dáng | VRM1 (3 model) | VRM0 (2 model) | Tổng |
+|---|---|---|---|
+| Góc Euler viết cứng cho từng xương (demo đầu tiên) | 2/6 trạng thái hỏng mỗi model: cẳng tay lệch bản lề 50–86°, Seed-san khuỷu gập ngược −16° | 6/6 hỏng: tay buông thành giơ lên và ngược lại | 18/30 hỏng |
+| Theo giải phẫu, trục đo từ model (bên dưới) | 0 lỗi; khuỷu ≥ 5°, lệch bản lề ≤ 0° | 0 lỗi; lệch bản lề ≤ 3° | 0/30 |
+| VRMA `idle_loop.vrma` qua `createVRMAnimationClip` | đúng (AvatarSample_B) | đúng (AliciaSolid) | thử 2 model |
+
+**Nguyên nhân**
+
+1. **Góc xương viết cứng theo trục của một model.** VRM0 quay mặt về −Z, VRM1 về +Z. `VRMUtils.rotateVRM0` chỉ xoay cả cảnh
+   180°, còn khung xương chuẩn hóa bên trong vẫn theo VRM0, nên mọi góc quay quanh trục X và Z đổi dấu: "buông tay" thành
+   "giơ tay", gật đầu thành ngửa đầu. Không thể sửa bằng một bộ góc chung cho mọi model.
+2. **Khuỷu bị quay quanh trục không phải bản lề.** Khuỷu là khớp bản lề một trục. Muốn "cẳng tay dựng lên" mà quay xương
+   cẳng tay quanh Z (trục khác bản lề) thì cẳng tay bị bẻ ngang khỏi mặt phẳng gập, có lúc gập ngược. Lỗi này có cả ở VRM1.
+   Cách đúng là xoay cánh tay trên quanh trục dọc của nó (twist) để mặt phẳng bản lề hướng lên, rồi mới gập khuỷu.
+3. **Nội suy từng thành phần Euler** khi chuyển tư thế cho đường đi lạ (tay vặn qua tư thế trung gian không có thật).
+
+**Cách làm bắt buộc ở P3/P4**
+
+- Không viết góc xương thô trong code hay dữ liệu tư thế. Tư thế tĩnh mô tả theo giải phẫu cho từng tay: góc nâng
+  (`elev`), hướng quanh thân (`az`), độ gập khuỷu (`elbow`), hướng cẳng tay đi tới khi gập (`hint`: trước, lên, vào trong).
+- Lúc nạp model, đo trục từ chính model: hướng sang trái = vai trái − vai phải, hướng mặt = trái × lên, hướng cánh tay
+  lúc nghỉ = khuỷu − vai, trục bản lề = hướng cánh tay × hướng mặt. Không rẽ nhánh theo `metaVersion`.
+- Đổi sang quaternion bằng swing–twist: swing từ hướng nghỉ tới hướng đích, twist quanh trục cánh tay để mặt phẳng bản lề
+  hướng về `hint`, khuỷu chỉ quay quanh trục bản lề. Kẹp: khuỷu 0…145° (không bao giờ âm), twist ±110°.
+- Chuyển tư thế bằng `slerp` quaternion, không nội suy Euler.
+- Chuyển động phức tạp (vẫy tay, gõ phím, ngồi) dùng file VRMA qua `@pixiv/three-vrm-animation`
+  (`createVRMAnimationClip` tự xử lý VRM0/VRM1); tư thế giải phẫu dùng cho trạng thái tĩnh và lớp cộng nhỏ.
+- Tay áo/tóc là spring bone: sau khi đổi tư thế phải cho lắng (~2 s, hoặc chạy `vrm.update` vài chục bước) trước khi dừng
+  vòng vẽ, nếu không sẽ đứng hình ở tư thế xòe.
+- **Test bắt buộc**: với mọi trạng thái × ít nhất một model VRM0 và một model VRM1, kiểm tự động như bảng trên: khuỷu có
+  dấu ≥ −5°, cẳng tay lệch bản lề ≤ 20°, tay cao/thấp hơn vai đúng trạng thái. Model test chỉ dùng trong test, không đóng gói.
+- Lưu ý khi đánh giá ảnh: phụ kiện của model (ví dụ cánh tay robot trên ba lô của Seed-san) dễ bị nhầm là tay; tin số đo
+  trên xương humanoid hơn là ảnh.
 
 ---
 

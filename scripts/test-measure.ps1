@@ -101,6 +101,19 @@ Check 'app FAIL: đường nguội 600 ms vượt 500 ms' ($r.Code -eq 1 -and $r
 $r = Run-Analyze $appCsv @{ MEASURE_POPUP_READY_MS = '404,404,404' }
 Check 'app FAIL: đường chuột không được dùng ngưỡng nguội (404 ms > 300 ms)' ($r.Code -eq 1 -and $r.Out.Contains('path=mouse') -and $r.Out.Contains('popup_ready_median>300ms')) $r.Out
 
+# Pet (P11): tray 17 MB, pet mở 200 MB private (WS 420 MB), CPU ≈ 0, mở 380 ms.
+$petOk = @(@((17 * 1024), '0.00', 'tray'), @((420 * 1024), '0.50', 'pet_open', (200 * 1024)), @((420 * 1024), '0.10', 'pet_open', (200 * 1024)), @((33 * 1024), '0.00', 'after_close'))
+$petCsv = Write-Csv 'pet-ok.csv' $petOk
+$r = Run-Analyze $petCsv @{ MEASURE_POPUP_READY_MS = '350,380,410'; MEASURE_PET_KINDS = 'vrm,vrm,vrm' }
+Check 'pet đạt: PASS, kind=vrm, 200 MB private' ($r.Code -eq 0 -and $r.Out.Contains('target=pet') -and $r.Out.Contains('pet_open_pws_mb=200.0') -and $r.Out.Contains('kind=vrm') -and $r.Out -match 'verdict=PASS') $r.Out
+$r = Run-Analyze $petCsv @{ MEASURE_POPUP_READY_MS = '40,50'; MEASURE_PET_KINDS = 'svg,svg' }
+Check 'pet 2D: kind=svg' ($r.Code -eq 0 -and $r.Out.Contains('kind=svg')) $r.Out
+$petOver = @(@((17 * 1024), '0.00', 'tray'), @((900 * 1024), '4.00', 'pet_open', (350 * 1024)), @((33 * 1024), '0.00', 'after_close'))
+$r = Run-Analyze (Write-Csv 'pet-over.csv' $petOver) @{ MEASURE_POPUP_READY_MS = '1500'; MEASURE_PET_KINDS = 'vrm' }
+Check 'pet FAIL: RAM 350 MB, CPU 4%, mở 1500 ms' ($r.Code -eq 1 -and $r.Out.Contains('pet_pws>300MB') -and $r.Out.Contains('pet_cpu>2%') -and $r.Out.Contains('pet_ready_median>1000ms')) $r.Out
+$r = Run-Analyze $petCsv
+Check 'pet FAIL: không đo được thời gian mở' ($r.Code -eq 1 -and $r.Out.Contains('khong_do_duoc_pet_ready')) $r.Out
+
 Remove-Item -Recurse -Force $work -ErrorAction SilentlyContinue
 if ($failures -gt 0) { Write-Host "$failures kiểm tra lỗi"; exit 1 }
 Write-Host 'tất cả kiểm tra đạt'
