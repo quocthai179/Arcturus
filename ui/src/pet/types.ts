@@ -24,4 +24,16 @@ export interface PetSettings {
   y: number | null;
   model: ModelInfo | null;
   voice: boolean;
+  chatter: Chatter;
+  size: PetSize;
 }
+
+/** Mức nhắc (PLAN §7.11): `normal` như cũ, `urgent` chỉ câu ưu tiên cao, `quiet` không nói chủ động. Khớp `Chatter` ở pet.rs. */
+export type Chatter = 'normal' | 'urgent' | 'quiet';
+export const CHATTERS: readonly Chatter[] = ['normal', 'urgent', 'quiet'];
+export const CHATTER_LABELS: Record<Chatter, string> = { normal: 'Bình thường', urgent: 'Chỉ việc khẩn', quiet: 'Im lặng' };
+
+/** Kích cỡ cửa sổ pet (PLAN §7.11). Khớp `PetSize` ở pet.rs. */
+export type PetSize = 'small' | 'normal' | 'large';
+export const PET_SIZES: readonly PetSize[] = ['small', 'normal', 'large'];
+export const SIZE_LABELS: Record<PetSize, string> = { small: 'Nhỏ', normal: 'Vừa', large: 'Lớn' };

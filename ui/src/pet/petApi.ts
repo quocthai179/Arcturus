@@ -1,7 +1,7 @@
 // Cầu nối tới các lệnh `pet_*` phía Rust (crates/app/src-tauri/src/main.rs, pet.rs). Tách thành giao diện để test view
 // không cần Tauri.
 import { invoke, isTauri } from '@tauri-apps/api/core';
-import type { ModelInfo, PetSettings } from './types';
+import type { Chatter, ModelInfo, PetSettings, PetSize } from './types';
 
 export interface PetApi {
   settings(): Promise<PetSettings>;
@@ -11,7 +11,13 @@ export interface PetApi {
   chooseModel(): Promise<ModelInfo | null>;
   removeModel(): Promise<void>;
   setVoice(on: boolean): Promise<void>;
-  drag(): Promise<void>;
+  setChatter(level: Chatter): Promise<void>;
+  /** Đổi cỡ cửa sổ (giữ mép dưới và tâm ngang). */
+  setSize(size: PetSize): Promise<void>;
+  /** Kéo cửa sổ: app tự dời cửa sổ theo con trỏ (pet.rs `drag_begin`). `dragMove` không cần tọa độ: Rust đọc con trỏ. */
+  dragBegin(): Promise<void>;
+  dragMove(): Promise<void>;
+  dragEnd(): Promise<void>;
   hide(): Promise<void>;
   openQueue(): Promise<void>;
   openOffice(): Promise<void>;
@@ -19,7 +25,7 @@ export interface PetApi {
   ready(kind: 'vrm' | 'svg'): void;
 }
 
-const OFF: PetSettings = { enabled: false, x: null, y: null, model: null, voice: false };
+const OFF: PetSettings = { enabled: false, x: null, y: null, model: null, voice: false, chatter: 'normal', size: 'normal' };
 
 function errorText(e: unknown): Error {
   return e instanceof Error ? e : new Error(typeof e === 'string' ? e : 'Lỗi không rõ');
@@ -40,7 +46,11 @@ export const tauriPetApi: PetApi = {
   chooseModel: () => call<ModelInfo | null>('pet_choose_model'),
   removeModel: () => call<void>('pet_remove_model'),
   setVoice: (on) => call<void>('pet_set_voice', { on }),
-  drag: () => call<void>('pet_drag'),
+  setChatter: (level) => call<void>('pet_set_chatter', { level }),
+  setSize: (size) => call<void>('pet_set_size', { size }),
+  dragBegin: () => call<void>('pet_drag_begin'),
+  dragMove: () => call<void>('pet_drag_move'),
+  dragEnd: () => call<void>('pet_drag_end'),
   hide: () => call<void>('pet_hide'),
   openQueue: () => call<void>('pet_open_queue'),
   openOffice: () => call<void>('pet_open_office'),

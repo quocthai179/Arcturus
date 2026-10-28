@@ -5,9 +5,11 @@ import { RISK_LABELS } from '../components/ApprovalCard';
 import type { AgentId, ApprovalView, Mood, Risk } from '../protocol';
 import type { HubState } from '../store';
 import { revealHidden } from '../text';
-import type { PetMood } from './types';
+import type { Chatter, PetMood } from './types';
 
 export type SpeechPriority = 'low' | 'normal' | 'high';
+
+export type SpeechKind = 'done' | 'error' | 'request' | 'conn' | 'team';
 
 export interface Speech {
   /** Khóa chống lặp: cùng khóa chỉ nói một lần. */
@@ -15,6 +17,20 @@ export interface Speech {
   /** Câu hiện trong bong bóng. */
   text: string;
   priority: SpeechPriority;
+  kind: SpeechKind;
+  /** Tên agent (đã làm sạch) với câu về một agent. */
+  agent?: string;
+}
+
+/** Một mục trong "Lời nhắc gần đây" (PLAN §7.11): mọi câu pet định nói, kể cả câu bị bỏ qua. */
+export interface JournalEntry {
+  at: number;
+  text: string;
+  priority: SpeechPriority;
+  kind: SpeechKind;
+  agent?: string;
+  /** Pet đã nói câu này ra (bong bóng/giọng) hay bỏ qua vì mức nhắc, giờ tập trung, giãn cách. */
+  spoken: boolean;
 }
 
 export interface BrainMemory {
@@ -29,6 +45,8 @@ export interface BrainMemory {
   /** Đã từng kết nối (mất kết nối sau đó thì pet lo lắng; chưa từng thì chỉ đang chờ). */
   everConnected: boolean;
   wasPaused: boolean;
+  /** Nhật ký lời nhắc, cũ trước, tối đa `JOURNAL_MAX`. Chỉ trong bộ nhớ của cửa sổ pet. */
+  journal: readonly JournalEntry[];
 }
 
 export interface BrainOutput {
@@ -45,11 +63,14 @@ export const SLEEP_AFTER_MS = 10 * 60_000;
 /** Khoảng tối thiểu giữa hai câu không khẩn (chống nói liên tục). */
 export const SPEAK_GAP_MS = 6_000;
 const SAID_MAX = 200;
+export const JOURNAL_MAX = 30;
+/** Người dùng không tương tác với pet chừng này thì lần tương tác sau được nghe tóm tắt lúc vắng. */
+export const AWAY_MS = 10 * 60_000;
 const NAME_MAX = 32;
 const ACT_MAX = 80;
 
 export function initialMemory(now: number): BrainMemory {
-  return { said: [], lastSpokeAt: 0, agentMoods: {}, lastChangeAt: now, wasConnected: false, everConnected: false, wasPaused: false };
+  return { said: [], lastSpokeAt: 0, agentMoods: {}, lastChangeAt: now, wasConnected: false, everConnected: false, wasPaused: false, journal: [] };
 }
 
 /** Chuỗi không tin cậy → văn bản an toàn để nói/hiện: ký tự ẩn hiện ra, gộp khoảng trắng, cắt theo code point. */
@@ -74,7 +95,12 @@ function moodOfTeam(state: HubState): PetMood {
   return 'idle';
 }
 
-export function think(state: HubState, mem: BrainMemory, now: number, sleepAfterMs = SLEEP_AFTER_MS): BrainOutput {
+/** Mức nhắc thật sự: giờ tập trung của hub ép tối đa `urgent`. */
+export function effectiveChatter(chatter: Chatter, focus: boolean): Chatter {
+  return focus && chatter === 'normal' ? 'urgent' : chatter;
+}
+
+export function think(state: HubState, mem: BrainMemory, now: number, sleepAfterMs = SLEEP_AFTER_MS, chatter: Chatter = 'normal'): BrainOutput {
   const connected = state.connection === 'open' && state.synced;
   const said = new Set(mem.said);
   const candidates: Speech[] = [];
@@ -90,9 +116,9 @@ export function think(state: HubState, mem: BrainMemory, now: number, sleepAfter
     const name = cleanText(a.name, NAME_MAX);
     if (a.mood === 'error') {
       const act = cleanText(a.act_text, ACT_MAX);
-      candidates.push({ key: `err:${a.id}:${a.last_event_at}`, text: act ? `${name} gặp lỗi: ${act}` : `${name} gặp lỗi.`, priority: 'normal' });
+      candidates.push({ key: `err:${a.id}:${a.last_event_at}`, text: act ? `${name} gặp lỗi: ${act}` : `${name} gặp lỗi.`, priority: 'normal', kind: 'error', agent: name });
     } else if (a.mood === 'done' && before !== undefined) {
-      candidates.push({ key: `done:${a.id}:${a.last_event_at}`, text: `${name} xong việc rồi.`, priority: 'low' });
+      candidates.push({ key: `done:${a.id}:${a.last_event_at}`, text: `${name} xong việc rồi.`, priority: 'low', kind: 'done', agent: name });
     }
   }
   if (Object.keys(mem.agentMoods).some((id) => !(id in agentMoods))) lastChangeAt = now;
@@ -109,31 +135,43 @@ export function think(state: HubState, mem: BrainMemory, now: number, sleepAfter
       key,
       text: a.risk === 'critical' ? `${name} xin chạy ${tool} trong vùng khóa. Anh mở hàng đợi xem kỹ nhé.` : `${name} xin chạy ${tool} (${RISK_LABELS[a.risk].toLowerCase()}).`,
       priority: URGENT.has(a.risk) ? 'high' : 'normal',
+      kind: 'request',
+      agent: name,
     });
   }
 
   if (!connected && mem.wasConnected) {
-    candidates.push({ key: `conn:lost:${now}`, text: 'Mất kết nối hub. Yêu cầu duyệt vẫn hiện trong terminal.', priority: 'high' });
+    candidates.push({ key: `conn:lost:${now}`, text: 'Mất kết nối hub. Yêu cầu duyệt vẫn hiện trong terminal.', priority: 'high', kind: 'conn' });
   }
   if (connected && state.team.paused && !mem.wasPaused) {
-    candidates.push({ key: `paused:${now}`, text: 'Đội đang tạm dừng: không có gì được tự duyệt.', priority: 'normal' });
+    candidates.push({ key: `paused:${now}`, text: 'Đội đang tạm dừng: không có gì được tự duyệt.', priority: 'normal', kind: 'team' });
   }
   if (connected && !state.team.paused && mem.wasPaused) {
-    candidates.push({ key: `resumed:${now}`, text: 'Đội làm việc tiếp rồi.', priority: 'low' });
+    candidates.push({ key: `resumed:${now}`, text: 'Đội làm việc tiếp rồi.', priority: 'low', kind: 'team' });
   }
 
-  // Chọn câu: khẩn trước; giờ tập trung chỉ nói câu khẩn; câu thường phải cách câu trước SPEAK_GAP_MS.
+  // Chọn câu: khẩn trước; mức `urgent` (hoặc giờ tập trung) chỉ nói câu khẩn; `quiet` không nói gì chủ động; câu thường phải
+  // cách câu trước SPEAK_GAP_MS.
+  const level = effectiveChatter(chatter, state.team.focus);
   let speech: Speech | null = null;
   const order: SpeechPriority[] = ['high', 'normal', 'low'];
-  for (const p of order) {
+  for (const p of level === 'quiet' ? [] : order) {
     const c = candidates.find((s) => s.priority === p && !said.has(s.key));
     if (c === undefined) continue;
-    if (p !== 'high' && (state.team.focus || now - mem.lastSpokeAt < SPEAK_GAP_MS)) break;
+    if (p !== 'high' && (level === 'urgent' || now - mem.lastSpokeAt < SPEAK_GAP_MS)) break;
     speech = c;
     break;
   }
-  // Câu bị bỏ qua vì giờ tập trung/giãn cách thì không nói lại sau (tin cũ). Yêu cầu duyệt vẫn được chỉ tới qua `approval`.
-  const nextSaid = [...mem.said, ...candidates.map((c) => c.key).filter((k) => !said.has(k))].slice(-SAID_MAX);
+  // Câu bị bỏ qua thì không nói lại sau (tin cũ) nhưng vẫn vào nhật ký. Yêu cầu duyệt vẫn được chỉ tới qua `approval`.
+  const fresh = candidates.filter((c) => !said.has(c.key));
+  const nextSaid = [...mem.said, ...fresh.map((c) => c.key)].slice(-SAID_MAX);
+  const journal =
+    fresh.length === 0
+      ? mem.journal
+      : [
+          ...mem.journal,
+          ...fresh.map((c): JournalEntry => ({ at: now, text: c.text, priority: c.priority, kind: c.kind, ...(c.agent !== undefined ? { agent: c.agent } : {}), spoken: c.key === speech?.key })),
+        ].slice(-JOURNAL_MAX);
 
   let mood: PetMood;
   if (!connected) mood = mem.everConnected ? 'error' : 'idle';
@@ -155,6 +193,67 @@ export function think(state: HubState, mem: BrainMemory, now: number, sleepAfter
       wasConnected: connected,
       everConnected: mem.everConnected || connected,
       wasPaused: connected ? state.team.paused : mem.wasPaused,
+      journal,
     },
   };
+}
+
+// --- chip trạng thái (PLAN §7.11) ---
+
+export type GlanceTone = 'critical' | 'attention' | 'error' | 'offline' | 'paused' | 'working' | 'done' | 'calm';
+
+export interface Glance {
+  tone: GlanceTone;
+  /** Ký hiệu đứng trước chữ (trang trí; nghĩa nằm ở `text`). */
+  icon: string;
+  text: string;
+  /** Bấm chip làm gì. */
+  action: 'open_queue' | 'open_office' | 'status';
+}
+
+/** Một dòng nhìn là hiểu, ưu tiên điều cần người dùng nhất. Hàm thuần, 0 token. */
+export function glance(state: HubState, out: Pick<BrainOutput, 'approval' | 'visibleCount' | 'memory'>): Glance {
+  const connected = state.connection === 'open' && state.synced;
+  if (!connected) {
+    return out.memory.everConnected
+      ? { tone: 'offline', icon: '⚡', text: 'Mất kết nối hub', action: 'status' }
+      : { tone: 'calm', icon: '…', text: 'Đang kết nối hub', action: 'status' };
+  }
+  if (out.approval !== null) {
+    const n = out.visibleCount;
+    return out.approval.risk === 'critical'
+      ? { tone: 'critical', icon: '⛔', text: n > 1 ? `Vùng khóa chờ duyệt · ${n}` : 'Vùng khóa chờ duyệt', action: 'open_queue' }
+      : { tone: 'attention', icon: '⏳', text: `Cần anh duyệt · ${n}`, action: 'open_queue' };
+  }
+  const team = Object.values(state.agents);
+  const failed = team.filter((a) => a.mood === 'error');
+  if (failed.length > 0) {
+    const first = failed[0];
+    const name = first === undefined ? '' : cleanText(first.name, 20);
+    return { tone: 'error', icon: '!', text: failed.length > 1 ? `${name} lỗi · +${failed.length - 1}` : `${name} gặp lỗi`, action: 'open_office' };
+  }
+  if (state.team.paused) return { tone: 'paused', icon: '⏸', text: 'Đội đang tạm dừng', action: 'status' };
+  const working = team.filter((a) => a.parent_id === null && (a.mood === 'working' || a.mood === 'approval')).length;
+  if (working > 0) return { tone: 'working', icon: '▶', text: `${working} agent đang làm`, action: 'status' };
+  if (team.some((a) => a.mood === 'done')) return { tone: 'done', icon: '✓', text: 'Xong hết việc', action: 'status' };
+  return { tone: 'calm', icon: '·', text: team.length === 0 ? 'Chưa có agent nào' : 'Đội đang rảnh', action: 'status' };
+}
+
+// --- tóm tắt lúc vắng (PLAN §7.11) ---
+
+/** Một câu tóm tắt các tin từ sau `since`; `null` khi không có gì mới. Yêu cầu chờ tính theo hàng đợi hiện tại. */
+export function awayDigest(journal: readonly JournalEntry[], since: number, pending: number): string | null {
+  const news = journal.filter((e) => e.at > since);
+  if (news.length === 0) return null;
+  const done = news.filter((e) => e.kind === 'done').length;
+  const errors = news.filter((e) => e.kind === 'error');
+  const names = [...new Set(errors.map((e) => e.agent).filter((n): n is string => n !== undefined))];
+  const other = news.filter((e) => e.kind === 'conn' || e.kind === 'team').length;
+  const parts: string[] = [];
+  if (done > 0) parts.push(`${done} việc xong`);
+  if (errors.length > 0) parts.push(`${errors.length} lỗi${names.length > 0 ? ` (${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''})` : ''}`);
+  if (pending > 0) parts.push(`${pending} yêu cầu đang chờ duyệt`);
+  if (other > 0) parts.push(`${other} tin về đội`);
+  if (parts.length === 0) return 'Trong lúc anh vắng có vài yêu cầu, giờ đã xử lý hết.';
+  return `Trong lúc anh vắng: ${parts.join(', ')}.`;
 }
