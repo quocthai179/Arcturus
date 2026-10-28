@@ -99,6 +99,14 @@ pub struct ModelInfo {
 pub struct PetState {
     settings: Mutex<Settings>,
     opened_at: Mutex<Option<Instant>>,
+    /// Lúc bắt đầu kéo: vị trí cửa sổ và con trỏ (pixel vật lý). `None` khi không kéo.
+    drag: Mutex<Option<DragStart>>,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct DragStart {
+    window: (i32, i32),
+    cursor: (f64, f64),
 }
 
 impl PetState {
@@ -110,6 +118,7 @@ impl PetState {
         Self {
             settings: Mutex::new(settings),
             opened_at: Mutex::new(None),
+            drag: Mutex::new(None),
         }
     }
 
@@ -491,6 +500,59 @@ pub fn set_size(app: &AppHandle, window: &WebviewWindow, size: PetSize) -> Resul
         .map_err(|e| e.to_string())
 }
 
+// Kéo pet: app tự dời cửa sổ theo con trỏ thay vì `start_dragging()`. Trên Windows, `start_dragging()` gọi giữa lúc
+// webview đang giữ chuột (pointermove sau khi nhấn) không kéo được cửa sổ. Chỉ chạy khi người dùng đang kéo
+// (mỗi pointermove một lệnh), không theo dõi con trỏ lúc rảnh.
+
+/// Ghi vị trí cửa sổ và con trỏ lúc bắt đầu kéo.
+pub fn drag_begin(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+    let pos = window.outer_position().map_err(|e| e.to_string())?;
+    let cur = window.cursor_position().map_err(|e| e.to_string())?;
+    *app.state::<PetState>()
+        .drag
+        .lock()
+        .unwrap_or_else(|e| e.into_inner()) = Some(DragStart {
+        window: (pos.x, pos.y),
+        cursor: (cur.x, cur.y),
+    });
+    Ok(())
+}
+
+/// Dời cửa sổ theo con trỏ hiện tại. Không đang kéo thì bỏ qua.
+pub fn drag_move(app: &AppHandle, window: &WebviewWindow) -> Result<(), String> {
+    let start = *app
+        .state::<PetState>()
+        .drag
+        .lock()
+        .unwrap_or_else(|e| e.into_inner());
+    let Some(start) = start else {
+        return Ok(());
+    };
+    let cur = window.cursor_position().map_err(|e| e.to_string())?;
+    let (x, y) = drag_target(start.window, start.cursor, (cur.x, cur.y));
+    window
+        .set_position(PhysicalPosition::new(x, y))
+        .map_err(|e| e.to_string())
+}
+
+/// Kết thúc kéo và lưu vị trí (để còn đúng chỗ dù app bị tắt ngang).
+pub fn drag_end(app: &AppHandle) {
+    let state = app.state::<PetState>();
+    let was = state.drag.lock().unwrap_or_else(|e| e.into_inner()).take();
+    if was.is_some() {
+        state.update(app, |_| {});
+    }
+}
+
+/// Vị trí cửa sổ khi con trỏ đi từ `from` tới `to` (pixel vật lý), cửa sổ lúc đầu ở `window`.
+pub fn drag_target(window: (i32, i32), from: (f64, f64), to: (f64, f64)) -> (i32, i32) {
+    let clamp = |v: f64| v.round().clamp(f64::from(i32::MIN), f64::from(i32::MAX)) as i32;
+    (
+        clamp(f64::from(window.0) + (to.0 - from.0)),
+        clamp(f64::from(window.1) + (to.1 - from.1)),
+    )
+}
+
 /// Vị trí mới khi đổi cỡ từ `old` sang `new` (pixel vật lý): giữ mép dưới và tâm ngang.
 pub fn anchor_resize(pos: (i32, i32), old: (i64, i64), new: (i64, i64)) -> (i32, i32) {
     let x = i64::from(pos.0) + (old.0 - new.0) / 2;
@@ -504,6 +566,27 @@ pub fn anchor_resize(pos: (i32, i32), old: (i64, i64), new: (i64, i64)) -> (i32,
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn drag_follows_cursor_delta() {
+        assert_eq!(
+            drag_target((1500, 420), (1600.0, 600.0), (1600.0, 600.0)),
+            (1500, 420)
+        );
+        assert_eq!(
+            drag_target((1500, 420), (1600.0, 600.0), (1450.4, 310.6)),
+            (1350, 131)
+        );
+        // Kéo sang màn hình bên trái (tọa độ âm) vẫn đúng.
+        assert_eq!(
+            drag_target((10, 10), (20.0, 20.0), (-1900.0, 40.0)),
+            (-1910, 30)
+        );
+        assert_eq!(
+            drag_target((i32::MAX, 0), (0.0, 0.0), (10.0, 0.0)),
+            (i32::MAX, 0)
+        );
+    }
 
     fn glb(json: &str) -> Vec<u8> {
         let mut j = json.as_bytes().to_vec();

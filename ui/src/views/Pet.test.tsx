@@ -21,7 +21,9 @@ function api(): PetApi {
     setVoice: vi.fn(() => Promise.resolve()),
     setChatter: vi.fn(() => Promise.resolve()),
     setSize: vi.fn(() => Promise.resolve()),
-    drag: vi.fn(() => Promise.resolve()),
+    dragBegin: vi.fn(() => Promise.resolve()),
+    dragMove: vi.fn(() => Promise.resolve()),
+    dragEnd: vi.fn(() => Promise.resolve()),
     hide: vi.fn(() => Promise.resolve()),
     openQueue: vi.fn(() => Promise.resolve()),
     openOffice: vi.fn(() => Promise.resolve()),
@@ -141,5 +143,47 @@ describe('PetView', () => {
     vi.setSystemTime(Date.parse('2026-10-28T09:17:00Z'));
     fireEvent.pointerEnter(body);
     expect(screen.getByText('Trong lúc anh vắng: 2 yêu cầu đang chờ duyệt.')).toBeTruthy();
+  });
+
+  it('kéo pet: nhấn rồi rê quá 4px thì app dời cửa sổ, nhả chuột thì kết thúc và không tính là bấm', async () => {
+    const { api: a } = mount([]);
+    const body = screen.getByRole('button', { name: /Trợ lý Arcturus/ });
+    fireEvent.pointerDown(body, { button: 0, buttons: 1, clientX: 100, clientY: 200, pointerId: 1 });
+    fireEvent.pointerMove(body, { buttons: 1, clientX: 102, clientY: 201, pointerId: 1 });
+    expect(a.dragBegin).not.toHaveBeenCalled();
+    fireEvent.pointerMove(body, { buttons: 1, clientX: 110, clientY: 205, pointerId: 1 });
+    expect(a.dragBegin).toHaveBeenCalledTimes(1);
+    await act(async () => {});
+    expect(a.dragMove).toHaveBeenCalled();
+    fireEvent.pointerMove(body, { buttons: 1, clientX: 140, clientY: 230, pointerId: 1 });
+    await act(async () => {});
+    fireEvent.pointerUp(body, { button: 0, buttons: 0, clientX: 140, clientY: 230, pointerId: 1 });
+    expect(a.dragEnd).toHaveBeenCalledTimes(1);
+    // Thả xong không bị coi là cú bấm (không nói trạng thái).
+    await act(async () => {
+      await new Promise((r) => setTimeout(r, 300));
+    });
+    expect(screen.queryByRole('status')).toBeNull();
+  });
+
+  it('kéo pet: nhả chuột ngoài cửa sổ (pointermove không còn giữ nút) thì kết thúc kéo', async () => {
+    const { api: a } = mount([]);
+    const body = screen.getByRole('button', { name: /Trợ lý Arcturus/ });
+    fireEvent.pointerDown(body, { button: 0, buttons: 1, clientX: 100, clientY: 200, pointerId: 1 });
+    fireEvent.pointerMove(body, { buttons: 1, clientX: 120, clientY: 200, pointerId: 1 });
+    await act(async () => {});
+    fireEvent.pointerMove(body, { buttons: 0, clientX: 130, clientY: 200, pointerId: 1 });
+    expect(a.dragEnd).toHaveBeenCalledTimes(1);
+  });
+
+  it('kéo pet: lỗi bắt đầu kéo thì báo lên bong bóng, không im lặng', async () => {
+    const { api: a } = mount([]);
+    vi.mocked(a.dragBegin).mockRejectedValueOnce(new Error('không đọc được con trỏ'));
+    const body = screen.getByRole('button', { name: /Trợ lý Arcturus/ });
+    fireEvent.pointerDown(body, { button: 0, buttons: 1, clientX: 100, clientY: 200, pointerId: 1 });
+    fireEvent.pointerMove(body, { buttons: 1, clientX: 120, clientY: 200, pointerId: 1 });
+    await act(async () => {});
+    expect(screen.getByText('Không kéo được: không đọc được con trỏ')).toBeTruthy();
+    expect(a.dragMove).not.toHaveBeenCalled();
   });
 });

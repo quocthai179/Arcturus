@@ -14,7 +14,10 @@ export interface PetApi {
   setChatter(level: Chatter): Promise<void>;
   /** Đổi cỡ cửa sổ (giữ mép dưới và tâm ngang). */
   setSize(size: PetSize): Promise<void>;
-  drag(): Promise<void>;
+  /** Kéo cửa sổ: app tự dời cửa sổ theo con trỏ (pet.rs `drag_begin`). `dragMove` không cần tọa độ: Rust đọc con trỏ. */
+  dragBegin(): Promise<void>;
+  dragMove(): Promise<void>;
+  dragEnd(): Promise<void>;
   hide(): Promise<void>;
   openQueue(): Promise<void>;
   openOffice(): Promise<void>;
@@ -45,7 +48,9 @@ export const tauriPetApi: PetApi = {
   setVoice: (on) => call<void>('pet_set_voice', { on }),
   setChatter: (level) => call<void>('pet_set_chatter', { level }),
   setSize: (size) => call<void>('pet_set_size', { size }),
-  drag: () => call<void>('pet_drag'),
+  dragBegin: () => call<void>('pet_drag_begin'),
+  dragMove: () => call<void>('pet_drag_move'),
+  dragEnd: () => call<void>('pet_drag_end'),
   hide: () => call<void>('pet_hide'),
   openQueue: () => call<void>('pet_open_queue'),
   openOffice: () => call<void>('pet_open_office'),

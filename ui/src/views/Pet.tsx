@@ -305,6 +305,8 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
 
   // --- tương tác chuột/bàn phím trên nhân vật ---
   const press = useRef<{ x: number; y: number } | null>(null);
+  // Đang kéo cửa sổ; `move`: một lệnh dời đang chạy ('busy') và có pointermove mới trong lúc đó ('again').
+  const drag = useRef<{ on: boolean; move: 'idle' | 'busy' | 'again' }>({ on: false, move: 'idle' });
   const clickTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
   const [pointer, setPointer] = useState<{ x: number; y: number } | null>(null);
   const [reaction, setReaction] = useState(0);
@@ -318,11 +320,48 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
       tell(status());
     }
   };
+  // Mỗi lúc chỉ một lệnh dời; pointermove đến trong lúc chờ gộp thành một lần nữa (Rust đọc con trỏ hiện tại nên
+  // không mất bước, và không dồn hàng lệnh khi chuột chạy nhanh).
+  const pushDrag = () => {
+    const d = drag.current;
+    if (d.move !== 'idle') {
+      d.move = 'again';
+      return;
+    }
+    d.move = 'busy';
+    void api
+      .dragMove()
+      .catch(() => undefined)
+      .finally(() => {
+        const again = d.move === 'again';
+        d.move = 'idle';
+        if (again && d.on) pushDrag();
+      });
+  };
+  const endDrag = () => {
+    if (!drag.current.on) return;
+    drag.current.on = false;
+    void api.dragEnd().catch(() => undefined);
+  };
   const onPointerDown = (e: React.PointerEvent) => {
     if (e.button !== 0) return;
     press.current = { x: e.clientX, y: e.clientY };
+    // Giữ chuột cho thân pet để vẫn nhận pointermove/pointerup khi con trỏ chạy ra ngoài cửa sổ lúc kéo nhanh.
+    const el = e.currentTarget;
+    if (typeof el.setPointerCapture === 'function') {
+      try {
+        el.setPointerCapture(e.pointerId);
+      } catch {
+        // con trỏ không còn hợp lệ: bỏ qua, kéo vẫn chạy khi con trỏ trong cửa sổ
+      }
+    }
   };
   const onPointerMove = (e: React.PointerEvent) => {
+    if (drag.current.on) {
+      if ((e.buttons & 1) === 1) pushDrag();
+      else endDrag(); // nhả chuột ngoài cửa sổ mà không nhận pointerup
+      return;
+    }
     const r = body.current?.getBoundingClientRect();
     if (r !== undefined && r.width > 0) {
       const x = ((e.clientX - r.left) / r.width) * 2 - 1;
@@ -349,10 +388,19 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
     const p = press.current;
     if (p !== null && (e.buttons & 1) === 1 && Math.hypot(e.clientX - p.x, e.clientY - p.y) > 4) {
       press.current = null;
-      void api.drag().catch(() => undefined);
+      drag.current.on = true;
+      setPointer(null);
+      api.dragBegin().then(pushDrag, (err: unknown) => {
+        drag.current.on = false;
+        tell(`Không kéo được: ${err instanceof Error ? err.message : 'lỗi không rõ'}`, 4000);
+      });
     }
   };
   const onPointerUp = (e: React.PointerEvent) => {
+    if (drag.current.on) {
+      endDrag();
+      return;
+    }
     if (e.button !== 0 || press.current === null) return;
     press.current = null;
     if (clickTimer.current !== null) clearTimeout(clickTimer.current);
@@ -496,6 +544,11 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        onPointerCancel={() => {
+          press.current = null;
+          endDrag();
+        }}
+        onLostPointerCapture={endDrag}
         onPointerEnter={noteSeen}
         onPointerLeave={() => {
           setPointer(null);
