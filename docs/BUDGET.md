@@ -14,6 +14,8 @@ và ghi kết quả vào bảng "Lịch sử đo" bên dưới.
 | Mở popup (đường chuột) | ≤ 300 ms | | con trỏ dừng ≥ ~0,5 s trên icon rồi bấm; popup được tạo sẵn (`tray.rs`, prewarm). Đo từ lúc bấm tới khung React đầu tiên |
 | Mở popup (đường nguội) | ≤ 500 ms | | không tạo sẵn: bàn phím, cảm ứng, bấm ngay khi con trỏ vừa tới, mở lại ngay sau khi đóng; tạo webview WebView2 nguội ≈ 285 ms |
 | Văn phòng 2D mở | + 50–80 MB | < 2% | 15 FPS khi có hoạt động, 0 khi tất cả rảnh hoặc ẩn |
+| Pet hiện (opt-in, `docs/PLAN.md` §7.6) | ≤ 300 MB tổng, tính theo **private working set** (cây app + WebView2, không tính hub) | ≤ 2% một nhân khi hoạt động, ≈ 0% khi rảnh | tắt mặc định; pet ẩn không thêm gì (không giữ webview); vòng vẽ ≤ 30 FPS, tự dừng sau mỗi hoạt động và khi trang ẩn; đóng pet thì hủy WebGL context |
+| Mở pet | ≤ 1 s | | từ lúc bắt đầu mở cửa sổ tới khung đầu đã vẽ (`pet_ready`), kể cả nạp model VRM |
 | Độ trễ ingest | p99 ≤ 5 ms | | `/hooks/event` trả 204 ngay, xử lý sau |
 
 ## Cách đo
@@ -27,6 +29,8 @@ scripts/measure.sh                        # Linux/macOS: hub
 pwsh scripts/measure.ps1                  # Windows: hub
 pwsh scripts/measure.ps1 -Target app      # Windows: app bản release, đường nguội (tray, mở/đóng popup, thời gian mở popup)
 pwsh scripts/measure.ps1 -Target app -HoverMs 500   # như trên nhưng mô phỏng con trỏ dừng 500 ms trên icon trước khi bấm (prewarm)
+pwsh scripts/measure.ps1 -Target pet                # pet: nhân vật 2D (không có model)
+pwsh scripts/measure.ps1 -Target pet -PetModel C:\models\my.vrm   # pet: model 3D của bạn
 ```
 
 Chế độ đo của app (`crates/app/src-tauri/src/measure.rs`) chỉ bật khi script đặt `ARCTURUS_MEASURE_POPUP=<số lần>`: app tự
@@ -35,6 +39,10 @@ tiên đã vẽ. RSS là working set (Windows) hoặc VmRSS (Linux); app tính c
 ngân sách theo **private working set** (cột `pws_kb`, `Win32_PerfFormattedData_PerfProc_Process.WorkingSetPrivate`), vì working set cộng qua nhiều
 tiến trình đếm trùng trang dùng chung; `popup_open_rss_mb` vẫn được in để đối chiếu. `-HoverMs 500` (mặc định) mô phỏng con trỏ dừng 500 ms
 trên icon (đường chuột, ≤300 ms); `-HoverMs 0` đo đường nguội (≤500 ms).
+
+Chế độ đo pet (P11) bật khi script đặt `ARCTURUS_MEASURE_PET=<số lần>` (và `ARCTURUS_MEASURE_PET_MODEL` nếu có `-PetModel`): app mở/đóng cửa sổ
+pet từng lần rồi giữ mở `-HoldSec` giây; UI báo `pet_ready` kèm `kind=vrm|svg`. Script đặt `ARCTURUS_PET_DIR` sang thư mục tạm nên không ghi đè
+tùy chọn và model thật của bạn. Ngưỡng: pet mở ≤300 MB private working set, mở ≤1 s, CPU trung bình ≤2%, sau khi đóng RSS ≤60 MB.
 
 Kiểm tay bằng chuột thật (không tự động hoá): chạy app với `ARCTURUS_MEASURE_LOG=1` (chỉ ghi mốc ra stderr, không tự mở popup),
 rê chuột ~0,5 s trên icon tray rồi bấm; stderr phải có `popup_prewarmed` rồi `popup_shown` và `popup_ready ms=<nhỏ>`:
@@ -69,3 +77,4 @@ Kịch bản chuẩn:
 | 2026-10-27 | f5479a8 + sửa rê chuột (nhánh `arc-37-measure`) | Windows 11 Pro 10.0.26200, máy của người dùng, bản release, `scripts/measure.ps1 -Target app -HoverMs 500` | (hub: xem dòng trên) | (xem dòng trên) | tray-only **16,8 MB WS**, CPU 0,00%; **sau khi đóng popup 32,8 MB**; popup mở 364,5 MB WS (≈155 MB private, 6 tiến trình msedgewebview2); **thời gian mở popup từ lúc bấm tới khung đầu tiên: trung vị 44 ms, tối đa 66 ms** (6 lần) khi bấm 500 ms sau lúc con trỏ vào icon (chờ dừng 150 ms, tạo sẵn ẩn mất 283–401 ms, chạy ngầm; bấm sớm hơn thì chờ phần còn lại, ≈200 ms nếu bấm sau 300 ms, ≈350 ms nếu bấm ngay). Popup rê vào rồi bỏ đi bị destroy (`prewarm_dropped=1`) | chưa đo | T12 ARC-33: prewarm khi rê chuột. Đường nguội (bàn phím, cảm ứng, bấm trước khi prewarm xong) vẫn **≈400 ms** (dòng trước). Mô phỏng "rê rồi bấm" chạy qua đúng `hover_enter`/`hover_leave` của app (dwell, hủy khi bấm, trần 8 s, trên thread thật) nhưng chưa đi qua sự kiện `Enter`/`Move`/`Leave` do hệ điều hành phát (chưa ai rê chuột thật trên bản release); mã `tray-icon` 0.25.1 phát `Enter` ở `WM_MOUSEMOVE` đầu tiên và `Leave` chỉ sau ít nhất một `Move`, nên app xử lý cả `Move`. Popup mở vẫn vượt ≤150 MB theo working set (script báo FAIL ở mục này). |
 | 2026-10-27 | 998e111 + chỉ số private working set (nhánh `arc-33-popup-budget`) | Windows 11 Pro 10.0.26200, máy của người dùng, bản release, `scripts/measure.ps1 -Target app` (mặc định `-HoverMs 500`) và `-HoverMs 0` | — | — | tray-only **16,8 MB WS**, CPU 0,00%; **sau khi đóng popup 30,1–30,2 MB**; popup mở: **75,4 MB private working set** (đường chuột) / **74,8 MB** (đường nguội), còn working set cộng 6 tiến trình WebView2 là 362–364 MB (đếm trùng trang thư viện dùng chung). Mở popup, **đường chuột** (bấm 500 ms sau khi con trỏ vào icon): trung vị **58 ms**, tối đa 76 ms → script `verdict=PASS`. **Đường nguội**: trung vị **403 ms**, tối đa 500 ms (≤500 ms: ngưỡng riêng) → script `verdict=PASS` | chưa đo | Đổi chỉ số RAM popup từ working set sang **private working set** theo quyết định của người dùng (working set cộng qua nhiều tiến trình đếm trùng trang dùng chung; số cũ 364,5 MB vẫn in ở `popup_open_rss_mb`). Thêm ngưỡng đường nguội ≤500 ms (≤300 ms giữ cho đường chuột). Máy yếu 4 GB: người dùng đã bỏ qua. |
 | 2026-10-28 | f530455 + sửa phát hiện 5–7 (nhánh `arc-42-gate-v0-fixes`) | Windows 11 Pro 10.0.26200, máy của người dùng, bản release, `scripts/measure.ps1` (hub), `-Target app -HoverMs 500` và `-HoverMs 0` | **13,4 MB WS**, CPU 0,00% | đỉnh **16,8 MB WS**, CPU TB 3,88% (một nhân, đang nhận 50 req/s), sau nghỉ 16,8 MB, p99 ingest **1,26 ms** | tray-only 16,8 MB WS; popup mở 74,7–77,6 MB private WS (364–367 MB WS); sau đóng 32,1–32,6 MB; popup mở **42 ms** trung vị (đường chuột, tối đa 97 ms), **390 ms** (đường nguội, tối đa 413 ms); `verdict=PASS` cả ba lượt | chưa đo | Thêm ngân sách byte 8 MiB cho hàng đợi `/hooks/event`, kiểm `Host` ở route hook, `git log` không kiểm chữ ký: không làm xấu ngân sách hub. CPU mở popup 7,1% (nguội) và 1,4% (chuột) là lúc đang mở, không tính vào verdict. |
+| 2026-10-28 | 2eb8bab (nhánh `pet-v1`) | Windows 11 Pro 10.0.26200, máy của người dùng, bản release, `scripts/measure.ps1 -Target pet -DelaySec 20 -Popups 3 -HoldSec 25` (nhân vật 2D, chưa nạp model 3D; hub bản release cũ 27/10) | — | — | tray-only 16,9 MB WS; sau khi đóng pet 32,5 MB, CPU 0,00% | chưa đo bản 3D | **Pet 2D ĐẠT**: mở 4 lần (3 chu kỳ + 1 giữ), `pet_ready` trung vị 434 ms (max 451 ms, ngân sách ≤1 s); pet mở **80,0 MB private working set** (ngân sách ≤300 MB; working set 373,5 MB đếm trùng trang dùng chung của WebView2), CPU trung bình 0,80%. Đóng pet hủy webview: RSS về mức Lite. **Chưa đo model VRM 3D** (cần file `.vrm` của bạn: `pwsh scripts/measure.ps1 -Target pet -PetModel <đường dẫn>`) và chưa đo máy yếu. |

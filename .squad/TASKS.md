@@ -135,6 +135,7 @@ Làn: `main` (giai đoạn A, một phiên) · `hub` · `policy` · `ui` · `lab
 - 2026-10-27 · lab · ARC-33/ARC-37 (nhánh `arc-33-popup-budget`): theo quyết định của người dùng, RAM popup mở tính theo private working set (74,8–75,4 MB, ≤150 MB đạt; working set 362–364 MB đếm trùng trang dùng chung), thêm ngưỡng đường nguội ≤500 ms (403 ms trung vị); `measure.ps1 -Target app` cho `verdict=PASS` ở cả `-HoverMs 500` (58 ms) và `-HoverMs 0` (403 ms). · Vướng: đường nguội vẫn ≈400 ms (> 300 ms của đường chuột).
 - 2026-10-28 · main · ARC-42 chạy lại kiểm tra cổng v0 trên máy thật (nhánh `arc-42-gate-v0-fixes`): `cargo test --workspace` 418 ĐẠT, clippy (cả `crates/app`), fmt, `pnpm -C ui test` 101 và build ĐẠT; e2e Claude Code 2.1.308 thật 5/5 ĐẠT (allow, deny, hết giờ, hub tắt, non-2xx 500/401: không bao giờ allow, không treo); `measure.ps1` hub và app ĐẠT (`docs/BUDGET.md`). Đã sửa phát hiện 5–7: `git log` của standup tắt kiểm chữ ký và bỏ `cwd` UNC, duyệt gộp chỉ cộng một lần vào chuỗi trust, route hook kiểm `Host` và hàng đợi `/hooks/event` có ngân sách 8 MiB; 4 test hồi quy (hai cái đã thử đột biến), docs `PROTOCOL.md`/`CLAUDE.md`/`HOOK_FINDINGS.md`, thêm `pnpm audit` vào CI. · Còn lại (cần người hoặc cho phép cài): dogfood ≥ 2 tuần và baseline (T20), T13 trên cửa sổ Tauri thu nhỏ thật, T18 cài/gỡ trên máy sạch (thiếu `jq` trên máy này), `cargo audit` (chưa cài). · Vướng: không.
 - 2026-10-26 · ui · Chuẩn bị mở rộng giao diện (nhánh `arc-ui-extensibility`, **chưa có mã ARC, đề xuất ticket mới** dưới story ARC-18 hoặc ARC-17: "Điểm thay thế cho nhân vật/cảnh/kiểu dáng"): `AgentAvatar` + `AVATAR_RENDERERS` (một điểm thay cách vẽ nhân vật), `scenes.tsx` + `OFFICE_SCENES` (một điểm thay cảnh Văn phòng, hàng đợi duyệt vẫn ở cột riêng), `useMotionPolicy` + `data-motion` (một chính sách chuyển động toàn cục), token bo góc/khoảng cách/thời lượng trong `:root`, `styles.test.ts` chặn màu/bo góc/thời lượng viết cứng, `docs/UI_EXTENSION.md`. Không đổi hành vi. UI 92 -> 106 test. · Vướng: không; chưa làm tùy chọn người dùng cho kiểu nhân vật/cảnh/chủ đề.
+- 2026-10-28 · ui · Pet v1 (nhánh `pet-v1`, **chưa có mã ARC, đề xuất ticket P0–P11 dưới Epic ARC-6**): `docs/adr/0001-pet-v1.md` (+ngoại lệ phạm vi trong CLAUDE.md), `crates/app` cửa sổ `pet` + chọn/kiểm model VRM + lệnh `standup` + chế độ đo pet; `ui/` PetScene (three/three-vrm nạp muộn), tạo dáng giải phẫu, brain tầng 0, lệnh tầng 1, bong bóng duyệt (không đếm ngược, Critical không có Đồng ý), giọng nói hệ điều hành; `docs/adr/0002` nghiên cứu tầng 2. Test: UI 191, app 27, workspace gốc xanh (fmt, clippy, test). Đo thật pet 2D: 80 MB private, mở 434 ms (đạt). · Vướng: chưa đo model VRM 3D và máy yếu (cần file .vrm của người dùng); chưa xem bằng mắt cửa sổ trong suốt; pet không tự ẩn khi có ứng dụng toàn màn hình (dự án cấm `unsafe`, cần API Windows); nhận giọng nói (whisper) chưa làm; đã đưa nhánh `arc-ui-extensibility` vào nhánh này, PR riêng của nhánh đó nên đóng.
 
 ## Giai đoạn v1 — Trợ lý 3D "Pet" (đề xuất, chưa có mã ARC, chưa duyệt)
 
@@ -144,14 +145,14 @@ Chi tiết, bất biến riêng và thiết kế: `docs/PLAN.md` §7. Thuộc Ep
 | ID | Làn | Task | Phụ thuộc | Ước lượng | Trạng thái |
 |---|---|---|---|---|---|
 | P0 | lab + ui | Spike (nhánh bỏ đi, không merge): cửa sổ trong suốt + VRM + VRMA, thử click xuyên và chi phí theo dõi con trỏ, CSP cho three-vrm, đo RAM/GPU/FPS bằng `scripts/measure.ps1` trên máy này và một máy yếu, chốt ngân sách | T21 (cổng v0 đạt) | 2 | todo |
-| P1 | main + ui | ADR + sửa phạm vi CLAUDE.md/ARCHITECTURE; đưa điểm thay thế UI từ nhánh `arc-ui-extensibility` lên main (đang xung đột 3 file); thêm `AvatarStyle = 'vrm'` | P0 | 2 | todo |
-| P2 | ui | Cửa sổ `pet` tạo ở Rust như `popup`/`office` (`tray.rs`), capability riêng, tray bật/tắt, kéo, nhớ vị trí, đa màn hình/DPI, hủy khi đóng | P1 | 3 | todo |
-| P3 | ui | `?view=pet` + `PetScene` nạp lazy (không vào bundle của popup), nền trong suốt, vẽ theo `useMotionPolicy`, lui về 2D | P2 | 3 | todo |
-| P4 | ui | Trạng thái → biểu cảm/động tác: tạo dáng theo giải phẫu (PLAN §7.10) + VRMA, chớp mắt, nhìn theo con trỏ, ngủ; test tay trên VRM0 và VRM1 | P3 | 3 | todo |
-| P5 | ui | `brain.ts` tầng 0 + bong bóng thoại (duyệt qua `useApprovalQueue`/`allowGate`, Critical không có nút) | P3 | 3 | todo |
-| P6 | ui | Tương tác: bấm, bấm đúp mở Văn phòng, kéo, vuốt ve, menu chuột phải, bàn phím/tray | P4, P5, T13 | 2 | todo |
-| P7 | ui | Orchestrator tầng 1: lệnh ánh xạ `team_pause`/`team_resume`/`focus_set` và mở thẻ; "tóm tắt" qua lệnh Rust mới gọi `GET /standup`; không bao giờ gửi `decide*`, `batch_open`, `suggestion_answer` | P5 | 2 | todo |
-| P8 | ui + lab | Tài sản: model gốc, giấy phép, trang phục, nạp model người dùng qua lệnh Rust có kiểm tra | P3 | 3 | todo |
-| P9 | ui | Giọng nói + lip sync (tùy chọn) | P7 | 4 | todo |
-| P10 | main | Nghiên cứu orchestrator tầng 2 (LLM, giao việc có xác nhận): ADR bảo mật | P7 | 2 | todo |
-| P11 | lab | `measure.ps1 -Target pet` + chế độ đo pet trong `measure.rs`, đo ngân sách và dogfood pet | P6 | 2 | todo |
+| P1 | main + ui | ADR + sửa phạm vi CLAUDE.md/ARCHITECTURE; đưa điểm thay thế UI từ nhánh `arc-ui-extensibility` lên main (đang xung đột 3 file); thêm `AvatarStyle = 'vrm'` | P0 | 2 | review |
+| P2 | ui | Cửa sổ `pet` tạo ở Rust như `popup`/`office` (`tray.rs`), capability riêng, tray bật/tắt, kéo, nhớ vị trí, đa màn hình/DPI, hủy khi đóng | P1 | 3 | review |
+| P3 | ui | `?view=pet` + `PetScene` nạp lazy (không vào bundle của popup), nền trong suốt, vẽ theo `useMotionPolicy`, lui về 2D | P2 | 3 | review |
+| P4 | ui | Trạng thái → biểu cảm/động tác: tạo dáng theo giải phẫu (PLAN §7.10) + VRMA, chớp mắt, nhìn theo con trỏ, ngủ; test tay trên VRM0 và VRM1 | P3 | 3 | review |
+| P5 | ui | `brain.ts` tầng 0 + bong bóng thoại (duyệt qua `useApprovalQueue`/`allowGate`, Critical không có nút) | P3 | 3 | review |
+| P6 | ui | Tương tác: bấm, bấm đúp mở Văn phòng, kéo, vuốt ve, menu chuột phải, bàn phím/tray | P4, P5, T13 | 2 | review |
+| P7 | ui | Orchestrator tầng 1: lệnh ánh xạ `team_pause`/`team_resume`/`focus_set` và mở thẻ; "tóm tắt" qua lệnh Rust mới gọi `GET /standup`; không bao giờ gửi `decide*`, `batch_open`, `suggestion_answer` | P5 | 2 | review |
+| P8 | ui + lab | Tài sản: model gốc, giấy phép, trang phục, nạp model người dùng qua lệnh Rust có kiểm tra | P3 | 3 | review |
+| P9 | ui | Giọng nói + lip sync (tùy chọn) | P7 | 4 | review |
+| P10 | main | Nghiên cứu orchestrator tầng 2 (LLM, giao việc có xác nhận): ADR bảo mật | P7 | 2 | review |
+| P11 | lab | `measure.ps1 -Target pet` + chế độ đo pet trong `measure.rs`, đo ngân sách và dogfood pet | P6 | 2 | review |
