@@ -8,6 +8,27 @@ việc dùng thật này.
 thường. Terminal luôn hỏi song song với popup, nên bạn vẫn trả lời được ở terminal. Hub không bao giờ tự `allow` lệnh
 thuộc vùng khóa (`rm -rf`, `git push --force`, `curl | sh`, đọc `.env`/khóa, ghi ngoài workspace, mạng ra ngoài…).
 
+## 0. Cách nhanh: cài trong app (khuyên dùng)
+
+Không cần `jq`, `bash` hay đặt `ARCTURUS_TOKEN` bằng tay:
+
+1. Chạy app (bước 3). Lần đầu, nếu chưa cài hook, app tự mở cửa sổ **Cài đặt**; lần sau mở bằng menu tray
+   **Cài đặt và tự kiểm tra…**.
+2. **Xem trước khi cài**: app hiện diff của `settings.json` (token được che). Bấm **Đồng ý cài**: app sao lưu file
+   bên cạnh rồi chỉ sửa khóa `hooks`, đúng như `dogfood-install.sh` (hook của bạn giữ nguyên, chạy lại không nhân đôi,
+   giữ symlink và quyền file). File đổi giữa lúc xem trước và lúc bấm thì app không ghi, yêu cầu xem trước lại.
+3. Mở một phiên `claude` mới.
+4. **Chạy tự kiểm tra**: app gửi một sự kiện thử (`UserPromptSubmit` của phiên `arcturus-selftest-…`) qua đúng URL và
+   token của hook đã cài, rồi báo từng bước: hook có trong settings.json, hub đang chạy, hook tới được hub (401 = token
+   lệch, lỗi kết nối = sai cổng), giao diện thấy sự kiện qua WebSocket. Không tạo yêu cầu duyệt; agent thử biến mất ngay
+   sau đó (nó vẫn được ghi vào bảng `events` như mọi sự kiện).
+5. Gỡ: nút **Gỡ hook…**, cũng qua bước xem trước.
+
+Token hook: app dùng `ARCTURUS_TOKEN` nếu bạn đã đặt (tương thích cách cũ), nếu không thì tự sinh và lưu ở
+`<data_dir>/arcturus/hook-token` (Unix: quyền 0600), đưa cho hub con và ghi thẳng vào hook trong `settings.json`. Token
+không còn nằm trong biến môi trường của `claude`. Bản cài bằng script (`$ARCTURUS_TOKEN`) được cửa sổ Cài đặt nhận ra
+và đề nghị cài lại. Các mục 1–4 dưới đây là cách cài bằng script, vẫn dùng được.
+
 ## 1. Chuẩn bị
 
 | Cần | Ghi chú |

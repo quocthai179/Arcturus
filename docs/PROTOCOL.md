@@ -231,7 +231,7 @@ Thông điệp sai không làm đóng kết nối.
 ## HTTP cho hook (Claude Code → hub)
 
 `POST /hooks/event` (trả `204`, xử lý sau) và `POST /hooks/permission` (giữ tới khi có quyết định hoặc hết giờ, trả `200` + JSON).
-Cả hai cần `Authorization: Bearer <token hook>` (`ARCTURUS_TOKEN`); token UI không được chấp nhận ở đây.
+Cả hai cần `Authorization: Bearer <token hook>` (`ARCTURUS_TOKEN` của hub; app tự sinh nếu chưa đặt, xem `docs/DOGFOOD.md` mục 0); token UI không được chấp nhận ở đây.
 
 - `Host` phải là loopback của chính hub (`127.0.0.1:<cổng>`, `localhost:<cổng>`, `[::1]:<cổng>`), nếu không `403` (chặn DNS rebinding;
   cùng luật với `/ws`). Token hook nằm trong môi trường của agent nên không coi là bí mật với agent.

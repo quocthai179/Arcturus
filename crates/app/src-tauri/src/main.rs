@@ -11,6 +11,7 @@ mod hub_proc;
 mod link;
 mod measure;
 mod pet;
+mod setup;
 mod tray;
 
 use std::sync::{Arc, Mutex};
@@ -34,6 +35,8 @@ struct AppState {
     /// Hub do app khởi động (đóng pipe stdin là hub tắt êm).
     child: Mutex<Option<HubChild>>,
     commands: mpsc::Sender<Command>,
+    /// Token hook do app quản lý (`setup::hook_token`), hoặc lý do không có.
+    hook_token: Result<String, String>,
 }
 
 impl AppState {
@@ -50,7 +53,7 @@ impl AppState {
             }
             *child = None;
         }
-        let result = hub_proc::connect();
+        let result = hub_proc::connect(self.hook_token.as_deref().ok());
         let info = result
             .as_ref()
             .map(|(i, _)| i.clone())
@@ -291,10 +294,110 @@ fn pet_ready(pet: State<'_, PetState>, kind: String) {
     }
 }
 
+/// Lệnh chỉ dành cho cửa sổ cài đặt (ghi `settings.json` của Claude Code).
+fn setup_only(window: &WebviewWindow) -> Result<(), String> {
+    if window.label() == tray::SETUP {
+        Ok(())
+    } else {
+        Err("Chỉ cửa sổ cài đặt được gọi lệnh này".to_owned())
+    }
+}
+
+/// Đường dẫn settings, cổng hub và token hook cho các lệnh `setup_*`.
+fn setup_ctx(state: &AppState) -> Result<(std::path::PathBuf, u16, String), String> {
+    let path = setup::settings_path().ok_or("không tìm được thư mục người dùng")?;
+    let token = state.hook_token.clone()?;
+    Ok((path, hub_proc::hub_addr().port(), token))
+}
+
+#[tauri::command]
+fn setup_status(
+    window: WebviewWindow,
+    state: State<'_, Arc<AppState>>,
+) -> Result<setup::Status, String> {
+    setup_only(&window)?;
+    let (path, port, token) = setup_ctx(&state)?;
+    Ok(setup::status(&path, port, &token))
+}
+
+#[tauri::command]
+fn setup_preview(
+    window: WebviewWindow,
+    state: State<'_, Arc<AppState>>,
+    action: setup::Action,
+) -> Result<setup::Preview, String> {
+    setup_only(&window)?;
+    let (path, port, token) = setup_ctx(&state)?;
+    setup::preview(&path, action, port, &token)
+}
+
+/// Ghi thay đổi người dùng vừa xem trước (`digest` của lúc xem trước; file đổi giữa chừng thì không ghi).
+#[tauri::command]
+fn setup_apply(
+    window: WebviewWindow,
+    state: State<'_, Arc<AppState>>,
+    action: setup::Action,
+    digest: String,
+) -> Result<setup::Applied, String> {
+    setup_only(&window)?;
+    let (path, port, token) = setup_ctx(&state)?;
+    setup::apply(&path, action, port, &token, &digest)
+}
+
+#[tauri::command]
+async fn setup_selftest(
+    window: WebviewWindow,
+    state: State<'_, Arc<AppState>>,
+) -> Result<setup::SelfTest, String> {
+    setup_only(&window)?;
+    let (path, _, token) = setup_ctx(&state)?;
+    // Hub con đã tắt (crash) thì khởi động lại trước khi thử, như link làm khi mất kết nối.
+    let st = state.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let _ = st.refresh();
+        setup::selftest(&path, hub_proc::hub_addr(), &token)
+    })
+    .await
+    .map_err(|e| e.to_string())
+}
+
+#[tauri::command]
+async fn setup_selftest_cleanup(
+    window: WebviewWindow,
+    state: State<'_, Arc<AppState>>,
+    nonce: String,
+) -> Result<(), String> {
+    setup_only(&window)?;
+    let (_, _, token) = setup_ctx(&state)?;
+    tauri::async_runtime::spawn_blocking(move || {
+        setup::selftest_cleanup(hub_proc::hub_addr(), &token, &nonce)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+/// Lần chạy đầu mà hook chưa cài: tự mở cửa sổ cài đặt một lần (đánh dấu bằng file `setup-seen`).
+fn first_run_setup(app: &AppHandle, state: &AppState) {
+    let Ok((path, port, token)) = setup_ctx(state) else {
+        return;
+    };
+    let Ok(dir) = app.path().app_config_dir() else {
+        return;
+    };
+    let marker = dir.join("setup-seen");
+    if marker.exists() || setup::status(&path, port, &token).up_to_date {
+        return;
+    }
+    if std::fs::create_dir_all(&dir).is_ok() && std::fs::write(&marker, b"1").is_ok() {
+        tray::open_setup(app);
+    }
+}
+
 fn on_menu(app: &AppHandle, id: &str) {
     match id {
         tray::MENU_OPEN_QUEUE => tray::toggle_popup(app, None),
         tray::MENU_OPEN_OFFICE => tray::open_office(app),
+        tray::MENU_OPEN_SETUP => tray::open_setup(app),
         tray::MENU_TOGGLE_PAUSE => {
             let (Some(state), Some(t)) = (
                 app.try_state::<Arc<AppState>>(),
@@ -349,11 +452,20 @@ fn start_link(app: AppHandle, state: Arc<AppState>, commands: mpsc::Receiver<Com
 
 fn main() {
     let (commands_tx, commands_rx) = mpsc::channel(16);
+    let hook_token = dirs::data_dir()
+        .map(|d| d.join("arcturus"))
+        .ok_or_else(|| "không tìm được thư mục dữ liệu người dùng".to_owned())
+        .and_then(|d| setup::hook_token(&d, std::env::var(setup::TOKEN_ENV).ok()));
+    if let Err(e) = &hook_token {
+        eprintln!("arcturus app: {e}");
+    }
     let state = Arc::new(AppState {
         hub: Mutex::new(Err("đang kết nối hub…".to_owned())),
         child: Mutex::new(None),
         commands: commands_tx,
+        hook_token,
     });
+    let setup_state = state.clone();
     let link_state = state.clone();
     let exit_state = state.clone();
     let mut commands_rx = Some(commands_rx);
@@ -379,7 +491,12 @@ fn main() {
             pet_hide,
             pet_open_queue,
             pet_open_office,
-            pet_ready
+            pet_ready,
+            setup_status,
+            setup_preview,
+            setup_apply,
+            setup_selftest,
+            setup_selftest_cleanup
         ])
         .on_menu_event(|app, event| on_menu(app, tray::menu_id(&event)))
         .setup(move |app| {
@@ -387,6 +504,7 @@ fn main() {
             app.manage(t);
             app.manage(PetState::load(app.handle()));
             pet::restore(app.handle());
+            first_run_setup(app.handle(), &setup_state);
             if let Some(rx) = commands_rx.take() {
                 start_link(app.handle().clone(), link_state.clone(), rx);
             }
