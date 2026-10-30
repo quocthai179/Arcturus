@@ -15,6 +15,8 @@ export interface CharacterProps {
   acc?: string;
   /** Ghi đè `aria-label` mặc định theo mood. */
   label?: string;
+  /** Bóng dưới chân (mặc định có). Văn phòng sống tự vẽ bóng dưới chân nhân vật có chân. */
+  shadow?: boolean;
 }
 
 export const MOOD_LABELS: Record<Mood, string> = {
@@ -48,7 +50,7 @@ function pops(mood: Mood): boolean {
   return mood === 'approval' || mood === 'done';
 }
 
-export function Character({ mood, width = 120, hair, outfit, acc, label }: CharacterProps) {
+export function Character({ mood, width = 120, hair, outfit, acc, label, shadow = true }: CharacterProps) {
   const H = color(hair, DEFAULT_PALETTE.hair);
   const O = color(outfit, DEFAULT_PALETTE.outfit);
   const A = color(acc, DEFAULT_PALETTE.acc);
@@ -76,7 +78,7 @@ export function Character({ mood, width = 120, hair, outfit, acc, label }: Chara
       focusable="false"
       data-mood={mood}
     >
-      <ellipse cx={100} cy={231} rx={52} ry={7} fill="#000" opacity={0.25} />
+      {shadow && <ellipse cx={100} cy={231} rx={52} ry={7} fill="#000" opacity={0.25} />}
       <path
         data-part="hair-back"
         d="M36 104 Q32 38 100 34 Q168 38 164 104 L160 160 Q150 176 140 162 L140 122 L60 122 L60 162 Q50 176 40 160 Z"

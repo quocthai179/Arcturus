@@ -3,6 +3,9 @@
 Mở từ menu tray **Mở văn phòng**. Trong môi trường phát triển UI, dùng `?view=office` trên Vite dev server.
 Office dùng cùng cơ chế xác thực hub với popup Lite; không cần endpoint hay giao thức mới.
 
+Từ 2026-10-29 cảnh mặc định là **văn phòng sống** (`live`, docs/OFFICE_LIVE.md): agent rảnh đi dạo, tán gẫu; có việc thì
+chạy về bàn; lưới thẻ dưới đây vẫn hiện ngay dưới sàn. Công tắc "Sống / Lưới" ở đầu Office chọn cảnh (nhớ ở `localStorage`).
+
 ## Hiển thị
 
 - Mỗi bàn có nhân vật SVG, tên, vai trò, mood, hoạt động, nguồn, máy và context nếu hub cung cấp.

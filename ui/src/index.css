@@ -32,6 +32,16 @@
   --motion-fast: 150ms;
   --motion-base: 250ms;
   --motion-pop: 450ms;
+  /* Văn phòng sống (docs/OFFICE_LIVE.md): nhịp bước chân, gõ phím, hơi cà phê, bong bóng thoại. */
+  --motion-step: 420ms;
+  --motion-type: 280ms;
+  --motion-steam: 1800ms;
+  --live-frame: #0c0e14;
+  --bubble-bg: #fffdf6;
+  --bubble-fg: #1d1f27;
+  --bubble-think-bg: #e6e9f5;
+  --bubble-shadow: rgba(0, 0, 0, 0.35);
+  --nametag-bg: rgba(12, 14, 20, 0.72);
   --ease-out: ease-out;
   --font-ui: 'Be Vietnam Pro', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;

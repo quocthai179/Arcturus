@@ -9,7 +9,7 @@ describe('App', () => {
     window.history.replaceState({}, '', '/?view=office');
     try {
       render(<App />);
-      expect(screen.getByRole('heading', { name: 'Văn phòng 2D' })).toBeTruthy();
+      expect(screen.getByRole('heading', { level: 1, name: 'Văn phòng' })).toBeTruthy();
       expect(screen.getByRole('heading', { name: 'Đội hình chính' })).toBeTruthy();
       await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
     } finally {

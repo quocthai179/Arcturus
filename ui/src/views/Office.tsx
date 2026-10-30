@@ -1,19 +1,42 @@
 import { useEffect, useRef, useState } from 'react';
 import { QueueList } from '../components/QueueList';
-import { DEFAULT_SCENE, OFFICE_SCENES } from '../components/scenes';
+import { DEFAULT_SCENE, isSceneId, OFFICE_SCENES, SCENE_LABELS, type SceneId } from '../components/scenes';
 import { SuggestionList } from '../components/SuggestionList';
 import { TeamControls } from '../components/TeamControls';
 import { approvalInput } from '../hub';
 import { officeRoster } from '../office';
 import { DEFAULT_MIN_REVIEW_MS, useApprovalQueue } from '../useApprovalQueue';
 import { useHubConnection } from '../useHubConnection';
+import { useMotionPolicy } from '../useMotionPolicy';
 import type { LitePopupViewProps } from './LitePopup';
 import './Office.css';
+
+const SCENE_KEY = 'arcturus.office.scene';
+
+/** Cảnh đã chọn lần trước (chỉ là tiện ích cho người xem: lỗi hoặc không có storage thì dùng mặc định). */
+function loadScene(): SceneId {
+  try {
+    const saved = window.localStorage.getItem(SCENE_KEY);
+    return isSceneId(saved) ? saved : DEFAULT_SCENE;
+  } catch {
+    return DEFAULT_SCENE;
+  }
+}
+
+function saveScene(id: SceneId): void {
+  try {
+    window.localStorage.setItem(SCENE_KEY, id);
+  } catch {
+    // Không lưu được thì lần sau dùng mặc định.
+  }
+}
 
 export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupViewProps) {
   const { now, selected, setSelectedId, gateOf, decide, decideGroup, setReviewed, notice, countdownOf, suggestions, answerSuggestion } =
     useApprovalQueue(state, send, minReviewMs);
-  const Scene = OFFICE_SCENES[DEFAULT_SCENE];
+  const [sceneId, setSceneId] = useState<SceneId>(loadScene);
+  const Scene = OFFICE_SCENES[sceneId];
+  const motion = useMotionPolicy();
   const { desks, support } = officeRoster(Object.values(state.agents), state.team.roster_max);
   const queueRef = useRef<HTMLElement>(null);
   const [hidden, setHidden] = useState(() => document.hidden);
@@ -42,7 +65,22 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
       <header className="office__head">
         <div>
           <p className="office__brand">ARCTURUS</p>
-          <h1>Văn phòng 2D</h1>
+          <h1>Văn phòng</h1>
+        </div>
+        <div className="office__scenes" role="group" aria-label="Kiểu văn phòng">
+          {(Object.keys(OFFICE_SCENES) as SceneId[]).map((id) => (
+            <button
+              key={id}
+              type="button"
+              aria-pressed={sceneId === id}
+              onClick={() => {
+                setSceneId(id);
+                saveScene(id);
+              }}
+            >
+              {SCENE_LABELS[id]}
+            </button>
+          ))}
         </div>
         <p className="muted" role="status">
           {Object.keys(state.agents).length} agent · {state.queue.length} yêu cầu đang chờ
@@ -66,6 +104,7 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
             (state.queue.some((q) => q.agent_id === a.id) || state.handoffs.some((h) => h.agent_id === a.id))
           }
           onSelect={selectAgent}
+          motion={motion}
         />
         <aside className="office__queue" ref={queueRef} aria-labelledby="queue-heading">
           <h2 id="queue-heading">Hàng đợi duyệt</h2>

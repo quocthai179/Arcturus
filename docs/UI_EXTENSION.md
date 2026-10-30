@@ -23,7 +23,7 @@ không được làm đổi các điều kiện đó (CLAUDE.md quy tắc bất 
 | Muốn thay | Điểm cắm | Cách làm |
 |---|---|---|
 | Cách vẽ nhân vật (SVG chuyển động, Lottie, 3D VRM) | `components/AgentAvatar.tsx`: `AVATAR_RENDERERS` | Thêm khóa vào `AvatarStyle` và một component nhận `AvatarRendererProps` (`mood`, `palette`, `size`, `label`). Nơi dùng (thẻ duyệt, bàn, đội) không đổi. |
-| Cảnh Văn phòng (lưới, cảnh 2D có bàn/ánh sáng, isometric, 3D) | `components/scenes.tsx`: `OFFICE_SCENES` | Thêm khóa vào `SceneId` và một component nhận `OfficeSceneProps` (`desks`, `support`, `canSelect`, `onSelect`). `Office` không đổi. |
+| Cảnh Văn phòng (lưới, cảnh 2D có bàn/ánh sáng, isometric, 3D) | `components/scenes.tsx`: `OFFICE_SCENES` | Thêm khóa vào `SceneId` và một component nhận `OfficeSceneProps` (`desks`, `support`, `canSelect`, `onSelect`, `motion`). `Office` không đổi. Đã có: `live` (mặc định, docs/OFFICE_LIVE.md) và `grid`. |
 | Màu, bo góc, khoảng cách, thời lượng | `index.css` khối `:root` | Đổi giá trị token; chủ đề mới là một khối `:root[data-theme='...']` ghi đè token. |
 | Quy tắc chuyển động | `useMotionPolicy.ts` + quy tắc `data-motion` trong `index.css` | Không sửa từng hiệu ứng; mọi hiệu ứng tự được tắt. |
 
