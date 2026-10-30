@@ -331,6 +331,22 @@ body {
   overflow-wrap: anywhere;
 }
 
+.empty {
+  margin-top: var(--space-3);
+  padding: var(--space-4);
+  border: 1px dashed var(--border);
+  border-radius: var(--radius-lg);
+  text-align: center;
+}
+
+.empty p {
+  margin: 0 0 var(--space-1);
+}
+
+.empty__title {
+  font-weight: 600;
+}
+
 .team__project {
   font-size: 11px;
   color: var(--muted);

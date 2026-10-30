@@ -42,6 +42,11 @@ describe('OfficeView', () => {
     view.rerender(<OfficeView {...p} state={{ ...p.state, agents: { agt_s1: agent({ context_pct: null }) } }} />);
     expect(screen.queryByRole('progressbar')).toBeNull();
     expect(screen.queryByText(/Context/)).toBeNull();
+    // Vai trò mặc định của hub không mang thông tin: không hiện.
+    view.rerender(<OfficeView {...p} state={{ ...p.state, agents: { agt_s1: agent({ role: 'thành viên' }) } }} />);
+    expect(screen.queryByText('thành viên')).toBeNull();
+    view.rerender(<OfficeView {...p} state={{ ...p.state, agents: { agt_s1: agent({ mood: 'idle', act_text: 'Đang rảnh' }) } }} />);
+    expect(within(screen.getByRole('article', { name: 'Bàn của Khoa' })).getAllByText('Đang rảnh')).toHaveLength(1);
   });
 
   it('shows_support_names_and_moves_newly_active_agent_to_a_desk', () => {

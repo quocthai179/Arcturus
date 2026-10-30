@@ -2,8 +2,8 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { ApprovalView, ClientMsg } from '../protocol';
 import { applyServer, initialState, type HubState } from '../store';
-import { approval, handoff, snapshot } from '../test/fixtures';
-import { LIST_SETTLE_MS, LitePopupView } from './LitePopup';
+import { agent, approval, handoff, snapshot } from '../test/fixtures';
+import { LIST_SETTLE_MS, LitePopupView, teamSummary } from './LitePopup';
 
 const noScroll = Element.prototype.scrollIntoView;
 afterEach(() => {
@@ -64,6 +64,25 @@ describe('LitePopupView', () => {
       fireEvent.click(allow);
       expect(sent).toEqual([{ t: 'decide', request_id: 'req_x', decision: 'allow', origin: 'user' }]);
     }
+  });
+
+  it('empty_queue_says_who_is_doing_what_or_how_to_connect', () => {
+    popup(stateWith([]));
+    expect(screen.getByRole('region', { name: 'Tình hình đội' }).textContent).toContain('Không ai cần bạn lúc này.');
+    cleanup();
+    popup({ ...stateWith([]), agents: {} });
+    expect(screen.getByText(/Chưa có phiên Claude Code nào gửi tới/)).toBeTruthy();
+    expect(screen.getByText(/Cài đặt và tự kiểm tra/)).toBeTruthy();
+    cleanup();
+    popup(stateWith([approval()]));
+    expect(screen.queryByRole('region', { name: 'Tình hình đội' })).toBeNull();
+  });
+
+  it('team_summary_counts_moods_and_skips_zero', () => {
+    expect(
+      teamSummary([agent({ mood: 'working' }), agent({ mood: 'working' }), agent({ mood: 'idle' }), agent({ mood: 'error' })]),
+    ).toBe('2 đang làm · 1 gặp lỗi · 1 rảnh');
+    expect(teamSummary([])).toBe('');
   });
 
   it('team_list_shows_each_agent_project', () => {

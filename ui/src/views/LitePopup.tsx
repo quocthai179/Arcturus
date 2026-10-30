@@ -7,12 +7,28 @@ import { QueueList } from '../components/QueueList';
 import { SuggestionList } from '../components/SuggestionList';
 import { TeamControls } from '../components/TeamControls';
 import { approvalInput, reportPopupReady } from '../hub';
-import type { ClientMsg } from '../protocol';
+import type { AgentView, ClientMsg } from '../protocol';
 import type { HubState } from '../store';
 import { DEFAULT_MIN_REVIEW_MS, useApprovalQueue } from '../useApprovalQueue';
 import { projectName } from '../text';
 import { useHubConnection } from '../useHubConnection';
 export { DEFAULT_MIN_REVIEW_MS, LIST_SETTLE_MS } from '../useApprovalQueue';
+
+/** "2 đang làm · 1 rảnh · 1 lỗi": đếm theo mood, bỏ mục bằng 0. */
+export function teamSummary(agents: readonly AgentView[]): string {
+  const count = (m: AgentView['mood']) => agents.filter((a) => a.mood === m).length;
+  const parts: [number, string][] = [
+    [count('working'), 'đang làm'],
+    [count('approval'), 'chờ duyệt'],
+    [count('error'), 'gặp lỗi'],
+    [count('done'), 'vừa xong'],
+    [count('idle'), 'rảnh'],
+  ];
+  return parts
+    .filter(([n]) => n > 0)
+    .map(([n, t]) => `${n} ${t}`)
+    .join(' · ');
+}
 
 export interface LitePopupViewProps {
   state: HubState;
@@ -146,6 +162,24 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
         loadFull={loadFull}
         onReviewed={(id) => setReviewed((r) => ({ ...r, [id]: true }))}
       />
+
+      {state.connection === 'open' && state.synced && queue.length === 0 && handoffs.length === 0 && (
+        <section className="empty" aria-label="Tình hình đội">
+          {teamAgents.length === 0 ? (
+            <>
+              <p className="empty__title">Chưa có phiên Claude Code nào gửi tới.</p>
+              <p className="muted small">
+                Mở một phiên <code>claude</code> mới. Nếu vẫn trống, vào menu tray → <strong>Cài đặt và tự kiểm tra…</strong>
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="empty__title">Không ai cần bạn lúc này.</p>
+              <p className="muted small">{teamSummary(teamAgents)}</p>
+            </>
+          )}
+        </section>
+      )}
 
       {teamAgents.length > 0 && (
         <section className="team" aria-label="Đội">
