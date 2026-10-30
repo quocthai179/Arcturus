@@ -2,7 +2,7 @@
 // không cắt bằng CSS), render bằng text node. Mọi chuỗi từ agent là dữ liệu không tin cậy.
 import { useState } from 'react';
 import type { AgentView, ApprovalView, Decision, Risk, Suspicion } from '../protocol';
-import { revealHidden, splitSpans } from '../text';
+import { projectName, revealHidden, splitSpans } from '../text';
 import { AgentAvatar } from './AgentAvatar';
 
 export const RISK_LABELS: Record<Risk, string> = {
@@ -35,6 +35,14 @@ export interface Gate {
   ok: boolean;
   /** Lý do chưa cho Đồng ý (hiện cho người dùng). */
   reason: string | null;
+}
+
+/**
+ * Phím Enter chỉ duyệt được lệnh rủi ro thấp/vừa. Lệnh rủi ro cao và vùng khóa phải bấm chuột vào nút: nhấn Enter liên tiếp
+ * để dọn hàng đợi không được vô tình cho chạy `rm -rf` hay `curl | sh` vừa trượt lên đầu danh sách.
+ */
+export function keyboardAllow(a: ApprovalView): boolean {
+  return a.risk === 'low' || a.risk === 'medium';
 }
 
 /**
@@ -118,9 +126,9 @@ export function ApprovalCard({
         />
         <div className="card__who">
           <strong>{a.agent_name}</strong>
-          {agent !== undefined && (
-            <span className="muted">
-              {agent.host} · {agent.source}
+          {agent !== undefined && projectName(agent.cwd) !== '' && (
+            <span className="muted card__project" title={agent.cwd}>
+              {projectName(agent.cwd)}
             </span>
           )}
         </div>
@@ -214,14 +222,21 @@ export function ApprovalCard({
         </button>
         <button
           type="button"
-          className="btn btn--allow"
+          className={keyboardAllow(a) ? 'btn btn--allow' : 'btn btn--allow btn--allow-risky'}
           disabled={!gate.ok}
-          title={gate.reason ?? undefined}
+          title={gate.reason ?? (keyboardAllow(a) ? undefined : 'Rủi ro cao: chỉ duyệt bằng cách bấm nút này')}
           onClick={() => gate.ok && onDecide('allow')}
         >
-          {countdownLeftMs !== null ? 'Chạy ngay' : 'Đồng ý'} <kbd>Enter</kbd>
+          {countdownLeftMs !== null ? 'Chạy ngay' : 'Đồng ý'}
+          {keyboardAllow(a) && (
+            <>
+              {' '}
+              <kbd>Enter</kbd>
+            </>
+          )}
         </button>
       </footer>
+      {!keyboardAllow(a) && <p className="muted small">Rủi ro cao: Enter không duyệt lệnh này, hãy bấm nút.</p>}
       {gate.reason !== null && <p className="muted small gate-reason">{gate.reason}</p>}
     </article>
   );

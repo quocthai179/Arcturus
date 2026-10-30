@@ -1076,7 +1076,10 @@ interface CharacterProps { mood: Mood; width?: number; hair?: string; outfit?: s
   (hiện nguyên ký tự ẩn thì người duyệt vẫn không thấy).
 - `truncated = true` → dòng "Nội dung đã cắt" và nút "Xem đầy đủ" gọi `GET /approvals/{request_id}/input`.
 - Nhóm cùng `group_key` có ≥2 yêu cầu → hiện "Duyệt cả N" (ẩn với Critical).
-- Phím: ↑/↓ chọn, Enter đồng ý, Esc từ chối (trong popup, không toàn cục).
+- Phím: ↑/↓ chọn, Enter đồng ý, Esc từ chối (trong popup, không toàn cục). Enter chỉ duyệt Low/Medium; High và Critical
+  phải bấm chuột vào nút Đồng ý (viền đỏ, không có gợi ý Enter), nhấn Enter thì popup báo lý do (UX test 2026-10-30:
+  Enter, Enter liên tiếp đã duyệt cả lệnh vùng khóa vừa trượt lên đầu hàng đợi). Thẻ và bàn hiện tên dự án (thư mục cuối
+  của `cwd`) thay cho `host · source`.
 - Nếu Q1 = terminal bị treo: thêm nút "Trả về terminal" gửi `ReturnToTerminal` (hub trả `{}` ngay).
 
 **Test:** reducer áp snapshot/delta đúng; `ApprovalCard` hiển thị `command_normalized` và tô sáng đúng vị trí, kể cả lệnh có ký tự ngoài ASCII/ngoài BMP; phím tắt gửi đúng `ClientMsg`;

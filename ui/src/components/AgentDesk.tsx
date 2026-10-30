@@ -1,6 +1,7 @@
 import type { AgentView } from '../protocol';
 import { AgentAvatar } from './AgentAvatar';
 import { MOOD_LABELS } from './Character';
+import { projectName } from '../text';
 
 export function AgentDesk({ agent: a, onSelect }: { agent: AgentView; onSelect: (() => void) | undefined }) {
   const context = a.context_pct !== null && Number.isFinite(a.context_pct)
@@ -20,13 +21,17 @@ export function AgentDesk({ agent: a, onSelect }: { agent: AgentView; onSelect: 
       <p className="muted">{a.role || 'Chưa có vai trò'}</p>
       <span className="desk__mood">{MOOD_LABELS[a.mood]}</span>
       <p className="desk__activity">{a.act_text}</p>
-      <p className="muted small">{a.source} · {a.host}</p>
-      <div className="desk__context">
-        <span>Context {context === null ? '— chưa có dữ liệu' : `${Math.round(context)}%`}</span>
-        {context !== null && (
+      {projectName(a.cwd) !== '' && (
+        <p className="muted small desk__project" title={a.cwd}>
+          {projectName(a.cwd)}
+        </p>
+      )}
+      {context !== null && (
+        <div className="desk__context">
+          <span>Context {Math.round(context)}%</span>
           <progress aria-label={`Context của ${a.name}`} value={context} max={100} />
-        )}
-      </div>
+        </div>
+      )}
     </article>
   );
 }

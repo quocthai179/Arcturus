@@ -36,11 +36,12 @@ describe('OfficeView', () => {
     const view = render(<OfficeView {...p} />);
     const desk = screen.getByRole('article', { name: 'Bàn của Khoa' });
     expect(within(desk).getByText('backend')).toBeTruthy();
-    expect(within(desk).getByText('claude-code · laptop')).toBeTruthy();
+    expect(within(desk).getByText('proj').getAttribute('title')).toBe('/w/proj');
+    expect(within(desk).queryByText(/laptop|claude-code/)).toBeNull();
     expect(within(desk).getByRole('progressbar').getAttribute('value')).toBe('42');
     view.rerender(<OfficeView {...p} state={{ ...p.state, agents: { agt_s1: agent({ context_pct: null }) } }} />);
     expect(screen.queryByRole('progressbar')).toBeNull();
-    expect(screen.getByText('Context — chưa có dữ liệu')).toBeTruthy();
+    expect(screen.queryByText(/Context/)).toBeNull();
   });
 
   it('shows_support_names_and_moves_newly_active_agent_to_a_desk', () => {

@@ -1,7 +1,8 @@
 // Popup Lite (docs/PLAN.md T12): hàng đợi duyệt, duyệt/từ chối, duyệt gộp, phím tắt trong popup (↑/↓ chọn, Enter đồng
 // ý, Esc từ chối). Đóng popup thì app hủy cả webview, nên không có gì cần dọn ngoài socket.
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { AgentAvatar } from '../components/AgentAvatar';
+import { keyboardAllow } from '../components/ApprovalCard';
 import { QueueList } from '../components/QueueList';
 import { SuggestionList } from '../components/SuggestionList';
 import { TeamControls } from '../components/TeamControls';
@@ -32,6 +33,10 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
     const cards = root.current?.querySelectorAll<HTMLElement>('[data-request-id]') ?? [];
     [...cards].find((el) => el.dataset.requestId === selectedId)?.scrollIntoView({ block: 'nearest' });
   }, [selectedId]);
+
+  // Enter bị bỏ qua vì lệnh rủi ro cao: nói rõ lý do, nếu không người dùng tưởng phím hỏng.
+  const [keyHint, setKeyHint] = useState<string | null>(null);
+  useEffect(() => setKeyHint(null), [selectedId]);
 
   // Phím tắt chỉ trong popup (cửa sổ riêng, không đăng ký phím toàn cục).
   const latest = useRef({ queue, selected, gateOf, decide });
@@ -64,7 +69,11 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
         case 'Enter':
           // Nút đang có focus tự xử lý Enter của nó.
           if (target instanceof HTMLButtonElement) return;
-          if (gate(sel).ok) act(sel.request_id, 'allow');
+          if (!keyboardAllow(sel)) {
+            setKeyHint('Lệnh rủi ro cao: Enter không duyệt, hãy bấm nút Đồng ý trên thẻ.');
+          } else if (gate(sel).ok) {
+            act(sel.request_id, 'allow');
+          }
           e.preventDefault();
           break;
         case 'Escape':
@@ -90,6 +99,11 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
       </header>
       <TeamControls team={team} connected={state.connection === 'open' && state.synced} send={send} />
 
+      {keyHint !== null && (
+        <p className="banner" role="status">
+          {keyHint}
+        </p>
+      )}
       {state.connection !== 'open' && (
         <p className="banner banner--error" role="alert">
           {state.error ?? 'Đang kết nối hub…'}

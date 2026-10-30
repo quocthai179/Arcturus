@@ -50,6 +50,28 @@ describe('LitePopupView', () => {
     ]);
   });
 
+  it('enter_never_allows_high_or_critical_only_a_click_does', () => {
+    // Hồi quy UX test 2026-10-30: Enter, Enter liên tiếp duyệt cả lệnh vùng khóa vừa trượt lên đầu hàng đợi.
+    for (const risk of ['high', 'critical'] as const) {
+      cleanup();
+      const { sent } = popup(stateWith([approval({ request_id: 'req_x', risk, command_normalized: 'rm -rf ./build' })]));
+      fireEvent.keyDown(window, { key: 'Enter' });
+      expect(sent).toEqual([]);
+      expect(screen.getByText(/Enter không duyệt, hãy bấm nút Đồng ý/)).toBeTruthy();
+      const allow = screen.getByRole('button', { name: 'Đồng ý' });
+      expect(allow.className).toContain('btn--allow-risky');
+      expect(allow.querySelector('kbd')).toBeNull();
+      fireEvent.click(allow);
+      expect(sent).toEqual([{ t: 'decide', request_id: 'req_x', decision: 'allow', origin: 'user' }]);
+    }
+  });
+
+  it('escape_still_denies_critical', () => {
+    const { sent } = popup(stateWith([approval({ request_id: 'req_c', risk: 'critical' })]));
+    fireEvent.keyDown(window, { key: 'Escape' });
+    expect(sent).toEqual([{ t: 'decide', request_id: 'req_c', decision: 'deny', origin: 'user' }]);
+  });
+
   it('held_enter_or_escape_decides_only_once', () => {
     const { sent } = popup(stateWith(THREE));
     fireEvent.keyDown(window, { key: 'Enter', repeat: true });

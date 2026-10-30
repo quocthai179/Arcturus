@@ -1,5 +1,15 @@
 import { describe, expect, it } from 'vitest';
-import { revealHidden, splitSpans } from './text';
+import { projectName, revealHidden, splitSpans } from './text';
+
+describe('projectName', () => {
+  it('lấy thư mục cuối của cwd Unix hoặc Windows', () => {
+    expect(projectName('/home/u/code/shop-api')).toBe('shop-api');
+    expect(projectName('/home/u/code/shop-api/')).toBe('shop-api');
+    expect(projectName('C:\\Users\\u\\code\\infra')).toBe('infra');
+    expect(projectName('')).toBe('');
+    expect(projectName('/')).toBe('');
+  });
+});
 
 describe('splitSpans', () => {
   it('uses_code_point_indices_with_non_bmp', () => {

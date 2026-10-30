@@ -67,3 +67,12 @@ export function revealHidden(s: string): string {
   }
   return out;
 }
+
+/**
+ * Tên dự án để hiển thị: thư mục cuối của `cwd` (Unix hoặc Windows). Trưởng nhóm cần biết agent đang làm ở repo nào hơn
+ * là tên máy. Chuỗi rỗng khi không có `cwd`.
+ */
+export function projectName(cwd: string): string {
+  const parts = cwd.split(/[\\/]+/).filter((p) => p.length > 0);
+  return parts[parts.length - 1] ?? '';
+}
