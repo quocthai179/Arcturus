@@ -87,7 +87,7 @@ describe('PetView', () => {
 
   it('chip trạng thái: cần duyệt hiện số; bấm mở hàng đợi', () => {
     const { api: a } = mount([approval({ request_id: 'req_1', risk: 'medium' }), approval({ request_id: 'req_2', risk: 'low' })]);
-    const chip = screen.getByRole('button', { name: 'Trạng thái: Cần anh duyệt · 2' });
+    const chip = screen.getByRole('button', { name: 'Trạng thái: Cần bạn duyệt · 2' });
     fireEvent.click(chip);
     expect(a.openQueue).toHaveBeenCalledTimes(1);
   });
@@ -136,13 +136,13 @@ describe('PetView', () => {
     // Mới 5 phút: chưa tính là vắng.
     vi.setSystemTime(Date.parse('2026-10-28T09:06:00Z'));
     fireEvent.pointerEnter(body);
-    expect(screen.queryByText(/Trong lúc anh vắng/)).toBeNull();
+    expect(screen.queryByText(/Trong lúc bạn vắng/)).toBeNull();
     // Có tin mới lúc 09:08, rồi 11 phút không tương tác.
     vi.setSystemTime(Date.parse('2026-10-28T09:08:00Z'));
     rerender(view({ ...base, queue: [approval({ request_id: 'req_9', risk: 'low' }), approval({ request_id: 'req_10', risk: 'low' })] }));
     vi.setSystemTime(Date.parse('2026-10-28T09:17:00Z'));
     fireEvent.pointerEnter(body);
-    expect(screen.getByText('Trong lúc anh vắng: 2 yêu cầu đang chờ duyệt.')).toBeTruthy();
+    expect(screen.getByText('Trong lúc bạn vắng: 2 yêu cầu đang chờ duyệt.')).toBeTruthy();
   });
 
   it('kéo pet: nhấn rồi rê quá 4px thì app dời cửa sổ, nhả chuột thì kết thúc và không tính là bấm', async () => {

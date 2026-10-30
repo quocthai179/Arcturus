@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import type { AgentView, ApprovalView, Risk } from '../protocol';
 import { initialState, type HubState } from '../store';
-import { JOURNAL_MAX, SLEEP_AFTER_MS, SPEAK_GAP_MS, awayDigest, cleanText, effectiveChatter, glance, initialMemory, think, type BrainMemory, type JournalEntry } from './brain';
+import { JOURNAL_MAX, SLEEP_AFTER_MS, SPEAK_GAP_MS, awayDigest, cleanText, effectiveChatter, glance, initialMemory, mostUrgent, think, type BrainMemory, type JournalEntry } from './brain';
 
 function agent(id: string, mood: AgentView['mood'], extra: Partial<AgentView> = {}): AgentView {
   return {
@@ -69,6 +69,20 @@ describe('think', () => {
     expect(a?.speech?.text).not.toContain('git push');
     expect(b?.speech).toBeNull();
     expect(b?.approval?.request_id).toBe('req_1');
+  });
+
+  it('thẻ là yêu cầu gấp nhất, khớp câu pet nói (vùng khóa đến sau vẫn lên thẻ)', () => {
+    // Hồi quy UX test 2026-10-30: pet nói về vùng khóa của agent này, thẻ lại là lệnh rủi ro thấp của agent khác.
+    const q = hub({ queue: [approval('req_low', 'low'), approval('req_crit', 'critical', '2026-10-28T00:00:05Z')] });
+    const [a] = run([q]);
+    expect(a?.speech?.text).toContain('vùng khóa');
+    expect(a?.approval?.request_id).toBe('req_crit');
+  });
+
+  it('mostUrgent: rủi ro cao nhất, cùng mức giữ thứ tự hàng đợi', () => {
+    expect(mostUrgent([])).toBeNull();
+    expect(mostUrgent([approval('a', 'low'), approval('b', 'high'), approval('c', 'high')])?.request_id).toBe('b');
+    expect(mostUrgent([approval('a', 'medium'), approval('b', 'low')])?.request_id).toBe('a');
   });
 
   it('Critical: tâm trạng nghiêm, câu khẩn, hướng người dùng mở hàng đợi', () => {
@@ -204,7 +218,7 @@ describe('chip trạng thái (glance)', () => {
   it('ưu tiên: Critical > cần duyệt > lỗi > tạm dừng > đang làm > xong > rảnh', () => {
     const agents = { a: agent('a', 'error'), b: agent('b', 'working') };
     expect(g(hub({ agents, queue: [approval('r1', 'critical'), approval('r2', 'low')] }))).toMatchObject({ tone: 'critical', action: 'open_queue', text: 'Vùng khóa chờ duyệt · 2' });
-    expect(g(hub({ agents, queue: [approval('r2', 'low')] }))).toMatchObject({ tone: 'attention', text: 'Cần anh duyệt · 1' });
+    expect(g(hub({ agents, queue: [approval('r2', 'low')] }))).toMatchObject({ tone: 'attention', text: 'Cần bạn duyệt · 1' });
     expect(g(hub({ agents }))).toMatchObject({ tone: 'error', action: 'open_office', text: 'a gặp lỗi' });
     expect(g(hub({ agents: { b: agent('b', 'working') }, team: { ...initialState.team, paused: true } }))).toMatchObject({ tone: 'paused' });
     expect(g(hub({ agents: { b: agent('b', 'working'), c: agent('c', 'working') } }))).toMatchObject({ tone: 'working', text: '2 agent đang làm' });
@@ -238,11 +252,11 @@ describe('tóm tắt lúc vắng', () => {
 
   it('đếm tin sau mốc vắng, nêu tên agent lỗi, số yêu cầu còn chờ', () => {
     const j = [e(5, 'done', 'Old'), e(20, 'done', 'Vega'), e(30, 'done', 'Rigel'), e(40, 'error', 'Deneb'), e(41, 'error', 'Deneb'), e(50, 'request', 'Vega')];
-    expect(awayDigest(j, 10, 1)).toBe('Trong lúc anh vắng: 2 việc xong, 2 lỗi (Deneb), 1 yêu cầu đang chờ duyệt.');
+    expect(awayDigest(j, 10, 1)).toBe('Trong lúc bạn vắng: 2 việc xong, 2 lỗi (Deneb), 1 yêu cầu đang chờ duyệt.');
   });
 
   it('không có tin mới: null; yêu cầu đã xử lý hết: nói gọn', () => {
     expect(awayDigest([e(5, 'done')], 10, 0)).toBeNull();
-    expect(awayDigest([e(20, 'request', 'Vega')], 10, 0)).toBe('Trong lúc anh vắng có vài yêu cầu, giờ đã xử lý hết.');
+    expect(awayDigest([e(20, 'request', 'Vega')], 10, 0)).toBe('Trong lúc bạn vắng có vài yêu cầu, giờ đã xử lý hết.');
   });
 });

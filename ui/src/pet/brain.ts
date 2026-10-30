@@ -100,6 +100,17 @@ export function effectiveChatter(chatter: Chatter, focus: boolean): Chatter {
   return focus && chatter === 'normal' ? 'urgent' : chatter;
 }
 
+const RISK_RANK: Record<ApprovalView['risk'], number> = { critical: 3, high: 2, medium: 1, low: 0 };
+
+/** Yêu cầu rủi ro cao nhất; cùng mức thì giữ thứ tự hàng đợi (cái đến trước). */
+export function mostUrgent(queue: readonly ApprovalView[]): ApprovalView | null {
+  let best: ApprovalView | null = null;
+  for (const a of queue) {
+    if (best === null || RISK_RANK[a.risk] > RISK_RANK[best.risk]) best = a;
+  }
+  return best;
+}
+
 export function think(state: HubState, mem: BrainMemory, now: number, sleepAfterMs = SLEEP_AFTER_MS, chatter: Chatter = 'normal'): BrainOutput {
   const connected = state.connection === 'open' && state.synced;
   const said = new Set(mem.said);
@@ -124,7 +135,9 @@ export function think(state: HubState, mem: BrainMemory, now: number, sleepAfter
   if (Object.keys(mem.agentMoods).some((id) => !(id in agentMoods))) lastChangeAt = now;
 
   const queue = visibleQueue(state);
-  const approval = connected ? (queue[0] ?? null) : null;
+  // Thẻ của pet hiện yêu cầu gấp nhất (cùng mức thì cái đến trước), khớp với câu pet nói: lời nói ưu tiên rủi ro cao, nên
+  // thẻ lấy `queue[0]` từng nói về vùng khóa của agent này trong khi thẻ là lệnh rủi ro thấp của agent khác.
+  const approval = connected ? mostUrgent(queue) : null;
   for (const a of connected ? queue : []) {
     const key = `req:${a.request_id}`;
     if (said.has(key)) continue;
@@ -133,7 +146,7 @@ export function think(state: HubState, mem: BrainMemory, now: number, sleepAfter
     const tool = cleanText(a.tool, 24);
     candidates.push({
       key,
-      text: a.risk === 'critical' ? `${name} xin chạy ${tool} trong vùng khóa. Anh mở hàng đợi xem kỹ nhé.` : `${name} xin chạy ${tool} (${RISK_LABELS[a.risk].toLowerCase()}).`,
+      text: a.risk === 'critical' ? `${name} xin chạy ${tool} trong vùng khóa. Bạn mở hàng đợi xem kỹ nhé.` : `${name} xin chạy ${tool} (${RISK_LABELS[a.risk].toLowerCase()}).`,
       priority: URGENT.has(a.risk) ? 'high' : 'normal',
       kind: 'request',
       agent: name,
@@ -223,7 +236,7 @@ export function glance(state: HubState, out: Pick<BrainOutput, 'approval' | 'vis
     const n = out.visibleCount;
     return out.approval.risk === 'critical'
       ? { tone: 'critical', icon: '⛔', text: n > 1 ? `Vùng khóa chờ duyệt · ${n}` : 'Vùng khóa chờ duyệt', action: 'open_queue' }
-      : { tone: 'attention', icon: '⏳', text: `Cần anh duyệt · ${n}`, action: 'open_queue' };
+      : { tone: 'attention', icon: '⏳', text: `Cần bạn duyệt · ${n}`, action: 'open_queue' };
   }
   const team = Object.values(state.agents);
   const failed = team.filter((a) => a.mood === 'error');
@@ -254,6 +267,6 @@ export function awayDigest(journal: readonly JournalEntry[], since: number, pend
   if (errors.length > 0) parts.push(`${errors.length} lỗi${names.length > 0 ? ` (${names.slice(0, 3).join(', ')}${names.length > 3 ? '…' : ''})` : ''}`);
   if (pending > 0) parts.push(`${pending} yêu cầu đang chờ duyệt`);
   if (other > 0) parts.push(`${other} tin về đội`);
-  if (parts.length === 0) return 'Trong lúc anh vắng có vài yêu cầu, giờ đã xử lý hết.';
-  return `Trong lúc anh vắng: ${parts.join(', ')}.`;
+  if (parts.length === 0) return 'Trong lúc bạn vắng có vài yêu cầu, giờ đã xử lý hết.';
+  return `Trong lúc bạn vắng: ${parts.join(', ')}.`;
 }

@@ -17,6 +17,7 @@ import type { ApprovalView, ClientMsg, Mood } from '../protocol';
 import type { HubState } from '../store';
 import { splitSpans } from '../text';
 import { DEFAULT_MIN_REVIEW_MS, useApprovalQueue } from '../useApprovalQueue';
+import { projectName } from '../text';
 import { useHubConnection } from '../useHubConnection';
 import { useMotionPolicy } from '../useMotionPolicy';
 import { useNow } from '../useNow';
@@ -215,7 +216,7 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
     const note: Record<Chatter, string> = {
       normal: 'Em nhắc như bình thường.',
       urgent: 'Em chỉ nhắc việc khẩn thôi.',
-      quiet: 'Em im lặng nhé. Anh xem chip trạng thái và "Lời nhắc gần đây".',
+      quiet: 'Em im lặng nhé. Bạn xem chip trạng thái và "Lời nhắc gần đây".',
     };
     setSay({ text: note[level], until: Date.now() + 3500 });
   };
@@ -508,6 +509,7 @@ export function PetView({ state, send, api, minReviewMs, Scene = LazyScene, webg
         {showApproval && approval !== null && (
           <ApprovalBubble
             a={approval}
+            project={projectName(state.agents[approval.agent_id]?.cwd ?? '')}
             more={brain.visibleCount - 1}
             gate={allowGate(approval, {
               connected,
@@ -627,6 +629,8 @@ function JournalPanel({ entries, onClose }: { entries: readonly JournalEntry[]; 
 
 interface ApprovalBubbleProps {
   a: ApprovalView;
+  /** Tên dự án của agent (thư mục cuối của `cwd`), rỗng nếu không biết. */
+  project: string;
   more: number;
   gate: { ok: boolean; reason: string | null };
   onAllow: () => void;
@@ -635,7 +639,7 @@ interface ApprovalBubbleProps {
   onClose: () => void;
 }
 
-function ApprovalBubble({ a, more, gate, onAllow, onDeny, onOpen, onClose }: ApprovalBubbleProps) {
+function ApprovalBubble({ a, project, more, gate, onAllow, onDeny, onOpen, onClose }: ApprovalBubbleProps) {
   const critical = a.risk === 'critical';
   const full = fitsBubble(a);
   // Đồng ý chỉ khi lệnh hiện đầy đủ ở đây và không phải vùng khóa.
@@ -643,7 +647,8 @@ function ApprovalBubble({ a, more, gate, onAllow, onDeny, onOpen, onClose }: App
   return (
     <article className={`pet__card risk-${a.risk}`} aria-label={`Yêu cầu của ${a.agent_name}: ${a.tool}`}>
       <header className="pet__card-head">
-        <strong>{a.agent_name}</strong> <span className="muted">{a.tool}</span>
+        <strong>{a.agent_name}</strong>
+        {project !== '' && <span className="muted">{project}</span>} <span className="muted">· {a.tool}</span>
         <span className={`risk-badge risk-badge--${a.risk}`}>{RISK_LABELS[a.risk]}</span>
         <button type="button" className="pet__x" aria-label="Ẩn bong bóng" onClick={onClose}>
           ×

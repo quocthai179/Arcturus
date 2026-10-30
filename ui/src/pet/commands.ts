@@ -76,7 +76,7 @@ export type ParseResult = { ok: true; action: PetAction } | { ok: false; reason:
 
 export function parseCommand(input: string): ParseResult {
   const n = normalizeCommand(input);
-  if (n === '') return { ok: false, reason: 'Anh gõ lệnh giúp em nhé.' };
+  if (n === '') return { ok: false, reason: 'Bạn gõ lệnh giúp em nhé.' };
   const hit = COMMANDS.find((c) => c.aliases.includes(n) || normalizeCommand(c.label) === n);
   if (hit === undefined) return { ok: false, reason: `Em chưa hiểu lệnh này. Gõ "trợ giúp" để xem các lệnh.` };
   return { ok: true, action: hit.action };
