@@ -25,6 +25,7 @@ use crate::link::Badge;
 pub const TRAY_ID: &str = "arcturus";
 pub const POPUP: &str = "popup";
 pub const OFFICE: &str = "office";
+pub const SETUP: &str = "setup";
 const POPUP_W: f64 = 380.0;
 const POPUP_H: f64 = 560.0;
 /// Mất focus ngay sau khi mở (trước khi cửa sổ kịp nhận focus) không tính là đóng.
@@ -41,6 +42,7 @@ const PREWARM_MAX: Duration = Duration::from_secs(8);
 
 pub const MENU_OPEN_QUEUE: &str = "open_queue";
 pub const MENU_OPEN_OFFICE: &str = "open_office";
+pub const MENU_OPEN_SETUP: &str = "open_setup";
 pub const MENU_TOGGLE_PAUSE: &str = "toggle_pause";
 pub const MENU_TOGGLE_FOCUS: &str = "toggle_focus";
 pub const MENU_QUIT: &str = "quit";
@@ -179,6 +181,13 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayState> {
         None::<&str>,
     )?;
     let pet_item = MenuItem::with_id(app, MENU_TOGGLE_PET, "Hiện trợ lý", true, None::<&str>)?;
+    let setup_item = MenuItem::with_id(
+        app,
+        MENU_OPEN_SETUP,
+        "Cài đặt và tự kiểm tra…",
+        true,
+        None::<&str>,
+    )?;
     let quit = MenuItem::with_id(app, MENU_QUIT, "Thoát", true, None::<&str>)?;
     let menu = Menu::with_items(
         app,
@@ -188,6 +197,7 @@ pub fn build(app: &AppHandle) -> tauri::Result<TrayState> {
             &pause_item,
             &focus_item,
             &pet_item,
+            &setup_item,
             &quit,
         ],
     )?;
@@ -650,6 +660,22 @@ pub fn open_office(app: &AppHandle) {
     .build();
     if let Err(e) = built {
         eprintln!("arcturus app: không mở được văn phòng: {e}");
+    }
+}
+
+/// Mở (hoặc đưa lên trước) cửa sổ cài đặt hook và tự kiểm tra (`setup.rs`). Đóng là hủy webview như văn phòng.
+pub fn open_setup(app: &AppHandle) {
+    if let Some(w) = app.get_webview_window(SETUP) {
+        let _ = w.set_focus();
+        return;
+    }
+    let built =
+        WebviewWindowBuilder::new(app, SETUP, WebviewUrl::App("index.html?view=setup".into()))
+            .title("Arcturus — Cài đặt")
+            .inner_size(720.0, 640.0)
+            .build();
+    if let Err(e) = built {
+        eprintln!("arcturus app: không mở được cửa sổ cài đặt: {e}");
     }
 }
 

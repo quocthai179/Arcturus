@@ -1,5 +1,5 @@
-//! HTTP/1.1 tối giản tới hub trên loopback (`/healthz`, `GET /approvals/{id}/input`). Không kéo cả thư viện HTTP vào app:
-//! chỉ một GET, `Connection: close`, đọc tới EOF.
+//! HTTP/1.1 tối giản tới hub trên loopback (`/healthz`, `GET /approvals/{id}/input`, sự kiện thử của trình cài đặt).
+//! Không kéo cả thư viện HTTP vào app: một request, `Connection: close`, đọc tới EOF.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpStream};
@@ -20,17 +20,51 @@ pub fn get(
     token: Option<&str>,
     timeout: Duration,
 ) -> Result<Response, String> {
+    let headers: Vec<(String, String)> = token
+        .map(|t| vec![("Authorization".to_owned(), format!("Bearer {t}"))])
+        .unwrap_or_default();
+    request(addr, "GET", path, &headers, None, timeout)
+}
+
+/// POST một body JSON (tự kiểm tra của trình cài đặt gửi sự kiện hook giả, `setup.rs`).
+pub fn post_json(
+    addr: SocketAddr,
+    path: &str,
+    headers: &[(String, String)],
+    body: &[u8],
+    timeout: Duration,
+) -> Result<Response, String> {
+    request(addr, "POST", path, headers, Some(body), timeout)
+}
+
+fn request(
+    addr: SocketAddr,
+    method: &str,
+    path: &str,
+    headers: &[(String, String)],
+    body: Option<&[u8]>,
+    timeout: Duration,
+) -> Result<Response, String> {
     let mut s = TcpStream::connect_timeout(&addr, timeout)
         .map_err(|e| format!("không kết nối được hub: {e}"))?;
     s.set_read_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
     s.set_write_timeout(Some(timeout))
         .map_err(|e| e.to_string())?;
-    let auth = token
-        .map(|t| format!("Authorization: Bearer {t}\r\n"))
-        .unwrap_or_default();
-    let req = format!("GET {path} HTTP/1.1\r\nHost: {addr}\r\n{auth}Connection: close\r\n\r\n");
-    s.write_all(req.as_bytes())
+    let mut req = format!("{method} {path} HTTP/1.1\r\nHost: {addr}\r\n");
+    for (k, v) in headers {
+        req.push_str(&format!("{k}: {v}\r\n"));
+    }
+    if let Some(b) = body {
+        req.push_str(&format!(
+            "Content-Type: application/json\r\nContent-Length: {}\r\n",
+            b.len()
+        ));
+    }
+    req.push_str("Connection: close\r\n\r\n");
+    let mut bytes = req.into_bytes();
+    bytes.extend_from_slice(body.unwrap_or_default());
+    s.write_all(&bytes)
         .map_err(|e| format!("không gửi được yêu cầu tới hub: {e}"))?;
     let mut buf = Vec::new();
     s.take(MAX_RESPONSE_BYTES as u64 + 1)

@@ -173,7 +173,10 @@ tài khoản người dùng (lệnh đã allow sẵn trong settings, hoặc ngư
 được, và nằm ngoài phạm vi bảo vệ của v0. Cụ thể (F6, `docs/HOOK_FINDINGS.md`):
 
 - Bash tool thừa hưởng biến môi trường của tiến trình `claude`, nên đọc được `ARCTURUS_TOKEN` (token của hook). Vì vậy
-  UI dùng token riêng (D1).
+  UI dùng token riêng (D1). Cài bằng cửa sổ Cài đặt của app (`crates/app/src-tauri/src/setup.rs`): token hook ghi thẳng
+  vào hook trong `settings.json` của Claude Code và ở `<data_dir>/arcturus/hook-token`, không còn trong biến môi trường
+  của `claude`; agent vẫn đọc được nếu đọc hai file đó. Token hook chỉ gửi được sự kiện (làm sai hiển thị), không duyệt
+  được gì.
 - File token UI (`<data_dir>/arcturus/ui-token`) cũng đọc được bởi agent như vậy. Giảm rủi ro (T5d · ARC-44):
   `--ui-token-stdout` để app nhận token qua pipe, không có file trên đĩa (B1; app T12 dùng chế độ này khi tự khởi
   động hub; hub chạy riêng vẫn ghi file); luật danger `arcturus_ui_token` đưa mọi lệnh chạm token hay WebSocket của hub về

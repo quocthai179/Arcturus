@@ -1,7 +1,7 @@
 {
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
-  "description": "Quyền tối thiểu cho popup Lite và văn phòng: chỉ core, cộng hai lệnh của app (hub_info, approval_input)",
-  "windows": ["popup", "office"],
+  "description": "Quyền tối thiểu cho popup Lite, văn phòng và cửa sổ cài đặt: chỉ core; lệnh của app tự kiểm nhãn cửa sổ (setup_* chỉ cho setup)",
+  "windows": ["popup", "office", "setup"],
   "permissions": ["core:default"]
 }

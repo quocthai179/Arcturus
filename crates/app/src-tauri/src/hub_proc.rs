@@ -88,14 +88,16 @@ pub fn valid_token(t: &str) -> bool {
     t.len() == 64 && t.bytes().all(|b| b.is_ascii_hexdigit())
 }
 
-/// Kết nối tới hub đang chạy, hoặc khởi động hub mới. `Some(child)` khi app sở hữu tiến trình hub.
-pub fn connect() -> Result<(HubInfo, Option<HubChild>), String> {
+/// Kết nối tới hub đang chạy, hoặc khởi động hub mới. `Some(child)` khi app sở hữu tiến trình hub. `hook_token`: token
+/// hook do app quản lý (`setup::hook_token`), đưa cho hub con qua `ARCTURUS_TOKEN`; `None` thì hub con thừa hưởng biến
+/// môi trường của app như trước.
+pub fn connect(hook_token: Option<&str>) -> Result<(HubInfo, Option<HubChild>), String> {
     let addr = hub_addr();
     if healthy(addr) {
         let token = read_token_file()?;
         return Ok((HubInfo { addr, token }, None));
     }
-    let (token, child) = spawn(addr)?;
+    let (token, child) = spawn(addr, hook_token)?;
     // Hub in token trước khi phục vụ; chờ nó nhận kết nối (chỉ lúc khởi động, không polling khi chạy).
     let deadline = Instant::now() + Duration::from_secs(5);
     while !healthy(addr) {
@@ -156,9 +158,12 @@ fn hub_binary() -> PathBuf {
     PathBuf::from(name)
 }
 
-fn spawn(addr: SocketAddr) -> Result<(String, HubChild), String> {
+fn spawn(addr: SocketAddr, hook_token: Option<&str>) -> Result<(String, HubChild), String> {
     let bin = hub_binary();
     let mut cmd = Command::new(&bin);
+    if let Some(t) = hook_token {
+        cmd.env(crate::setup::TOKEN_ENV, t);
+    }
     cmd.args(["--ui-token-stdout", "--exit-on-stdin-close", "--bind"])
         .arg(addr.to_string())
         .stdin(Stdio::piped())
