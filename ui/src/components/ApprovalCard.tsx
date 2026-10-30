@@ -137,7 +137,10 @@ export function ApprovalCard({
 
       <div className="card__meta">
         <span className="tool">{a.tool}</span>
-        <span className="muted">còn {secondsLeft} s</span>
+        {/* Không phải đếm ngược tới lúc tự chạy: hết giờ thì hub trả về terminal, lệnh không bao giờ tự chạy. */}
+        <span className="muted" title="Hết giờ thì yêu cầu chuyển về terminal để bạn trả lời ở đó; lệnh không tự chạy.">
+          về terminal sau {secondsLeft} s
+        </span>
       </div>
 
       {a.suspicions.length > 0 && (

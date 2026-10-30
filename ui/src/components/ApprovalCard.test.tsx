@@ -33,6 +33,14 @@ function commandBlock(): HTMLElement {
 }
 
 describe('ApprovalCard', () => {
+  it('timeout_reads_as_return_to_terminal_not_auto_run', () => {
+    // UX test 2026-10-30: "còn 94 s" dễ đọc thành "94 s nữa lệnh tự chạy". Hết giờ hub trả về terminal, không bao giờ allow.
+    card(approval({ deadline_at: '2026-10-23T09:01:30Z' }));
+    const t = screen.getByText('về terminal sau 90 s');
+    expect(t.getAttribute('title')).toContain('lệnh không tự chạy');
+    expect(screen.queryByText(/^còn \d+ s$/)).toBeNull();
+  });
+
   it('shows_full_command_normalized_never_shortened', () => {
     const long = `echo ${'x'.repeat(3000)} && ls`;
     card(approval({ command_normalized: long }));
