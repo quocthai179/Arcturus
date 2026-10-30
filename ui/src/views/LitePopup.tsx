@@ -10,6 +10,7 @@ import { approvalInput, reportPopupReady } from '../hub';
 import type { ClientMsg } from '../protocol';
 import type { HubState } from '../store';
 import { DEFAULT_MIN_REVIEW_MS, useApprovalQueue } from '../useApprovalQueue';
+import { projectName } from '../text';
 import { useHubConnection } from '../useHubConnection';
 export { DEFAULT_MIN_REVIEW_MS, LIST_SETTLE_MS } from '../useApprovalQueue';
 
@@ -94,7 +95,11 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
       <header className="popup__head">
         <h1>Arcturus</h1>
         <span className="muted" role="status">
-          {queue.length > 0 ? `${queue.length} yêu cầu đang chờ` : 'Không có yêu cầu nào đang chờ'}
+          {state.connection !== 'open'
+            ? 'Chưa kết nối hub'
+            : queue.length > 0
+              ? `${queue.length} yêu cầu đang chờ`
+              : 'Không có yêu cầu nào đang chờ'}
         </span>
       </header>
       <TeamControls team={team} connected={state.connection === 'open' && state.synced} send={send} />
@@ -105,9 +110,14 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
         </p>
       )}
       {state.connection !== 'open' && (
-        <p className="banner banner--error" role="alert">
-          {state.error ?? 'Đang kết nối hub…'}
-        </p>
+        <>
+          <p className="banner banner--error" role="alert">
+            {state.error ?? 'Đang kết nối hub…'}
+          </p>
+          <p className="muted small">
+            Vẫn an toàn: Claude Code hỏi trong terminal như bình thường và không có gì được tự duyệt khi hub không chạy.
+          </p>
+        </>
       )}
       {team.paused && <p className="banner banner--paused">Đội đang tạm dừng: không có gì được tự duyệt.</p>}
       {team.focus && (
@@ -143,6 +153,11 @@ export function LitePopupView({ state, send, loadFull, minReviewMs }: LitePopupV
             <div key={a.id} className="team__member">
               <AgentAvatar mood={a.mood} palette={a.palette} size={28} label={a.name} />
               <span className="team__name">{a.name}</span>
+              {projectName(a.cwd) !== '' && (
+                <span className="team__project" title={a.cwd}>
+                  {projectName(a.cwd)}
+                </span>
+              )}
               <span className="muted team__act">{a.act_text}</span>
             </div>
           ))}

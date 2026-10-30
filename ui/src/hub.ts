@@ -18,7 +18,8 @@ export async function connectionInfo(): Promise<ConnectionInfo> {
   // Chạy UI riêng trong trình duyệt khi phát triển (`pnpm -C ui dev` với hub bản debug): đặt hai biến trong `ui/.env.local`.
   const wsUrl = import.meta.env.VITE_HUB_WS_URL;
   const token = import.meta.env.VITE_HUB_TOKEN;
-  if (import.meta.env.DEV && wsUrl !== undefined && token !== undefined) {
+  // Không dùng trong test: `ui/.env.local` của dev không được làm test nối vào hub đang chạy trên máy.
+  if (import.meta.env.DEV && import.meta.env.MODE !== 'test' && wsUrl !== undefined && token !== undefined) {
     return { wsUrl, token };
   }
   throw new Error('Chỉ chạy được trong app Arcturus');

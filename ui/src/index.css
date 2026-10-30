@@ -331,6 +331,15 @@ body {
   overflow-wrap: anywhere;
 }
 
+.team__project {
+  font-size: 11px;
+  color: var(--muted);
+  padding: 1px var(--space-2);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+}
+
 /* T14: lệnh cho cả đội và đếm ngược phủ quyết. */
 .team-controls {
   display: flex;

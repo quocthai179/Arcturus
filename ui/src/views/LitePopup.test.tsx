@@ -66,6 +66,12 @@ describe('LitePopupView', () => {
     }
   });
 
+  it('team_list_shows_each_agent_project', () => {
+    popup(stateWith([]));
+    const team = screen.getByRole('region', { name: 'Đội' });
+    expect(team.querySelector('.team__project')?.textContent).toBe('proj');
+  });
+
   it('escape_still_denies_critical', () => {
     const { sent } = popup(stateWith([approval({ request_id: 'req_c', risk: 'critical' })]));
     fireEvent.keyDown(window, { key: 'Escape' });
@@ -180,6 +186,10 @@ describe('LitePopupView', () => {
   it('disconnected_disables_allow_and_shows_error', () => {
     popup(stateWith(THREE, { connection: 'closed', error: 'Mất kết nối hub, đang thử lại…' }));
     expect(screen.getByRole('alert').textContent).toBe('Mất kết nối hub, đang thử lại…');
+    // Không nói "không có yêu cầu nào" khi thật ra không biết; trấn an rằng terminal vẫn hỏi.
+    expect(screen.getByText('Chưa kết nối hub')).toBeTruthy();
+    expect(screen.queryByText('Không có yêu cầu nào đang chờ')).toBeNull();
+    expect(screen.getByText(/Claude Code hỏi trong terminal như bình thường/)).toBeTruthy();
     for (const b of screen.getAllByRole('button', { name: /Đồng ý/ })) {
       expect((b as HTMLButtonElement).disabled).toBe(true);
     }
