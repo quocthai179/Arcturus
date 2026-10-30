@@ -325,6 +325,11 @@ body {
   display: flex;
   align-items: center;
   gap: 8px;
+  min-width: 0;
+}
+
+.team__name {
+  flex: 0 0 auto;
 }
 
 .team__act {
@@ -354,6 +359,12 @@ body {
   border: 1px solid var(--border);
   border-radius: var(--radius-pill);
   white-space: nowrap;
+  /* Tên dự án dài không được đẩy popup tràn ngang: rút gọn bằng "…", đủ tên ở tooltip. */
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 
 /* T14: lệnh cho cả đội và đếm ngược phủ quyết. */
