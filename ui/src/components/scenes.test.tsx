@@ -64,6 +64,9 @@ describe('live office scene', () => {
     expect(within(floor()).getByRole('img', { name: /^Linh: Đang rảnh, đi dạo ở / })).toBeTruthy();
     expect(screen.getByLabelText('Bàn của Khoa')).toBeTruthy();
     expect(screen.getByLabelText('Phòng hỗ trợ').textContent).toContain('Linh');
+    // Nhãn tên trên sàn kèm tên dự án (fixture cwd = /w/proj): tên sao một mình khó nhận ra.
+    const tags = [...floor().querySelectorAll('.actor__name')].map((el) => el.textContent);
+    expect(tags).toContain('Khoa · proj');
   });
 
   it('raised_hand_on_the_floor_opens_the_approval_card_via_onSelect', () => {

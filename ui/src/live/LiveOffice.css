@@ -24,7 +24,7 @@
 .actor__body[data-facing='-1'] { transform: scaleX(-1); }
 .actor[data-small='true'] .actor__body { transform: scale(0.8); transform-origin: 50% 100%; }
 .actor[data-small='true'] .actor__body[data-facing='-1'] { transform: scale(-0.8, 0.8); }
-.actor__name { position: absolute; left: 0; top: 4px; transform: translateX(-50%); white-space: nowrap; max-width: 110px; overflow: hidden; text-overflow: ellipsis; padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--nametag-bg); color: var(--text); font-size: 10px; line-height: 15px; pointer-events: none; }
+.actor__name { position: absolute; left: 0; top: 4px; transform: translateX(-50%); white-space: nowrap; max-width: 150px; overflow: hidden; text-overflow: ellipsis; padding: 0 var(--space-2); border-radius: var(--radius-pill); background: var(--nametag-bg); color: var(--text); font-size: 10px; line-height: 15px; pointer-events: none; }
 .actor--overlay { z-index: 2000; pointer-events: none; }
 .actor--overlay .bubble--alert { pointer-events: auto; }
 .actor--overlay[data-seated='true'] .actor__name { top: 18px; }
@@ -71,3 +71,4 @@ span.bubble--alert { cursor: default; }
   .actor { transition: none; }
   .walker *, .desk-sprite__hand, .steam__puff, .bubble { animation: none; }
 }
+.actor__project { color: var(--muted); }

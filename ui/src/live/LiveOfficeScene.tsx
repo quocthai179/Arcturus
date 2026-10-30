@@ -8,6 +8,7 @@ import type { AgentView } from '../protocol';
 import { Backdrop, Furniture, type DeskState } from './Furniture';
 import { SEATS, STAGE_H, STAGE_W } from './layout';
 import { busy, doing, type Actor, type Sim } from './sim';
+import { projectName } from '../text';
 import { useLiveSim } from './useLiveSim';
 import { Walker } from './Walker';
 import './LiveOffice.css';
@@ -164,7 +165,11 @@ function ActorSprite({ actor: a, agent, doingText, onSelect }: {
         ) : a.bubble !== null ? (
           <span key={a.bubble.text} className={`bubble bubble--${a.bubble.kind}`}>{a.bubble.text}</span>
         ) : null}
-        <span className="actor__name" aria-hidden="true">{agent.name}</span>
+        {/* Tên sao khó nhớ: kèm tên dự án để nhận ra agent ngay trên sàn. */}
+        <span className="actor__name" aria-hidden="true" title={agent.cwd}>
+          {agent.name}
+          {projectName(agent.cwd) !== '' && <span className="actor__project"> · {projectName(agent.cwd)}</span>}
+        </span>
       </div>
     </>
   );
