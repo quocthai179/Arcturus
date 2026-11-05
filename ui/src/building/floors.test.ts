@@ -42,6 +42,15 @@ describe('placeAgent table (docs §3.3)', () => {
   });
 });
 
+describe('never floor 5', () => {
+  it('hostile_roles_never_reach_the_ceo_floor', () => {
+    const roles = ['__proto__', 'constructor', 'ceo', 'ceo:secretary', 'CEO', '5', 'a:b:c', ':', '\u202etalc:x', 'dev-squad:\u202ex', 'x'.repeat(129), 'dev-squad:' + 'x'.repeat(120), 'Thư ký trưởng', 'toString', 'hasOwnProperty:x'];
+    for (const kind of ['session', 'subagent', 'teammate'] as const) {
+      for (const role of roles) expect(place(kind, role).floor, `${kind} ${role.slice(0, 12)}`).not.toBe(5);
+    }
+  });
+});
+
 describe('invariants', () => {
   it('floor_table_shape', () => {
     expect(FLOORS.length).toBe(FLOOR_COUNT);

@@ -234,4 +234,72 @@ describe('BuildingScene shell', () => {
     render(scene({ desks: [sub('agt_t', 'tester-squad:api-tester', { mood: 'approval' })], brief: briefOf([['agt_t', 'critical']]) }));
     expect(last?.model.view).toBe(2);
   });
+
+  it('hover_tooltip_never_repeats_the_raw_role_and_is_cleared_on_view_change', () => {
+    render(scene({ desks: [sub('agt_a', 'ceo:Thư-ký-trưởng', { name: 'Khoa', mood: 'working' })] }));
+    act(() => last?.onHover({ k: 'agent', agentId: 'agt_a' }, 10, 10));
+    const tip = document.querySelector('.building__tip') as HTMLElement;
+    expect(tip.textContent).toContain('Khoa · khách');
+    expect(tip.textContent).not.toContain('Thư-ký');
+    fireEvent.keyDown(root(), { key: '3' });
+    expect(document.querySelector('.building__tip')).toBeNull();
+  });
+
+  it('tooltip_moves_through_a_ref_without_rerendering_when_the_text_is_unchanged', () => {
+    render(scene({ desks: [sub('agt_a', 'dev-squad:developer', { name: 'Khoa' })] }));
+    act(() => last?.onHover({ k: 'agent', agentId: 'agt_a' }, 10, 10));
+    const el = document.querySelector('.building__tip') as HTMLElement;
+    act(() => last?.onHover({ k: 'agent', agentId: 'agt_a' }, 50, 60));
+    expect(document.querySelector('.building__tip')).toBe(el);
+    expect(el.style.left).toBe('62px');
+    expect(el.style.top).toBe('72px');
+  });
+
+  it('agent_supplied_text_in_the_bubble_is_inside_code_slots_only', () => {
+    const a = sub('agt_a', 'dev-squad:developer', { name: 'TênĐộc', mood: 'approval' });
+    const b: SceneBrief = { ...briefOf([['agt_a', 'medium']]), pending: new Map([['agt_a', { count: 1, risk: 'medium', tool: 'an_toan_cu_duyet', oldestAt: 1 }]]) };
+    render(scene({ desks: [a], brief: b }));
+    const bar = document.querySelector('.building__sec span') as HTMLElement;
+    const slots = [...bar.querySelectorAll('code')].map((c) => c.textContent);
+    expect(slots).toEqual(['TênĐộc']);
+    const clone = bar.cloneNode(true) as HTMLElement;
+    clone.querySelectorAll('code').forEach((c) => c.remove());
+    expect(clone.textContent).not.toContain('TênĐộc');
+    expect(clone.textContent).not.toContain('an_toan_cu_duyet');
+    expect(clone.textContent).toContain('một tool ngoài danh sách');
+  });
+
+  it('follow_forces_the_view_at_trip_start_only_a_user_click_mid_trip_is_not_overridden', () => {
+    vi.useFakeTimers();
+    window.localStorage.setItem('arcturus.building.follow', '1');
+    const t = sub('agt_t', 'tester-squad:api-tester', { mood: 'approval' });
+    render(scene({ desks: [t], motion: true, brief: briefOf([['agt_t', 'critical']]) }));
+    expect(last?.model.view).toBe(2);
+    fireEvent.keyDown(root(), { key: '4' });
+    expect(last?.model.view).toBe(4);
+    act(() => { vi.advanceTimersByTime(60_000); });
+    expect(last?.model.view).toBe(4);
+  });
+
+  it('never_sends_anything_and_calls_onSelect_only_after_a_real_click', () => {
+    vi.useFakeTimers();
+    const ws = vi.fn();
+    const fetchSpy = vi.fn();
+    vi.stubGlobal('WebSocket', ws);
+    vi.stubGlobal('fetch', fetchSpy);
+    const onSelect = vi.fn();
+    const a = sub('agt_a', 'dev-squad:developer', { mood: 'approval' });
+    render(scene({ desks: [a], onSelect, motion: true, brief: briefOf([['agt_a', 'critical']]) }));
+    act(() => last?.onHover({ k: 'agent', agentId: 'agt_a' }, 5, 5));
+    act(() => { vi.advanceTimersByTime(30_000); });
+    fireEvent.keyDown(root(), { key: '1' });
+    expect(onSelect).not.toHaveBeenCalled();
+    act(() => last?.onPick({ k: 'bang', agentId: 'agt_a' }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Tóm tắt cả tòa' }));
+    expect(onSelect).toHaveBeenCalledTimes(1);
+    expect(ws).not.toHaveBeenCalled();
+    expect(fetchSpy).not.toHaveBeenCalled();
+    vi.unstubAllGlobals();
+  });
 });

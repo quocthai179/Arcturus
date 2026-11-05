@@ -8,8 +8,8 @@ import { useSceneBrief } from './useSceneBrief';
 
 afterEach(cleanup);
 
-function Probe({ state, out }: { state: HubState; out: { brief: SceneBrief | null } }) {
-  out.brief = useSceneBrief(state);
+function Probe({ state, out, enabled = true }: { state: HubState; out: { brief: SceneBrief | null }; enabled?: boolean }) {
+  out.brief = useSceneBrief(state, enabled);
   return null;
 }
 
@@ -30,5 +30,21 @@ describe('useSceneBrief', () => {
     render(<Probe state={initialState} out={out} />);
     expect(out.brief?.connected).toBe(false);
     expect(out.brief?.speech).toBeNull();
+  });
+
+  it('disabled_never_runs_think_and_keeps_the_brief_empty', () => {
+    const out: { brief: SceneBrief | null } = { brief: null };
+    const view = render(<Probe state={open} out={out} enabled={false} />);
+    view.rerender(<Probe state={{ ...open, queue: [approval({ risk: 'high' })] }} out={out} enabled={false} />);
+    expect(out.brief?.speech).toBeNull();
+    expect(out.brief?.pending.size).toBe(0);
+  });
+
+  it('keeps_the_same_reference_when_the_content_is_unchanged', () => {
+    const out: { brief: SceneBrief | null } = { brief: null };
+    const view = render(<Probe state={open} out={out} />);
+    const first = out.brief;
+    view.rerender(<Probe state={{ ...open }} out={out} />);
+    expect(out.brief).toBe(first);
   });
 });

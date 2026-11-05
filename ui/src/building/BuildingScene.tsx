@@ -52,8 +52,6 @@ export interface BuildingSceneProps extends OfficeSceneProps {
 
 interface Tip {
   lines: string[];
-  x: number;
-  y: number;
 }
 
 const floorLabel = (f: FloorId) => (f === CEO_FLOOR ? 'Phòng CEO' : (FLOORS[f]?.name ?? ''));
@@ -85,6 +83,8 @@ function BuildingSceneInner({ desks, support, canSelect, onSelect, motion = true
   const [follow, setFollow] = useState(loadFollow);
   const [ready, setReady] = useState(false);
   const [tip, setTip] = useState<Tip | null>(null);
+  const tipEl = useRef<HTMLDivElement>(null);
+  const tipPos = useRef({ x: 0, y: 0 });
 
   const agents = useStableList(useMemo(() => [...desks, ...support], [desks, support]));
   const seats = useRef<SeatMap>(EMPTY_SEATS);
@@ -104,10 +104,17 @@ function BuildingSceneInner({ desks, support, canSelect, onSelect, motion = true
     const before = lastTrip.current;
     lastTrip.current = id;
     if (!follow) return;
+    // Chỉ ép góc nhìn ở lúc BẮT ĐẦU chuyến (hoặc đến nơi tức thì khi tắt chuyển động); không ép lại khi tới nơi,
+    // để cú bấm chuyển tầng của người dùng giữa chuyến không bị ghi đè.
     if (s.k === 'moving') setView(s.goal === null ? CEO_FLOOR : s.goal.rank <= 2 ? s.goal.floor : view);
-    else if (s.k === 'briefing' && s.goal.rank <= 2) setView(s.goal.floor);
-    else if (s.k === 'home' && before !== null && before !== 'home' && before !== 'asleep') setView(CEO_FLOOR);
+    else if (s.k === 'briefing' && s.goal.rank <= 2 && !(before ?? '').startsWith('m')) setView(s.goal.floor);
+    else if (s.k === 'home' && before !== null && before !== 'home' && before !== 'asleep' && !before.startsWith('m')) setView(CEO_FLOOR);
   }, [mem.state, follow]);
+
+  // Đổi góc nhìn (kể cả do theo dõi thư ký) thì tooltip cũ hết nghĩa.
+  useEffect(() => {
+    setTip(null);
+  }, [view]);
 
   const toggleFollow = useCallback((on: boolean) => {
     setFollow(on);
@@ -151,11 +158,18 @@ function BuildingSceneInner({ desks, support, canSelect, onSelect, motion = true
 
   const onHover = useCallback(
     (hit: PickHit | null, x: number, y: number) => {
+      tipPos.current = { x, y };
       if (hit === null) {
-        setTip(null);
+        setTip((prev) => (prev === null ? prev : null));
         return;
       }
-      setTip({ lines: tooltipLines(hit, rosters, byId, selectable, mem.state.k), x, y });
+      // Di chuột chỉ dời phần tử qua ref; chỉ render lại khi nội dung đổi.
+      if (tipEl.current !== null) {
+        tipEl.current.style.left = `${x + 12}px`;
+        tipEl.current.style.top = `${y + 12}px`;
+      }
+      const lines = tooltipLines(hit, rosters, byId, selectable, mem.state.k);
+      setTip((prev) => (prev !== null && prev.lines.length === lines.length && prev.lines.every((l, i) => l === lines[i]) ? prev : { lines }));
     },
     [rosters, byId, selectable, mem.state.k],
   );
@@ -194,7 +208,11 @@ function BuildingSceneInner({ desks, support, canSelect, onSelect, motion = true
 
       <p className="building__sec" role="status" aria-live="polite" data-idle={bubble === null}>
         <b>Thư ký</b>
-        {bubble === null ? <span>{secLine}</span> : <span>{bubble.text}</span>}
+        {bubble === null ? <span>{secLine}</span> : (
+          <span>
+            {bubble.segments.map((g, i) => (typeof g === 'string' ? g : <code key={i} className="building__data">{g.data}</code>))}
+          </span>
+        )}
         {bubble?.actions.map((a) =>
           a.kind === 'select' ? (
             <button key={`s-${a.agentId}`} type="button" className="building__act" onClick={() => onSelect(a.agentId)}>{a.label}</button>
@@ -216,7 +234,7 @@ function BuildingSceneInner({ desks, support, canSelect, onSelect, motion = true
           </div>
           {!ready && <p className="muted building__loading" role="status">Đang dựng tòa nhà…</p>}
           {tip !== null && (
-            <div className="building__tip" style={{ left: tip.x + 12, top: tip.y + 12 }}>
+            <div className="building__tip" ref={tipEl} style={{ left: tipPos.current.x + 12, top: tipPos.current.y + 12 }}>
               {tip.lines.map((l, i) => <p key={i}>{l}</p>)}
             </div>
           )}
@@ -255,6 +273,11 @@ function LiftButton({ floor, roster, pressed, secretaryHere, onClick }: { floor:
   );
 }
 
+/** Từ cố định cho agent không thuộc danh sách vai trò (giống nhãn bàn); không bao giờ lặp lại `role` thô của agent. */
+function zoneWord(zone: string): string {
+  return zone === 'session' ? 'phiên chính' : zone === 'guest' ? 'khách' : zone === 'extra' ? 'bàn linh hoạt' : 'chung';
+}
+
 function tooltipLines(hit: PickHit, rosters: readonly FloorRoster[], byId: ReadonlyMap<string, AgentView>, selectable: ReadonlySet<string>, secState: string): string[] {
   switch (hit.k) {
     case 'floor': {
@@ -273,8 +296,8 @@ function tooltipLines(hit: PickHit, rosters: readonly FloorRoster[], byId: Reado
       const a = byId.get(hit.agentId);
       if (a === undefined) return [];
       const fig = rosters.flatMap((r) => r.figures).find((f) => f.agent.id === a.id);
-      const role = fig === undefined ? '' : (roleShort(fig.placement.floor, fig.placement.roleId) ?? cleanText(a.role, 40));
-      const lines = [`${cleanText(a.name, 32)}${role === '' ? '' : ` · ${cleanText(role, 40)}`} · ${MOOD_LABELS[a.mood]}`];
+      const role = fig === undefined ? '' : (roleShort(fig.placement.floor, fig.placement.roleId) ?? zoneWord(fig.placement.zone));
+      const lines = [`${cleanText(a.name, 32)}${role === '' ? '' : ` · ${role}`} · ${MOOD_LABELS[a.mood]}`];
       if (a.act_text !== '') lines.push(cleanText(a.act_text, 80));
       if (a.cwd !== '') lines.push(shortCwd(a.cwd));
       if (selectable.has(a.id)) lines.push('Bấm để mở thẻ duyệt');

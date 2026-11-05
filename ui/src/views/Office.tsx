@@ -39,7 +39,7 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
   const [sceneId, setSceneId] = useState<SceneId>(loadScene);
   const Scene = OFFICE_SCENES[sceneId];
   const motion = useMotionPolicy();
-  const brief = useSceneBrief(state);
+  const brief = useSceneBrief(state, sceneId === 'building');
   const { desks, support } = officeRoster(Object.values(state.agents), state.team.roster_max);
   const queueRef = useRef<HTMLElement>(null);
   const [hidden, setHidden] = useState(() => document.hidden);

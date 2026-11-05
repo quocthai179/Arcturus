@@ -24,7 +24,10 @@ export interface Goal {
 export type BubbleAction = { kind: 'select'; agentId: AgentId; label: 'Xem thẻ duyệt' } | { kind: 'view'; view: View; label: string };
 export interface Bubble {
   key: string;
+  /** Văn bản phẳng (cho aria/test). */
   text: string;
+  /** Các đoạn để hiện: đoạn `{ data }` là dữ liệu của agent, phải hiện trong ô riêng (`<code>`). */
+  segments: readonly Seg[];
   priority: SpeechPriority;
   until: number;
   actions: readonly BubbleAction[];
@@ -144,22 +147,48 @@ function roleLabel(c: Candidate, rosters: readonly FloorRoster[]): string {
   return roleShort(p.floor, p.roleId) ?? (p.zone === 'session' ? 'phiên chính' : p.zone === 'guest' ? 'khách' : 'chung');
 }
 
+/** Một đoạn của câu: chuỗi cố định của thư ký, hoặc dữ liệu do agent cung cấp (hiện trong ô riêng, không lẫn vào lời thư ký). */
+export type Seg = string | { readonly data: string };
+const d = (data: string): Seg => ({ data });
+const flat = (segs: readonly Seg[]): string => segs.map((x) => (typeof x === 'string' ? x : x.data)).join('');
+function seg(strings: TemplateStringsArray, ...vals: (Seg | readonly Seg[] | number)[]): Seg[] {
+  const out: Seg[] = [];
+  strings.forEach((str, i) => {
+    if (str !== '') out.push(str);
+    const v = vals[i];
+    if (v === undefined) return;
+    if (typeof v === 'number') out.push(String(v));
+    else if (Array.isArray(v)) out.push(...(v as readonly Seg[]));
+    else out.push(v as Seg);
+  });
+  return out;
+}
+
+const BUILTIN_TOOLS: ReadonlySet<string> = new Set(['Bash', 'Read', 'Edit', 'Write', 'Glob', 'Grep', 'WebFetch', 'WebSearch', 'NotebookEdit', 'Task', 'Agent']);
+
+/** Tên tool là dữ liệu không tin cậy: chỉ tool dựng sẵn mới được nói tên; tool MCP chỉ lộ tiền tố `mcp__<server>` trong ô dữ liệu. */
+export function toolSegs(tool: string): Seg[] {
+  if (BUILTIN_TOOLS.has(tool)) return [tool];
+  if (tool.startsWith('mcp__')) return ['tool MCP ', d(cleanText(`mcp__${tool.split('__')[1] ?? ''}`, TOOL_MAX))];
+  return ['một tool ngoài danh sách'];
+}
+
 export const SECRETARY_LINES = {
-  goCritical: (n: number, floor: string) => `Có việc vùng khóa ở tầng ${n} · ${floor}. Em xuống ngay.`,
-  go: (n: number, floor: string, name: string) => `Em xuống tầng ${n} · ${floor} xem ${name} nhé.`,
-  arriveCritical: (name: string, tool: string) => `${name} xin chạy ${tool} trong vùng khóa. Anh mở thẻ xem kỹ nhé.`,
-  arriveRequest: (name: string, role: string, tool: string, risk: string, count: number) =>
-    `${name} (${role}) xin chạy ${tool} · ${risk}.${count > 1 ? ` Còn ${count - 1} yêu cầu nữa.` : ''}`,
-  arriveWaiting: (name: string, role: string) => `${name} (${role}) đang chờ anh duyệt.`,
-  arriveHandoff: (name: string) => `Lệnh của ${name} dài quá, anh duyệt trong terminal nhé.`,
-  arriveError: (name: string, floor: string, act: string) => (act === '' ? `${name} ở tầng ${floor} gặp lỗi.` : `${name} ở tầng ${floor} gặp lỗi: ${act}.`),
-  home: 'Hết việc chờ rồi. Em về Phòng CEO.',
-  summaryIdle: 'Cả tòa đang rảnh.',
-  summary: (w: number, r: number, e: number, n: number, floor: string) => `Cả tòa: ${w} đang làm, ${r} chờ duyệt, ${e} lỗi. Bận nhất: tầng ${n} · ${floor}.`,
+  goCritical: (n: number, floor: string) => seg`Có việc vùng khóa ở tầng ${n} · ${floor}. Em xuống ngay.`,
+  go: (n: number, floor: string, name: Seg) => seg`Em xuống tầng ${n} · ${floor} xem ${name} nhé.`,
+  arriveCritical: (name: Seg, tool: readonly Seg[]) => seg`${name} xin chạy ${tool} trong vùng khóa. Anh mở thẻ xem kỹ nhé.`,
+  arriveRequest: (name: Seg, role: string, tool: readonly Seg[], risk: string, count: number) =>
+    seg`${name} (${role}) xin chạy ${tool} · ${risk}.${count > 1 ? ` Còn ${count - 1} yêu cầu nữa.` : ''}`,
+  arriveWaiting: (name: Seg, role: string) => seg`${name} (${role}) đang chờ anh duyệt.`,
+  arriveHandoff: (name: Seg) => seg`Lệnh của ${name} dài quá, anh duyệt trong terminal nhé.`,
+  arriveError: (name: Seg, floor: string, act: Seg | null) => (act === null ? seg`${name} ở tầng ${floor} gặp lỗi.` : seg`${name} ở tầng ${floor} gặp lỗi: ${act}.`),
+  home: ['Hết việc chờ rồi. Em về Phòng CEO.'] as readonly Seg[],
+  summaryIdle: ['Cả tòa đang rảnh.'] as readonly Seg[],
+  summary: (w: number, r: number, e: number, n: number, floor: string) => seg`Cả tòa: ${w} đang làm, ${r} chờ duyệt, ${e} lỗi. Bận nhất: tầng ${n} · ${floor}.`,
 } as const;
 
-function bubble(key: string, text: string, priority: SpeechPriority, now: number, actions: readonly BubbleAction[] = []): Bubble {
-  return { key, text, priority, until: now + SAY_MS, actions };
+function bubble(key: string, segs: readonly Seg[], priority: SpeechPriority, now: number, actions: readonly BubbleAction[] = []): Bubble {
+  return { key, text: flat(segs), segments: segs, priority, until: now + SAY_MS, actions };
 }
 
 const PRIO: Record<SpeechPriority, number> = { low: 0, normal: 1, high: 2 };
@@ -200,19 +229,22 @@ export function sayBubble(mem: SecMemory, b: Bubble, now: number): SecMemory {
 
 // --- máy trạng thái ---
 
-function arriveLine(c: Candidate | undefined, goal: Goal, input: SecInput): { text: string; actions: BubbleAction[] } | null {
+function arriveLine(c: Candidate | undefined, goal: Goal, input: SecInput): { segs: readonly Seg[]; actions: BubbleAction[] } | null {
   if (c === undefined) return null;
-  const name = nameOf(c.agent);
+  const name = d(nameOf(c.agent));
   const actions: BubbleAction[] = input.canSelect(c.agent) ? [{ kind: 'select', agentId: c.agentId, label: 'Xem thẻ duyệt' }] : [];
   if (goal.kind === 'request' && c.pending !== undefined) {
-    const tool = cleanText(c.pending.tool, TOOL_MAX);
+    const tool = toolSegs(c.pending.tool);
     return goal.rank === 0
-      ? { text: SECRETARY_LINES.arriveCritical(name, tool), actions }
-      : { text: SECRETARY_LINES.arriveRequest(name, roleLabel(c, input.rosters), tool, RISK_LABELS[c.pending.risk].toLowerCase(), c.pending.count), actions };
+      ? { segs: SECRETARY_LINES.arriveCritical(name, tool), actions }
+      : { segs: SECRETARY_LINES.arriveRequest(name, roleLabel(c, input.rosters), tool, RISK_LABELS[c.pending.risk].toLowerCase(), c.pending.count), actions };
   }
-  if (goal.kind === 'handoff') return { text: SECRETARY_LINES.arriveHandoff(name), actions };
-  if (goal.kind === 'error') return { text: SECRETARY_LINES.arriveError(name, floorName(goal.floor), cleanText(c.agent.act_text, ACT_MAX)), actions: [] };
-  return { text: SECRETARY_LINES.arriveWaiting(name, roleLabel(c, input.rosters)), actions };
+  if (goal.kind === 'handoff') return { segs: SECRETARY_LINES.arriveHandoff(name), actions };
+  if (goal.kind === 'error') {
+    const act = cleanText(c.agent.act_text, ACT_MAX);
+    return { segs: SECRETARY_LINES.arriveError(name, floorName(goal.floor), act === '' ? null : d(act)), actions: [] };
+  }
+  return { segs: SECRETARY_LINES.arriveWaiting(name, roleLabel(c, input.rosters)), actions };
 }
 
 function startTrip(mem: SecMemory, goal: Goal | null, input: SecInput): SecMemory {
@@ -228,7 +260,7 @@ function startTrip(mem: SecMemory, goal: Goal | null, input: SecInput): SecMemor
   if (goal !== null) {
     const c = candidates(input.rosters, input.brief, input.canSelect).find((x) => x.key === goal.key);
     const n = goal.floor;
-    const text = goal.rank === 0 ? SECRETARY_LINES.goCritical(n, floorName(n)) : SECRETARY_LINES.go(n, floorName(n), c === undefined ? '' : nameOf(c.agent));
+    const text = goal.rank === 0 ? SECRETARY_LINES.goCritical(n, floorName(n)) : SECRETARY_LINES.go(n, floorName(n), d(c === undefined ? '' : nameOf(c.agent)));
     next = say(next, bubble(`go:${goal.key}`, text, goal.rank === 0 ? 'high' : 'normal', now, [{ kind: 'view', view: n, label: `Xuống tầng ${n}` }]), now);
   }
   return next;
@@ -246,7 +278,7 @@ export function stepSecretary(input0: SecMemory, input: SecInput): { mem: SecMem
 
   // Câu từ `think()` (lỗi, xong việc, yêu cầu mới, mất kết nối…): nguyên văn.
   if (brief?.speech != null) {
-    mem = say(mem, bubble(brief.speech.key, brief.speech.text, brief.speech.priority, now), now);
+    mem = say(mem, bubble(brief.speech.key, [brief.speech.text], brief.speech.priority, now), now);
   }
 
   for (let guard = 0; guard < 6; guard++) {
@@ -281,9 +313,15 @@ export function stepSecretary(input0: SecMemory, input: SecInput): { mem: SecMem
           const c = cands.find((x) => x.key === goal.key);
           mem = { ...mem, state: { k: 'briefing', goal, since: now, clearedAt: null, at: s.route.end } };
           const line = arriveLine(c, goal, input);
-          if (line !== null) mem = say(mem, bubble(`arrive:${goal.key}`, line.text, goal.rank === 0 ? 'high' : 'normal', now, line.actions), now);
+          if (line !== null) mem = say(mem, bubble(`arrive:${goal.key}`, line.segs, goal.rank === 0 ? 'high' : 'normal', now, line.actions), now);
         }
         continue;
+      }
+      // Mục tiêu đã biến mất khi đang đi (người dùng duyệt ở nơi khác): bỏ chuyến ngay, không đi tiếp vô ích.
+      const target = s.goal;
+      if (target !== null && !cands.some((x) => x.key === target.key)) {
+        mem = startTrip(mem, null, input);
+        if (mem.state !== s) continue;
       }
       if (best !== null && connected && (s.goal === null || (best.rank < s.goal.rank && best.key !== s.goal.key))) {
         const cur = s.goal?.rank ?? Infinity;

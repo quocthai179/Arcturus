@@ -11,6 +11,7 @@ import type { Mood } from '../../protocol';
 import { ease, FOV, frameFor, NAV_MS, viewTargets, type View } from '../camera';
 import { FLOORS, FLOOR_COUNT, type FloorId } from '../floors';
 import { BASE, deskAt, deskCount, GEO, LIFT, ROOF_Y, toWorld } from '../layout';
+import { planPrune } from '../interiorCache';
 import { createLoop, type Loop } from '../loop';
 import type { BuildingCanvasProps, BuildingModel, PickHit } from '../model';
 import { routePosAt } from '../route';
@@ -24,7 +25,6 @@ import { buildWorld, type World } from './world';
 const HOVER_EDGE = 1.7;
 const IDLE_EDGE = 0.65;
 const CLICK_SLOP = 5;
-const KEEP_FLOORS = 2;
 
 interface State {
   model: BuildingModel;
@@ -41,6 +41,7 @@ interface State {
   shadowDirty: boolean;
   firstFrame: boolean;
   navigating: boolean;
+  navId: number;
 }
 
 export default function BuildingCanvas(props: BuildingCanvasProps) {
@@ -61,6 +62,7 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
     }
     const reg = new Registry();
     const canvas = renderer.domElement;
+    try {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.outputColorSpace = SRGBColorSpace;
     renderer.shadowMap.enabled = true;
@@ -105,6 +107,7 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
       shadowDirty: true,
       firstFrame: true,
       navigating: false,
+      navId: 0,
     };
     let size = { w: 1, h: 1 };
     let disposed = false;
@@ -118,10 +121,12 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
       S.interiors.set(f, it);
       S.shadowDirty = true;
     };
-    const prune = (view: View) => {
-      if (typeof view === 'number' && view !== 5) S.recent = [view, ...S.recent.filter((x) => x !== view)].slice(0, KEEP_FLOORS);
-      for (const [f, it] of S.interiors) {
-        if (f === 5 || (typeof view === 'number' && f === view) || S.recent.includes(f)) continue;
+    const prune = (navigatedTo: View) => {
+      const plan = planPrune(S.interiors.keys(), S.recent, navigatedTo, S.model.view);
+      S.recent = plan.recent;
+      for (const f of plan.dispose) {
+        const it = S.interiors.get(f);
+        if (it === undefined) continue;
         world.floors[f]?.group.remove(it.group);
         world.floors[f]?.top.remove(it.top);
         it.dispose();
@@ -235,9 +240,11 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
       }
     }
 
+    const glowObj = new Object3D();
+    const glowMat4 = new Matrix4();
     function syncGlowLifts(): void {
-      const o = new Object3D();
-      const m = new Matrix4();
+      const o = glowObj;
+      const m = glowMat4;
       glowDesks.forEach((d, i) => {
         glow.getMatrixAt(i, m);
         if (m.elements[0] === 0) return;
@@ -270,6 +277,7 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
       const t0 = controls.target.clone();
       const p1 = new Vector3(fr.pos.x, fr.pos.y, fr.pos.z);
       const t1 = new Vector3(fr.target.x, fr.target.y, fr.target.z);
+      const token = ++S.navId;
       S.navigating = true;
       const step = (p: number) => {
         const e = ease(p);
@@ -278,9 +286,10 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
         setCamera(p0.clone().lerp(p1, e), t0.clone().lerp(t1, e));
       };
       void loop.tween(animate ? NAV_MS : 0, 30, step, 'nav').then(() => {
-        if (disposed) return;
+        if (disposed || token !== S.navId) return;
         step(1);
         S.navigating = false;
+        if (typeof S.model.view === 'number') ensureInterior(S.model.view);
         prune(view);
         syncData();
         S.shadowDirty = true;
@@ -433,7 +442,12 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
     canvas.addEventListener('pointermove', onMove);
     canvas.addEventListener('pointerleave', onLeave);
     canvas.addEventListener('webglcontextlost', onLost);
-    controls.addEventListener('change', () => loop.invalidate());
+    const onControls = () => loop.invalidate();
+    controls.addEventListener('change', onControls);
+    const onVisible = () => {
+      if (!document.hidden) loop.invalidate();
+    };
+    document.addEventListener('visibilitychange', onVisible);
 
     // --- khởi tạo ---
     world.setTime(S.model.timeMode);
@@ -450,7 +464,9 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
       disposed = true;
       api.current = null;
       loop.dispose();
+      controls.removeEventListener('change', onControls);
       controls.dispose();
+      document.removeEventListener('visibilitychange', onVisible);
       canvas.removeEventListener('pointerdown', onDown);
       canvas.removeEventListener('pointerup', onUp);
       canvas.removeEventListener('pointermove', onMove);
@@ -460,11 +476,21 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
       for (const it of S.interiors.values()) it.dispose();
       S.interiors.clear();
       figures.dispose();
+      glow.dispose();
       reg.disposeAll();
       renderer.dispose();
       renderer.forceContextLoss();
       canvas.remove();
     };
+    } catch (e) {
+      // Lỗi dựng sau khi đã có renderer: giải phóng context rồi báo để vỏ lùi về cảnh 2D.
+      reg.disposeAll();
+      renderer.dispose();
+      renderer.forceContextLoss();
+      canvas.remove();
+      latest.current.onError(e instanceof Error ? e.message : 'Không dựng được cảnh 3D');
+      return undefined;
+    }
   }, []);
 
   useEffect(() => {

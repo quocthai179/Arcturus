@@ -58,3 +58,16 @@ export function sceneBrief(state: HubState, out: Pick<BrainOutput, 'speech' | 'm
     teamMood: out.mood,
   };
 }
+
+/** Hai brief có cùng nội dung (dùng để giữ nguyên tham chiếu, tránh dựng lại cảnh vô ích). */
+export function sameBrief(a: SceneBrief, b: SceneBrief): boolean {
+  if (a.connected !== b.connected || a.paused !== b.paused || a.focus !== b.focus || a.teamMood !== b.teamMood) return false;
+  if (a.speech?.key !== b.speech?.key || a.speech?.text !== b.speech?.text || a.speech?.priority !== b.speech?.priority) return false;
+  if (a.handoffs.size !== b.handoffs.size || [...a.handoffs].some((id) => !b.handoffs.has(id))) return false;
+  if (a.pending.size !== b.pending.size) return false;
+  for (const [id, p] of a.pending) {
+    const q = b.pending.get(id);
+    if (q === undefined || q.count !== p.count || q.risk !== p.risk || q.tool !== p.tool || q.oldestAt !== p.oldestAt) return false;
+  }
+  return true;
+}

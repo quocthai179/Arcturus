@@ -200,7 +200,7 @@ export const LAY: readonly DeskGrid[] = [
   { cols: 5, x0: -9.2,  z0: -5.0, dx: 2.1, dz: 2.7, lounge: [6.0, 4.6] },
   { cols: 5, x0: -10.2, z0: -6.0, dx: 2.1, dz: 2.7, lounge: [6.2, 5.0] },
   { cols: 4, x0: -9.0,  z0: -3.4, dx: 2.1, dz: 2.7, lounge: [5.2, 2.6] },
-  { cols: 5, x0: -8.2,  z0: -3.2, dx: 2.1, dz: 2.7, lounge: [-7.4, 3.6] },
+  { cols: 5, x0: -8.2,  z0: -3.2, dx: 2.1, dz: 2.7, lounge: [5.6, 2.8] },  // dời từ [-7.4, 3.6]: chồng hàng bàn cuối, chỗ đứng ra ngoài sàn
 ];
 export const HOT_DESKS = 4;
 export function deskAt(floor: AgentFloorId, index: number): { desk: Vec3; seat: Vec3 };
@@ -759,3 +759,13 @@ Canvas không biết `onSelect`, không biết `brief`; chỉ báo vật đượ
 | Hiểu nhầm "thư ký điều phối" thành tự duyệt/giao việc | Bất biến ADR 0003; kiểu `BubbleAction` không có hành động gửi; test không tự gọi `onSelect` |
 | Chữ tiếng Việt trên canvas lỗi font | Chờ `document.fonts.ready`; fallback `sans-serif`; thông tin đầy đủ vẫn ở DOM (tooltip, thẻ chi tiết) |
 | Cảnh 3D lỗi làm trống Office | Đường lui `building → live → grid`; hàng đợi duyệt độc lập |
+
+## 17. Ghi chú triển khai (lệch so với bản thiết kế ban đầu)
+
+- **Góc nghỉ tầng Media** là `(5.6, 2.8)` (không phải `(-7.4, 3.6)`): vị trí cũ chồng hàng bàn cuối và chỗ đứng `az + 2.2` rơi ra ngoài sàn sâu 11,5 m.
+- **Quy tắc `TRIP_GAP_MS`**: đổi đích khi rank mới nhỏ hơn hẳn VÀ (đã qua `TRIP_GAP_MS` HOẶC rank mới thấp hơn đích hiện tại từ 2 bậc trở lên). Từ trạng thái "đang về nhà" mọi mục tiêu đều được đi ngay.
+- **`SecState.briefing`** có thêm `at: Place` (chỗ đứng đã chốt) để `secretaryPose` không cần rosters; **`Route`** có thêm `start` và `end`. `routePosAt().carY` là `number | null` (null = lộ trình không dùng thang máy; canvas giữ cabin nguyên chỗ).
+- **Bong bóng**: câu về yêu cầu đã xử lý xong bị bỏ khi mục tiêu biến mất để câu "về Phòng CEO" hiện được; đang đi mà mục tiêu biến mất thì bỏ chuyến và quay về/đi mục tiêu kế. `Bubble.segments` tách dữ liệu của agent (`{ data }`, hiện trong `<code>`) khỏi lời thư ký; tên tool chỉ được nói khi thuộc danh sách dựng sẵn, tool MCP chỉ lộ `mcp__<server>`, tool khác là "một tool ngoài danh sách". Câu nguyên văn từ `think()` (`brief.speech`) vẫn là chuỗi thuần như ở Pet.
+- **Mất context WebGL là lùi vĩnh viễn trong lần mount đó**: `webglcontextlost` → `onError` → vỏ chuyển sang `live` cho tới khi Office được mở lại (không tự khôi phục context).
+- **Điều hướng chồng nhau**: mỗi lần chuyển tầng có token; tween cũ kết thúc muộn không được `prune`/đặt `navigating`. `prune` luôn giữ tầng của model hiện hành (`interiorCache.ts`).
+- `useSceneBrief(state, enabled)` chỉ chạy khi cảnh `building` đang chọn và giữ nguyên tham chiếu khi nội dung brief không đổi (`sameBrief`).

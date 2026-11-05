@@ -221,7 +221,8 @@ describe('stepSecretary', () => {
     expect(out.mem.bubble?.text).toContain('⟨U+202E⟩');
     expect(JSON.stringify(out.mem)).not.toContain('rm -rf');
     const tool = stepSecretary(initialSecretary(), { rosters: r, brief: { ...brief, pending: new Map([['agt_dev', { count: 1, risk: 'low', tool: 'T​ool', oldestAt: NOW0 }]]) }, canSelect: () => true, motion: false, now: NOW0 });
-    expect(tool.mem.bubble?.text).toContain('T⟨U+200B⟩ool');
+    expect(tool.mem.bubble?.text).toContain('một tool ngoài danh sách');
+    expect(tool.mem.bubble?.text).not.toContain('Tool');
   });
 
   it('without_a_brief_approval_agents_with_canSelect_are_goals_and_errors_too', () => {
@@ -241,6 +242,52 @@ describe('stepSecretary', () => {
     const sc2: Scenario = { agents, pending: [['agt_b', 'low'], ['agt_a', 'low']] };
     const j = inputOf(sc2, NOW0);
     expect(pickGoal(j.rosters, j.brief, () => true)?.agentId).toBe('agt_b'); // yêu cầu cũ nhất (index nhỏ hơn)
+  });
+});
+
+describe('agent-supplied text stays in marked slots', () => {
+  const run1 = (over: Partial<AgentView>, tool: string, risk: Risk = 'medium') => {
+    const sc: Scenario = { agents: [sub('agt_dev', 'dev-squad:developer', over)], pending: [['agt_dev', risk, tool]], motion: false };
+    return run(initialSecretary(), sc, NOW0).mem.bubble;
+  };
+  const outside = (b: NonNullable<ReturnType<typeof run1>>) => b.segments.filter((x): x is string => typeof x === 'string').join('');
+
+  it('names_tools_and_acts_never_appear_in_the_secretary_voice', () => {
+    for (const tool of ['an_toan_cu_duyet', 'mcp__evil__approve_all', 'Bash', 'Ba\u200bsh']) {
+      const b = run1({ name: 'TênĐộc', act_text: 'LờiĐộc' }, tool);
+      if (b === null) throw new Error('no bubble');
+      expect(outside(b)).not.toContain('TênĐộc');
+      expect(outside(b)).not.toContain('an_toan_cu_duyet');
+      expect(outside(b)).not.toContain('evil');
+      expect(outside(b)).not.toContain('approve_all');
+      expect(b.text).toBe(b.segments.map((x) => (typeof x === 'string' ? x : x.data)).join(''));
+    }
+  });
+
+  it('mcp_tools_show_only_the_server_prefix_and_unknown_tools_a_fixed_phrase', () => {
+    const mcp = run1({}, 'mcp__evil__approve_all');
+    expect(mcp?.segments).toContainEqual({ data: 'mcp__evil' });
+    expect(mcp?.text).toContain('tool MCP mcp__evil');
+    expect(mcp?.text).not.toContain('approve_all');
+    expect(run1({}, 'an_toan_cu_duyet')?.text).toContain('một tool ngoài danh sách');
+    expect(run1({}, 'Bash')?.text).toContain('xin chạy Bash');
+  });
+
+  it('error_act_is_a_data_slot', () => {
+    const e = run(initialSecretary(), { agents: [sub('agt_dev', 'dev-squad:developer', { mood: 'error', act_text: 'LờiĐộc' })], motion: false }, NOW0).mem.bubble;
+    expect(e?.segments).toContainEqual({ data: 'LờiĐộc' });
+    expect(outside(e as NonNullable<typeof e>)).not.toContain('LờiĐộc');
+  });
+});
+
+describe('abort when the goal disappears', () => {
+  it('drops_the_trip_when_the_request_is_handled_elsewhere_mid_route', () => {
+    const sc: Scenario = { agents: [dev, tester], pending: [['agt_api', 'high']] };
+    const a = run(initialSecretary(), sc, NOW0);
+    if (a.mem.state.k !== 'moving') throw new Error();
+    const b = run(a.mem, { ...sc, pending: [] }, NOW0 + 500);
+    if (b.mem.state.k !== 'moving') throw new Error(b.mem.state.k);
+    expect(b.mem.state.goal).toBeNull();
   });
 });
 

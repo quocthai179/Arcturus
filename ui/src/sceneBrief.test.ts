@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { RISK_RANK, sceneBrief } from './sceneBrief';
+import { RISK_RANK, sameBrief, sceneBrief } from './sceneBrief';
 import { initialState, type HubState } from './store';
 import { agent, approval, handoff } from './test/fixtures';
 
@@ -36,5 +36,16 @@ describe('sceneBrief', () => {
 
   it('risk_rank_order', () => {
     expect(RISK_RANK).toEqual({ critical: 0, high: 1, medium: 2, low: 3 });
+  });
+
+  it('sameBrief_ignores_identity_but_sees_real_changes', () => {
+    const state: HubState = { ...base, queue: [approval({ agent_id: 'agt_a' })], handoffs: [handoff({ agent_id: 'agt_h' })] };
+    const a = sceneBrief(state, { speech: null, mood: 'working' });
+    const b = sceneBrief({ ...state }, { speech: null, mood: 'working' });
+    expect(a).not.toBe(b);
+    expect(sameBrief(a, b)).toBe(true);
+    expect(sameBrief(a, sceneBrief({ ...state, queue: [approval({ agent_id: 'agt_a', risk: 'critical' })] }, { speech: null, mood: 'working' }))).toBe(false);
+    expect(sameBrief(a, sceneBrief({ ...state, handoffs: [] }, { speech: null, mood: 'working' }))).toBe(false);
+    expect(sameBrief(a, sceneBrief(state, { speech: null, mood: 'sleep' }))).toBe(false);
   });
 });
