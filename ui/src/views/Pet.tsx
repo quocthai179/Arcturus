@@ -20,6 +20,7 @@ import { DEFAULT_MIN_REVIEW_MS, useApprovalQueue } from '../useApprovalQueue';
 import { useHubConnection } from '../useHubConnection';
 import { useMotionPolicy } from '../useMotionPolicy';
 import { useNow } from '../useNow';
+import { hasWebGL } from '../webgl';
 import './Pet.css';
 
 const LazyScene = lazy(() => import('../pet/scene/PetScene'));
@@ -44,15 +45,6 @@ function clock(at: number): string {
 
 export function fitsBubble(a: ApprovalView): boolean {
   return !a.truncated && Array.from(a.command_normalized).length <= BUBBLE_MAX_CHARS && a.command_normalized.split('\n').length <= BUBBLE_MAX_LINES;
-}
-
-function hasWebGL(): boolean {
-  try {
-    const c = document.createElement('canvas');
-    return (c.getContext('webgl2') ?? c.getContext('webgl')) !== null;
-  } catch {
-    return false;
-  }
 }
 
 /** Tâm trạng pet → mood của nhân vật SVG 2D. */

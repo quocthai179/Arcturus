@@ -23,7 +23,7 @@ không được làm đổi các điều kiện đó (CLAUDE.md quy tắc bất 
 | Muốn thay | Điểm cắm | Cách làm |
 |---|---|---|
 | Cách vẽ nhân vật (SVG chuyển động, Lottie, 3D VRM) | `components/AgentAvatar.tsx`: `AVATAR_RENDERERS` | Thêm khóa vào `AvatarStyle` và một component nhận `AvatarRendererProps` (`mood`, `palette`, `size`, `label`). Nơi dùng (thẻ duyệt, bàn, đội) không đổi. |
-| Cảnh Văn phòng (lưới, cảnh 2D có bàn/ánh sáng, isometric, 3D) | `components/scenes.tsx`: `OFFICE_SCENES` | Thêm khóa vào `SceneId` và một component nhận `OfficeSceneProps` (`desks`, `support`, `canSelect`, `onSelect`, `motion`). `Office` không đổi. Đã có: `live` (mặc định, docs/OFFICE_LIVE.md) và `grid`. |
+| Cảnh Văn phòng (lưới, cảnh 2D có bàn/ánh sáng, isometric, 3D) | `components/scenes.tsx`: `OFFICE_SCENES` | Thêm khóa vào `SceneId` và một component nhận `OfficeSceneProps` (`desks`, `support`, `canSelect`, `onSelect`, `motion`, và `brief?`: tóm tắt chỉ đọc do `Office` dựng từ `sceneBrief.ts`, không chứa lệnh; `live`/`grid` bỏ qua). `Office` không đổi. Đã có: `live` (mặc định, docs/OFFICE_LIVE.md), `grid` và `building` (tòa nhà 3D 6 tầng có thư ký trưởng, opt-in, docs/OFFICE_BUILDING.md; three.js nạp muộn ở chunk riêng). |
 | Màu, bo góc, khoảng cách, thời lượng | `index.css` khối `:root` | Đổi giá trị token; chủ đề mới là một khối `:root[data-theme='...']` ghi đè token. |
 | Quy tắc chuyển động | `useMotionPolicy.ts` + quy tắc `data-motion` trong `index.css` | Không sửa từng hiệu ứng; mọi hiệu ứng tự được tắt. |
 
@@ -32,7 +32,7 @@ Hai hợp đồng quan trọng:
 - **Bộ vẽ nhân vật và cảnh chỉ vẽ.** Không gọi hub, không đọc store, không gửi lệnh duyệt. Chọn agent đang giơ tay thì cảnh
   gọi `onSelect(agentId)`.
 - **Hàng đợi duyệt không phụ thuộc cảnh.** Thẻ duyệt luôn nằm ở cột riêng (`QueueList`), để cảnh 3D tải lỗi hay không có
-  WebGL thì vẫn duyệt được. Cảnh mới phải tự lui về `grid` khi lỗi (sẽ làm cùng cảnh đầu tiên khác `grid`).
+  WebGL thì vẫn duyệt được. Chuỗi lùi khi cảnh lỗi: `building` → `live` (không có WebGL, nạp chunk lỗi, lỗi dựng, mất context) → `grid` (`Office` bọc cảnh bằng `SceneBoundary`, fallback `DeskGridScene`). Cảnh mới phải tự lui như vậy; riêng `building` tự lui về `live` rồi mới tới `grid`.
 
 ## Luật chuyển động và tài nguyên (mọi thay đổi giao diện phải giữ)
 

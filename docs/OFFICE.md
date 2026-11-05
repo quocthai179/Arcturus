@@ -4,7 +4,10 @@ Mở từ menu tray **Mở văn phòng**. Trong môi trường phát triển UI,
 Office dùng cùng cơ chế xác thực hub với popup Lite; không cần endpoint hay giao thức mới.
 
 Từ 2026-10-29 cảnh mặc định là **văn phòng sống** (`live`, docs/OFFICE_LIVE.md): agent rảnh đi dạo, tán gẫu; có việc thì
-chạy về bàn; lưới thẻ dưới đây vẫn hiện ngay dưới sàn. Công tắc "Sống / Lưới" ở đầu Office chọn cảnh (nhớ ở `localStorage`).
+chạy về bàn; lưới thẻ dưới đây vẫn hiện ngay dưới sàn. Công tắc "Sống / Lưới / Tòa nhà" ở đầu Office chọn cảnh (nhớ ở `localStorage`).
+Cảnh **Tòa nhà** (`building`, opt-in, chưa phải mặc định tới khi đo ngân sách) là tòa nhà 3D 6 tầng: mỗi bộ plugin squad một tầng, Phòng CEO
+ở tầng 5 do thư ký trưởng (Pet) làm việc; chi tiết ở docs/OFFICE_BUILDING.md và docs/adr/0003-office-building.md. Không có WebGL
+thì tự lùi về cảnh `live`, lỗi nữa thì `grid`; hàng đợi duyệt luôn ở cột riêng.
 
 ## Hiển thị
 
