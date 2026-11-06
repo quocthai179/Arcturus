@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { applyServer, initialState } from '../store';
 import { agent, approval, handoff, snapshot } from '../test/fixtures';
 import { FakeSocket } from '../test/FakeSocket';
+import { OFFICE_SCENES } from '../components/scenes';
 import { Office, OfficeView } from './Office';
 
 vi.mock('../hub', () => ({
@@ -149,5 +150,46 @@ describe('Office connection', () => {
     expect(screen.queryByRole('article', { name: /Bàn của/ })).toBeNull();
     view.unmount();
     expect(reconnected.closed).toBe(true);
+  });
+});
+
+describe('OfficeView scenes', () => {
+  it('scene_switch_offers_three_scenes_and_building_is_opt_in', () => {
+    window.localStorage.clear();
+    render(<OfficeView {...props()} />);
+    const group = screen.getByRole('group', { name: 'Kiểu văn phòng' });
+    expect(within(group).getAllByRole('button').map((b) => b.textContent)).toEqual(['Sống', 'Lưới', 'Tòa nhà']);
+    expect(within(group).getByRole('button', { name: 'Sống' }).getAttribute('aria-pressed')).toBe('true');
+    expect(within(group).getByRole('button', { name: 'Tòa nhà' }).getAttribute('aria-pressed')).toBe('false');
+  });
+
+  it('building_without_webgl_falls_back_to_the_2d_office_and_the_queue_still_works', () => {
+    window.localStorage.clear();
+    const p = props();
+    render(<OfficeView {...p} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Tòa nhà' }));
+    expect(screen.getByText('Máy này không dựng được cảnh 3D, đang hiện văn phòng 2D.')).toBeTruthy();
+    expect(screen.getByRole('region', { name: 'Sàn văn phòng' })).toBeTruthy();
+    window.localStorage.clear();
+  });
+
+  it('a_scene_that_throws_falls_back_to_the_grid_and_the_approval_queue_stays_usable', () => {
+    window.localStorage.clear();
+    const spy = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const original = OFFICE_SCENES.live;
+    OFFICE_SCENES.live = () => {
+      throw new Error('scene exploded');
+    };
+    try {
+      const p = props();
+      render(<OfficeView {...p} />);
+      expect(screen.getByLabelText('Bàn của Khoa')).toBeTruthy();
+      expect(screen.getByRole('complementary', { name: 'Hàng đợi duyệt' })).toBeTruthy();
+      fireEvent.click(screen.getByRole('button', { name: /Từ chối|Deny/ }));
+      expect(p.send).toHaveBeenCalled();
+    } finally {
+      OFFICE_SCENES.live = original;
+      spy.mockRestore();
+    }
   });
 });

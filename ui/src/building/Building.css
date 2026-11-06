@@ -1,0 +1,43 @@
+/* Cảnh Tòa nhà (docs/OFFICE_BUILDING.md §8). Chỉ token: màu, bo góc, thời lượng đều từ index.css. */
+.building { display: grid; gap: var(--space-3); min-width: 0; }
+.building:focus-visible { outline: 2px solid var(--working); outline-offset: 2px; border-radius: var(--radius-xl); }
+.building__bar { display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; }
+.building__bar button, .building__lift, .building__act {
+  border: 1px solid var(--border); background: var(--raised); color: var(--text); border-radius: var(--radius-pill);
+  padding: var(--space-1) var(--space-3); font: inherit; cursor: pointer;
+}
+.building__bar button[aria-pressed='true'], .building__lift[aria-pressed='true'] { border-color: var(--working); background: var(--surface); }
+.building__bar button:focus-visible, .building__lift:focus-visible, .building__act:focus-visible, .building__follow input:focus-visible, .building__secbtn:focus-visible {
+  outline: 2px solid var(--working); outline-offset: 2px;
+}
+.building__follow { display: inline-flex; align-items: center; gap: var(--space-2); margin-left: auto; }
+.building__sec {
+  display: flex; gap: var(--space-2); flex-wrap: wrap; align-items: center; margin: 0; padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-lg); border: 1px solid var(--border); background: var(--bubble-bg); color: var(--bubble-fg);
+  overflow-wrap: anywhere;
+}
+.building__sec[data-idle='true'] { background: var(--surface); color: var(--muted); }
+.building__secbtn { border: 0; background: var(--floor-ceo); color: var(--bubble-fg); border-radius: var(--radius-pill); padding: 0 var(--space-3); font: inherit; font-weight: 600; cursor: pointer; }
+.building__act { background: var(--bubble-think-bg); color: var(--bubble-fg); }
+.building__stage { display: grid; grid-template-columns: minmax(0, 1fr) 180px; gap: var(--space-3); align-items: stretch; }
+.building__view { position: relative; min-height: 420px; aspect-ratio: 16 / 9; border-radius: var(--radius-xl); border: 1px solid var(--border); background: var(--building-sky); overflow: hidden; }
+.building__canvas { position: absolute; inset: 0; }
+.building__canvas canvas { display: block; width: 100%; height: 100%; }
+.building__loading { position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%); margin: 0; padding: var(--space-1) var(--space-3); border-radius: var(--radius-pill); background: var(--nametag-bg); }
+.building__tip {
+  position: absolute; z-index: 5; max-width: 280px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-md);
+  background: var(--nametag-bg); color: var(--text); font-size: 12px; pointer-events: none; overflow-wrap: anywhere;
+}
+.building__tip p { margin: 0; }
+.building__lifts { display: grid; gap: var(--space-1); align-content: start; }
+.building__lift { display: grid; gap: 2px; text-align: left; border-radius: var(--radius-md); border-left: 4px solid var(--accent, var(--border)); }
+.building__lift b { font-size: 13px; }
+.building__lift small { color: var(--muted); font-size: 11px; }
+.building__lift .building__here { color: var(--floor-ceo); }
+.building__note { margin: 0; }
+@media (max-width: 720px) {
+  .building__stage { grid-template-columns: minmax(0, 1fr); }
+  .building__lifts { grid-auto-flow: column; grid-auto-columns: minmax(130px, 1fr); overflow-x: auto; order: 2; }
+  .building__view { min-height: 320px; }
+}
+.building__data { padding: 0 var(--space-1); border-radius: var(--radius-xs); background: var(--bubble-think-bg); font-family: var(--font-mono); font-size: 0.92em; }

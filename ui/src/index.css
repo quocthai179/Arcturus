@@ -43,6 +43,14 @@
   --bubble-shadow: rgba(0, 0, 0, 0.35);
   --nametag-bg: rgba(12, 14, 20, 0.72);
   --ease-out: ease-out;
+  /* Tòa nhà Arcturus (docs/OFFICE_BUILDING.md): màu nhấn từng tầng (Sảnh, Dev, Test, R&D, Media, Phòng CEO). */
+  --floor-lobby: #9aa3b5;
+  --floor-dev: #8b7cf6;
+  --floor-test: #34d1b5;
+  --floor-rnd: #ffd27a;
+  --floor-media: #ff7a59;
+  --floor-ceo: #ffb020;
+  --building-sky: #1a2236;
   --font-ui: 'Be Vietnam Pro', system-ui, sans-serif;
   --font-mono: 'JetBrains Mono', ui-monospace, monospace;
   color-scheme: dark;

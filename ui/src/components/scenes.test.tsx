@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { agent } from '../test/fixtures';
-import { DEFAULT_SCENE, OFFICE_SCENES, type OfficeSceneProps } from './scenes';
+import { DEFAULT_SCENE, isSceneId, OFFICE_SCENES, SCENE_LABELS, type OfficeSceneProps } from './scenes';
 
 afterEach(() => {
   cleanup();
@@ -127,5 +127,15 @@ describe('live office scene', () => {
     );
     expect(document.querySelector('img')).toBeNull();
     expect(within(floor()).getByText('<img src=x onerror=alert(1)>')).toBeTruthy();
+  });
+});
+
+describe('building scene registration', () => {
+  it('is_registered_labelled_and_not_the_default', () => {
+    expect(isSceneId('building')).toBe(true);
+    expect(isSceneId('nope')).toBe(false);
+    expect(SCENE_LABELS.building).toBe('Tòa nhà');
+    expect(OFFICE_SCENES.building).toBeTruthy();
+    expect(DEFAULT_SCENE).toBe('live');
   });
 });

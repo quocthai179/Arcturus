@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { QueueList } from '../components/QueueList';
-import { DEFAULT_SCENE, isSceneId, OFFICE_SCENES, SCENE_LABELS, type SceneId } from '../components/scenes';
+import { SceneBoundary } from '../components/SceneBoundary';
+import { DEFAULT_SCENE, isSceneId, OFFICE_SCENES, SCENE_LABELS, type OfficeSceneProps, type SceneId } from '../components/scenes';
 import { SuggestionList } from '../components/SuggestionList';
 import { TeamControls } from '../components/TeamControls';
 import { approvalInput } from '../hub';
@@ -8,6 +9,7 @@ import { officeRoster } from '../office';
 import { DEFAULT_MIN_REVIEW_MS, useApprovalQueue } from '../useApprovalQueue';
 import { useHubConnection } from '../useHubConnection';
 import { useMotionPolicy } from '../useMotionPolicy';
+import { useSceneBrief } from '../useSceneBrief';
 import type { LitePopupViewProps } from './LitePopup';
 import './Office.css';
 
@@ -37,6 +39,7 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
   const [sceneId, setSceneId] = useState<SceneId>(loadScene);
   const Scene = OFFICE_SCENES[sceneId];
   const motion = useMotionPolicy();
+  const brief = useSceneBrief(state, sceneId === 'building');
   const { desks, support } = officeRoster(Object.values(state.agents), state.team.roster_max);
   const queueRef = useRef<HTMLElement>(null);
   const [hidden, setHidden] = useState(() => document.hidden);
@@ -58,6 +61,17 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
         .find((el) => el.dataset.handoffId === handoff?.handoff_id);
     target?.scrollIntoView({ block: 'nearest', behavior: 'instant' });
     target?.focus({ preventScroll: true });
+  };
+
+  const sceneProps: OfficeSceneProps = {
+    desks,
+    support,
+    canSelect: (a) =>
+      a.mood === 'approval' &&
+      (state.queue.some((q) => q.agent_id === a.id) || state.handoffs.some((h) => h.agent_id === a.id)),
+    onSelect: selectAgent,
+    motion,
+    brief,
   };
 
   return (
@@ -96,16 +110,9 @@ export function OfficeView({ state, send, loadFull, minReviewMs }: LitePopupView
       {notice && <p className="banner banner--error" role="alert">{notice}</p>}
       {state.feed[0] && <p className="banner" role="status">{state.feed[0].text}</p>}
       <div className="office__layout">
-        <Scene
-          desks={desks}
-          support={support}
-          canSelect={(a) =>
-            a.mood === 'approval' &&
-            (state.queue.some((q) => q.agent_id === a.id) || state.handoffs.some((h) => h.agent_id === a.id))
-          }
-          onSelect={selectAgent}
-          motion={motion}
-        />
+        <SceneBoundary key={sceneId} fallback={<OFFICE_SCENES.grid {...sceneProps} />}>
+          <Scene {...sceneProps} />
+        </SceneBoundary>
         <aside className="office__queue" ref={queueRef} aria-labelledby="queue-heading">
           <h2 id="queue-heading">Hàng đợi duyệt</h2>
           {state.queue.length === 0 && state.handoffs.length === 0 && (

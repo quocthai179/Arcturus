@@ -1,5 +1,6 @@
 // Cảnh lưới bàn (T13): mỗi agent một thẻ. Cũng là phần thẻ chi tiết nằm dưới sàn của cảnh văn phòng sống.
 import type { AgentView } from '../protocol';
+import type { SceneBrief } from '../sceneBrief';
 import { AgentDesk } from './AgentDesk';
 
 export interface OfficeSceneProps {
@@ -12,6 +13,8 @@ export interface OfficeSceneProps {
   onSelect: (agentId: string) => void;
   /** Được phép chuyển động (trang hiện, không giảm chuyển động; `useMotionPolicy`). Mặc định `true`. */
   motion?: boolean;
+  /** Tóm tắt chỉ đọc cho cảnh (thư ký, số liệu tầng). Tùy chọn: `live`, `grid` bỏ qua. Không chứa lệnh. */
+  brief?: SceneBrief;
 }
 
 const HEX = /^#[0-9a-fA-F]{6}$/;
