@@ -1,8 +1,11 @@
 # Arcturus — buồng lái trưởng nhóm cho đội AI agent
 
 Hub nhẹ chạy trên máy bạn, gom sự kiện từ nhiều phiên Claude Code để bạn thấy ai đang làm gì, ai đang giơ tay xin
-duyệt, rồi duyệt/từ chối từ một chỗ, ủy quyền dần theo độ tin cậy. Mỗi agent là một nhân vật 2D trong văn phòng; trợ lý
-3D "Pet" là tùy chọn. Bối cảnh và quy tắc: `CLAUDE.md`; kiến trúc: `docs/ARCHITECTURE.md`.
+duyệt, rồi duyệt/từ chối từ một chỗ, ủy quyền dần theo độ tin cậy. Mỗi agent là một nhân vật trong văn phòng: 2D, hoặc
+một trụ sở 3D nhiều tầng có thư ký điều phối ở Phòng CEO. Trợ lý "Pet" là tùy chọn. Bối cảnh và quy tắc: `CLAUDE.md`;
+kiến trúc: `docs/ARCHITECTURE.md`.
+
+![Cảnh Tòa nhà: Phòng CEO, thư ký và hàng đợi duyệt của cả tòa](docs/images/building-ceo.jpg)
 
 ```
 Claude Code ──HTTP hooks──► crates/hub (axum, 127.0.0.1:7878) ──WebSocket──► crates/app (Tauri) + ui/ (React)
@@ -10,13 +13,14 @@ Claude Code ──HTTP hooks──► crates/hub (axum, 127.0.0.1:7878) ──We
                            crates/hub-core: schema · state · policy · SQLite
 ```
 
-## Trạng thái (cập nhật 2026-11-04, `main` tại `74f868d`)
+## Trạng thái (cập nhật 2026-11-06, `main` tại `31c71a1` + art pass)
 
 | Mốc | Trạng thái |
 |---|---|
 | **v0** (T0–T21, ARC-21…ARC-44) | Code xong. 19 task `done`; T13 (văn phòng 2D), T16 (đo ngân sách), T18 (dogfood), T20 (chỉ số) và T21 (cổng v0) đang `review`. Cổng v0 chạy ngày 2026-10-27 **chưa đạt**; các phát hiện bảo mật (vùng khóa, phát hiện 1–7) đã sửa kèm test hồi quy ở ARC-29 và ARC-42, test, e2e và ngân sách đã chạy lại và đạt (2026-10-28). **Còn chờ:** dogfood hằng ngày ≥ 2 tuần + baseline (T20), cài/gỡ trên máy sạch (T18), `cargo audit`. Báo cáo: `.squad/reports/2026-10-27-milestone-v0.md` |
 | **v1 Pet** (P1–P12, ngoại lệ phạm vi, `docs/adr/0001-pet-v1.md`) | Đã merge, đang `review`. Pet 2D đạt ngân sách; bản 3D (VRM) chạy thật trên máy người dùng nhưng **chưa đo ngân sách**. Spike P0 chưa làm. Orchestrator tầng 2 (LLM) chỉ mới là ADR nghiên cứu (`docs/adr/0002-pet-orchestrator-tier2.md`), chưa có code |
 | Sau v0 (chưa mã ARC) | Văn phòng sống (cảnh `live`, PR #33) và cài hook + tự kiểm tra ngay trong app (PR #34): đã merge, đề xuất ticket dưới ARC-34 và ARC-39 |
+| **Cảnh Tòa nhà 3D** (chưa mã ARC, `docs/adr/0003-office-building.md`) | Đã merge (PR #36) + art pass 2026-11-06 (văn phòng ấm, nhân vật chi tiết). Opt-in, mặc định vẫn là `live`. **Chưa đo ngân sách** RAM/GPU trên WebView2 thật; định dạng `agent_type` `<plugin>:<agent>` còn là giả định, chờ `/hook-lab` |
 
 Bảng task đầy đủ và nhật ký: `.squad/TASKS.md` (YouTrack project ARC).
 
@@ -48,8 +52,13 @@ Bảng task đầy đủ và nhật ký: `.squad/TASKS.md` (YouTrack project ARC
   Cài đặt và tự kiểm tra… · Thoát.
 - **Popup Lite**: hàng đợi duyệt hiển thị `tool_input` gốc đã chuẩn hóa, Enter duyệt / Esc từ chối, "Duyệt cả N",
   đề xuất trust.
-- **Văn phòng 2D**: cảnh `live` mặc định (agent rảnh đi dạo, tán gẫu; có việc thì về bàn; không rAF, dừng khi tab ẩn)
-  và cảnh lưới; công tắc Sống/Lưới.
+- **Văn phòng**: công tắc Sống / Lưới / Tòa nhà.
+  - `live` (mặc định): agent rảnh đi dạo, tán gẫu; có việc thì về bàn; không rAF, dừng khi tab ẩn.
+  - `grid`: lưới thẻ tĩnh.
+  - `building` (3D, opt-in, `docs/OFFICE_BUILDING.md`): trụ sở 6 tầng. Tầng 0 Sảnh (phiên chính, khách); tầng 1–4 là
+    các bộ plugin squad (`dev-squad`, `tester-squad`, `lab`, `demo-builder`), xếp theo tiền tố `agent_type` có danh sách
+    trắng; tầng 5 Phòng CEO. **Thư ký** (Pet) ở Phòng CEO, đi thang máy tới tầng cần chú ý và dẫn bạn tới thẻ duyệt;
+    không gửi lệnh nào lên hub, không duyệt thay bạn. three.js nạp muộn, chỉ vẽ khi có thay đổi, lỗi thì lui về `live`.
 - **Cài đặt**: gộp/gỡ hook vào `~/.claude/settings.json` có xem trước diff (che token), sao lưu, token hook tự sinh;
   tự kiểm tra đầu-cuối settings → hub → WebSocket.
 - **Pet** (opt-in): cửa sổ trong suốt, nhân vật 2D hoặc model `.vrm` bạn chọn (three-vrm nạp muộn), bong bóng duyệt
@@ -61,6 +70,24 @@ Bảng task đầy đủ và nhật ký: `.squad/TASKS.md` (YouTrack project ARC
   đo p50/p95/p99.
 - `scripts/measure.ps1` / `measure.sh`: đo ngân sách hub, app, pet. `scripts/metrics.py`: chỉ số dogfood từ `arcturus.db`.
 - `crates/hub/tests/e2e_claude.rs`: e2e với Claude Code thật (`claude -p`, `#[ignore]`): allow, deny, hết giờ, hub tắt, non-2xx.
+
+## Ảnh chụp
+
+Chụp ngày 2026-11-06 từ UI chạy trong Chromium, nối với **hub thật** (`target/debug/hub`). Hook gửi vào hub mô phỏng
+4 phiên Claude Code và 15 subagent của 4 plugin, kèm 4 yêu cầu duyệt bị giữ. Dữ liệu là dữ liệu thử, không phải dogfood.
+Cảnh 3D dựng bằng SwiftShader (không GPU), nên màu và độ mịn trên máy thật có thể khác.
+
+| | |
+|---|---|
+| ![Ngoại cảnh tòa nhà lúc hoàng hôn](docs/images/building-exterior.jpg) | ![Tầng Dev cắt lớp: bàn theo vai trò của dev-squad](docs/images/building-dev.jpg) |
+| Ngoại cảnh: mỗi tầng một bộ plugin, thang máy kính, vườn mái | Tầng 1 Dev (`dev-squad`) cắt lớp; thẻ "Đội hình chính" bên dưới |
+| ![Văn phòng sống 2D](docs/images/office-live.jpg) | ![Popup Lite](docs/images/popup-lite.jpg) ![Pet 2D](docs/images/pet.jpg) |
+| Cảnh `live` (mặc định) với hàng đợi duyệt | Popup Lite và Pet 2D (bong bóng duyệt) |
+
+Trong lần chạy này, luồng duyệt đi đủ đầu-cuối qua hub thật:
+- bấm Đồng ý trên popup → hook nhận `allow`;
+- bấm Từ chối → `deny`;
+- không trả lời (kể cả lệnh vùng khóa `rm -rf ~/...`) → `{}` sau 110 s, không bao giờ `allow`.
 
 ## Bắt đầu nhanh
 
@@ -87,6 +114,20 @@ mkdir -p ~/.config/arcturus && cp arcturus.example.toml ~/.config/arcturus/arctu
 Cài bằng script (`scripts/dogfood-install.sh`, cần `jq` và `ARCTURUS_TOKEN`), đổi cổng, đo chỉ số và xử lý sự cố:
 `docs/DOGFOOD.md`. **An toàn khi thử:** hub chết, tắt, hết giờ hay sai token đều là lỗi không chặn; terminal luôn hỏi
 song song với popup.
+
+### Chạy UI trong trình duyệt (không cần app)
+
+Dùng khi muốn xem giao diện hoặc chụp ảnh mà không build Tauri:
+
+```bash
+cargo build -p hub
+ARCTURUS_TOKEN=<token hook ≥32 ký tự> target/debug/hub --ui-token-file /tmp/arcturus-ui-token
+VITE_HUB_WS_URL=ws://127.0.0.1:7878/ws VITE_HUB_TOKEN=$(cat /tmp/arcturus-ui-token) pnpm -C ui dev
+```
+
+Rồi mở `http://127.0.0.1:5173/` (popup), `/?view=office`, `/?view=pet`. Có thể gửi sự kiện bằng
+`cargo run -p replay -- fixtures/hooks` hoặc bằng hook thật của Claude Code (`docs/DOGFOOD.md`). Cửa sổ Cài đặt
+(`?view=setup`) chỉ chạy trong app.
 
 ## Lệnh phát triển
 
@@ -131,9 +172,9 @@ chạy fmt/clippy/test Rust, test + build + `pnpm audit` cho UI, shellcheck và 
 | `docs/HOOK_FINDINGS.md` | Cả hai | Hành vi thật của hook Claude Code đã kiểm chứng (ưu tiên hơn PLAN.md khi mâu thuẫn) |
 | `docs/BUDGET.md` | Cả hai | Ngân sách RAM/CPU, kịch bản đo, lịch sử đo |
 | `docs/DOGFOOD.md` | Bạn | Cài/gỡ hook, chạy app, đo chỉ số dùng thật |
-| `docs/OFFICE.md`, `docs/OFFICE_LIVE.md` | Cả hai | Văn phòng 2D và cảnh `live` |
+| `docs/OFFICE.md`, `docs/OFFICE_LIVE.md`, `docs/OFFICE_BUILDING.md` | Cả hai | Văn phòng 2D, cảnh `live`, cảnh Tòa nhà 3D và thư ký |
 | `docs/UI_EXTENSION.md` | Cả hai | Điểm thay thế giao diện mà không đụng logic duyệt |
-| `docs/adr/` | Cả hai | ADR 0001 Pet v1, ADR 0002 nghiên cứu orchestrator tầng 2 |
+| `docs/adr/` | Cả hai | ADR 0001 Pet v1, ADR 0002 nghiên cứu orchestrator tầng 2, ADR 0003 Tòa nhà 3D |
 | `.squad/TASKS.md`, `.squad/reports/` | Cả hai | Bảng task, nhật ký, báo cáo cổng mốc |
 | `.claude/settings.json` | Claude Code | Quyền: cho phép build/test, hỏi khi push, chặn lệnh nguy hiểm và đọc bí mật |
 | `.claude/agents/` | Claude | `hook-spike` (thực nghiệm hook), `budget-guard` (đo ngân sách) |
