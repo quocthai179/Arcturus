@@ -1,4 +1,4 @@
-// Nhân vật trong cảnh Tòa nhà (docs/OFFICE_BUILDING.md §6.3): mỗi phần một InstancedMesh dùng chung geometry (≈30 draw call cho
+// Nhân vật trong cảnh Tòa nhà (docs/OFFICE_BUILDING.md §6.3): mỗi phần một InstancedMesh dùng chung geometry (chỉ các phần đang dùng mới tốn draw call cho
 // tầng đang xem) + hình rút gọn (thân, đầu, tóc) cho các tầng khác. Tư thế và FK tính ở `../figure.ts` (thuần).
 import {
   Color, CylinderGeometry, Euler, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshLambertMaterial, PlaneGeometry, Quaternion, Sprite,
@@ -64,11 +64,12 @@ const base = new Matrix4();
 const pt = new Matrix4();
 const v3 = new Vector3();
 const one = new Vector3(1, 1, 1);
+const sc = new Vector3();
 
 function partMatrix(out: Matrix4, world: Matrix4, t: PartTransform): Matrix4 {
   e.set(t.rot.x, t.rot.y, t.rot.z, 'XYZ');
   q.setFromEuler(e);
-  pt.compose(v3.set(t.pos.x, t.pos.y, t.pos.z), q, new Vector3(t.scale.x, t.scale.y, t.scale.z));
+  pt.compose(v3.set(t.pos.x, t.pos.y, t.pos.z), q, sc.set(t.scale.x, t.scale.y, t.scale.z));
   return out.multiplyMatrices(world, pt);
 }
 
@@ -171,9 +172,10 @@ export function createFigures(): Figures {
   const cache = new Map<string, readonly PartTransform[]>();
   const transforms = (pose: PoseId, hair: Look['hair'], extras: FigureExtras, phase: number): readonly PartTransform[] => {
     if (pose === 'walk') return partTransforms(walkAngles(phase), hair, extras);
-    const key = `${pose}|${shapeKey(extras.look ?? SECRETARY_LOOK)}|${extras.mood}|${extras.secretary}|${extras.folder}`;
+    const key = `${pose}|${hair}|${shapeKey(extras.look ?? SECRETARY_LOOK)}|${extras.mood}|${extras.secretary}|${extras.folder}`;
     let t = cache.get(key);
     if (t === undefined) {
+      if (cache.size > 512) cache.clear();
       t = partTransforms(POSES[pose], hair, extras);
       cache.set(key, t);
     }
