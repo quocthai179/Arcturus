@@ -1,23 +1,25 @@
 // Nhân vật trong cảnh Tòa nhà (docs/OFFICE_BUILDING.md §6.3): mỗi phần một InstancedMesh dùng chung geometry (≈30 draw call cho
 // tầng đang xem) + hình rút gọn (thân, đầu, tóc) cho các tầng khác. Tư thế và FK tính ở `../figure.ts` (thuần).
 import {
-  BoxGeometry, CapsuleGeometry, Color, CylinderGeometry, Euler, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshLambertMaterial, Quaternion, Sprite, SphereGeometry,
-  TorusGeometry, Vector3, type BufferGeometry, type CanvasTexture,
+  Color, CylinderGeometry, Euler, Group, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, MeshLambertMaterial, PlaneGeometry, Quaternion, Sprite,
+  Vector3, type CanvasTexture,
 } from 'three';
 import { cleanText } from '../../pet/brain';
 import type { AgentId, Mood } from '../../protocol';
 import {
-  capsuleCylinderLength, hairStyle, partColors, partTransforms, PART_IDS, PART_SPECS, POSES, safePalette, SECRETARY_PALETTE, SIT_FORWARD, isSeated, walkAngles,
-  type FigureExtras, type PartId, type PartTransform, type PoseId,
+  lookFor, partColors, partTransforms, PART_IDS, PART_SPECS, POSES, safePalette, SECRETARY_LOOK, SECRETARY_PALETTE, shapeKey, SIT_FORWARD, isSeated, walkAngles,
+  type ColorKey, type FigureExtras, type Look, type PartId, type PartTransform, type PoseId,
 } from '../figure';
 import { FLOORS, roleShort, type FloorId } from '../floors';
 import { BASE, deskAt, FLOOR_SLAB, geo, LOUNGE_SOFA_SPOTS, LOUNGE_SPOTS, STANDING_SPOTS, type Vec3 } from '../layout';
 import type { FloorRoster, Figure } from '../seating';
+import { blobTexture } from './decor';
+import { CASTS_SHADOW, partGeometry } from './figureGeo';
 import { Registry } from './kit';
 import { canvasTexture, drawBang, drawDeskLabel, drawDots, fontsReady, redraw, spriteMaterial } from './labels';
 
+/** Số chỗ tối đa trong một InstancedMesh (24 agent của tầng đang xem + thư ký). */
 export const MAX_INSTANCES = 25;
-const SECRETARY_INDEX = MAX_INSTANCES - 1;
 
 export interface SecretaryDraw {
   floor: FloorId | 'car';
@@ -43,15 +45,16 @@ export interface Anchors {
   bangs: Sprite[];
 }
 
-function geometryFor(p: PartId): BufferGeometry {
-  const s = PART_SPECS[p].shape;
-  switch (s.k) {
-    case 'sphere': return new SphereGeometry(s.r, 14, 10);
-    case 'box': return new BoxGeometry(s.w, s.h, s.d);
-    case 'capsule': return new CapsuleGeometry(s.r, capsuleCylinderLength(p), 4, 10);
-    case 'cylinder': return new CylinderGeometry(s.r, s.r, s.h, 14);
-    case 'torus': return new TorusGeometry(s.r, s.tube, 6, 24);
+const colorCache = new Map<string, Color>();
+/** Màu dùng lại theo mã hex (palette do agent gửi nên có giới hạn kích thước bộ nhớ đệm). */
+function colorOf(hex: string): Color {
+  let c = colorCache.get(hex);
+  if (c === undefined) {
+    if (colorCache.size > 256) colorCache.clear();
+    c = new Color(hex);
+    colorCache.set(hex, c);
   }
+  return c;
 }
 
 const q = new Quaternion();
@@ -89,14 +92,24 @@ export function createFigures(): Figures {
   const reg = new Registry();
   const group = new Group();
   const detail = new Map<PartId, InstancedMesh>();
-  const detailMat = reg.add(new MeshLambertMaterial({ color: '#FFFFFF' }));
+  const detailMat = reg.add(new MeshLambertMaterial({ color: '#FFFFFF', vertexColors: true }));
+  const geometries = new Map<PartId, ReturnType<typeof partGeometry>>();
+  const geometryOf = (id: PartId) => {
+    let g = geometries.get(id);
+    if (g === undefined) {
+      g = reg.add(partGeometry(id));
+      geometries.set(id, g);
+    }
+    return g;
+  };
   for (const id of PART_IDS) {
-    const mesh = new InstancedMesh(reg.add(geometryFor(id)), detailMat, MAX_INSTANCES);
-    mesh.castShadow = true;
+    const mesh = new InstancedMesh(geometryOf(id), detailMat, MAX_INSTANCES);
+    mesh.castShadow = CASTS_SHADOW.has(id);
     mesh.frustumCulled = false;
     mesh.count = 0;
+    mesh.visible = false;
     mesh.instanceColor = null;
-    for (let i = 0; i < MAX_INSTANCES; i++) mesh.setColorAt(i, new Color('#FFFFFF'));
+    for (let i = 0; i < MAX_INSTANCES; i++) mesh.setColorAt(i, colorOf('#FFFFFF'));
     detail.set(id, mesh);
     group.add(mesh);
   }
@@ -105,10 +118,10 @@ export function createFigures(): Figures {
   const reduced = new Map<PartId, InstancedMesh>();
   const reducedMax = 5 * 24 + 1;
   for (const id of reducedParts) {
-    const mesh = new InstancedMesh(reg.add(geometryFor(id)), detailMat, reducedMax);
+    const mesh = new InstancedMesh(geometryOf(id), detailMat, reducedMax);
     mesh.frustumCulled = false;
     mesh.count = 0;
-    for (let i = 0; i < reducedMax; i++) mesh.setColorAt(i, new Color('#FFFFFF'));
+    for (let i = 0; i < reducedMax; i++) mesh.setColorAt(i, colorOf('#FFFFFF'));
     reduced.set(id, mesh);
     group.add(mesh);
   }
@@ -116,6 +129,16 @@ export function createFigures(): Figures {
   const halo = new Mesh(reg.add(new CylinderGeometry(0.42, 0.42, 0.015, 24)), reg.add(new MeshBasicMaterial({ color: '#FFD166', transparent: true, opacity: 0.55, depthWrite: false })));
   halo.visible = false;
   group.add(halo);
+
+  // Bóng đổ giả dưới chân người của tầng đang xem: một InstancedMesh, một draw call.
+  const blobGeo = reg.add(new PlaneGeometry(0.8, 0.7));
+  blobGeo.rotateX(-Math.PI / 2);
+  const blobMat = reg.add(new MeshBasicMaterial({ map: blobTexture(reg), transparent: true, depthWrite: false, toneMapped: false, polygonOffset: true, polygonOffsetFactor: -2 }));
+  const blobs = new InstancedMesh(blobGeo, blobMat, MAX_INSTANCES);
+  blobs.frustumCulled = false;
+  blobs.renderOrder = 1;
+  blobs.count = 0;
+  group.add(blobs);
 
   // Sprite "!" dùng chung một texture; "…" của thư ký.
   const bangTex = canvasTexture(reg, 64, 64, drawBang);
@@ -146,9 +169,9 @@ export function createFigures(): Figures {
   });
 
   const cache = new Map<string, readonly PartTransform[]>();
-  const transforms = (pose: PoseId, hair: ReturnType<typeof hairStyle>, extras: FigureExtras, phase: number): readonly PartTransform[] => {
+  const transforms = (pose: PoseId, hair: Look['hair'], extras: FigureExtras, phase: number): readonly PartTransform[] => {
     if (pose === 'walk') return partTransforms(walkAngles(phase), hair, extras);
-    const key = `${pose}|${hair}|${extras.mood}|${extras.secretary}|${extras.folder}`;
+    const key = `${pose}|${shapeKey(extras.look ?? SECRETARY_LOOK)}|${extras.mood}|${extras.secretary}|${extras.folder}`;
     let t = cache.get(key);
     if (t === undefined) {
       t = partTransforms(POSES[pose], hair, extras);
@@ -175,25 +198,37 @@ export function createFigures(): Figures {
     return { x: g.cx + pos.x, y: (BASE[floor] ?? 0) + (lifts[floor] ?? 0) + pos.y, z: g.cz + pos.z };
   }
 
-  let nDetail = 0;
   let nReduced = 0;
   const anchors: Anchors = { agents: new Map(), secretary: null, bangs: [] };
 
-  function place(agentId: AgentId | null, w: Vec3, yaw: number, pose: PoseId, hairId: string, mood: Mood, palette: { hair: string; outfit: string; acc: string }, accent: string, asDetail: boolean, secretary: boolean, phase: number, bang: boolean): void {
-    const extras: FigureExtras = { mood, secretary, folder: secretary && pose === 'walk' };
-    const parts = transforms(pose, secretary ? 'bob' : hairStyle(hairId), extras, phase);
+  /** Số instance đã ghi của từng phần: mỗi phần có danh sách dày riêng (chỉ người dùng phần đó), nên kiểu tóc/phụ kiện hiếm gần như không tốn gì. */
+  const used = new Map<PartId, number>();
+  const colorsFor = new Map<string, Record<ColorKey, string>>();
+
+  function place(agentId: AgentId | null, w: Vec3, yaw: number, pose: PoseId, look: Look, mood: Mood, palette: { hair: string; outfit: string; acc: string }, accent: string, asDetail: boolean, secretary: boolean, phase: number, bang: boolean): void {
+    const folder = secretary && (pose === 'walk' || pose === 'stand');
+    const extras: FigureExtras = { mood, secretary, folder, look };
+    const parts = transforms(pose, look.hair, extras, phase);
     base.compose(v3.set(w.x, w.y, w.z), q.setFromEuler(e.set(0, yaw, 0)), one);
-    const colors = partColors(palette, accent);
+    const ckey = `${palette.hair}${palette.outfit}${palette.acc}${accent}${look.skin}${look.bottom}${look.shoe}`;
+    let colors = colorsFor.get(ckey);
+    if (colors === undefined) {
+      if (colorsFor.size > 128) colorsFor.clear();
+      colors = partColors(palette, accent, look);
+      colorsFor.set(ckey, colors);
+    }
     const head = parts.find((p) => p.part === 'head');
     const headWorld = new Vector3(head?.pos.x ?? 0, head?.pos.y ?? 1.33, head?.pos.z ?? 0).applyMatrix4(base);
     if (asDetail) {
-      const i = secretary ? SECRETARY_INDEX : nDetail++;
       for (const t of parts) {
         const mesh = detail.get(t.part);
-        if (mesh === undefined) continue;
+        const i = used.get(t.part) ?? 0;
+        if (mesh === undefined || t.scale.x === 0 || i >= MAX_INSTANCES) continue;
         mesh.setMatrixAt(i, partMatrix(m4, base, t));
-        mesh.setColorAt(i, new Color(colors[PART_SPECS[t.part].color]));
+        mesh.setColorAt(i, colorOf(colors[t.tint ?? PART_SPECS[t.part].color]));
+        used.set(t.part, i + 1);
       }
+      if (nBlob < MAX_INSTANCES) blobs.setMatrixAt(nBlob++, m4.copy(base).setPosition(w.x, w.y + 0.02, w.z));
       if (agentId !== null) anchors.agents.set(agentId, headWorld);
       if (bang && agentId !== null) {
         const s = bangPool[nBang++];
@@ -208,16 +243,19 @@ export function createFigures(): Figures {
       const i = nReduced++;
       if (i >= reducedMax) return;
       for (const id of reducedParts) {
-        const t = parts.find((p) => p.part === id);
+        let t = parts.find((p) => p.part === id);
         const mesh = reduced.get(id);
         if (t === undefined || mesh === undefined) continue;
+        // Tóc kiểu mũ len/xoăn không có chỏm: hình rút gọn vẫn cần một chỏm tóc để khỏi trọc.
+        if (id === 'hairCap' && t.scale.x === 0 && head !== undefined) t = { ...t, pos: head.pos, rot: head.rot, scale: { x: 1, y: 1, z: 1 } };
         mesh.setMatrixAt(i, partMatrix(m4, base, t));
-        mesh.setColorAt(i, new Color(colors[PART_SPECS[id].color]));
+        mesh.setColorAt(i, colorOf(colors[t.tint ?? PART_SPECS[id].color]));
       }
     }
     if (secretary) anchors.secretary = headWorld;
   }
   let nBang = 0;
+  let nBlob = 0;
   const secretaryHead = (): Vector3 | null => anchors.secretary;
 
   const frameLabels = new Map<string, { key: string; draw: Label['draw']; at: Vector3 }>();
@@ -261,9 +299,10 @@ export function createFigures(): Figures {
     group,
     halo,
     update(frame) {
-      nDetail = 0;
       nReduced = 0;
       nBang = 0;
+      nBlob = 0;
+      used.clear();
       anchors.agents.clear();
       anchors.secretary = null;
       anchors.bangs = [];
@@ -276,7 +315,7 @@ export function createFigures(): Figures {
           const asDetail = frame.detailFloor === r.floor;
           const palette = safePalette(f.agent.palette);
           const accent = FLOORS[r.floor]?.accent ?? '#9AA3B5';
-          place(f.agent.id, w, yaw, f.pose, f.agent.id, f.agent.mood, palette, accent, asDetail, false, 0, f.pose === 'raise' && frame.selectable.has(f.agent.id));
+          place(f.agent.id, w, yaw, f.pose, lookFor(f.agent.id), f.agent.mood, palette, accent, asDetail, false, 0, f.pose === 'raise' && frame.selectable.has(f.agent.id));
           if (asDetail) {
             const role = roleShort(f.placement.floor, f.placement.roleId) ?? (f.placement.zone === 'session' ? 'phiên chính' : f.placement.zone === 'guest' ? 'khách' : f.placement.zone === 'extra' ? 'bàn linh hoạt' : 'chung');
             const name = f.agent.name;
@@ -303,26 +342,29 @@ export function createFigures(): Figures {
         secWorld = worldOf(s.floor, pos, frame.lifts);
       }
       const asDetail = s.floor === 'car' || frame.detailFloor === s.floor;
-      place(null, secWorld, yaw, s.pose, 'secretary', 'idle', SECRETARY_PALETTE, '#FFB020', asDetail, true, s.phase, false);
+      place(null, secWorld, yaw, s.pose, SECRETARY_LOOK, 'idle', SECRETARY_PALETTE, '#FFB020', asDetail, true, s.phase, false);
       halo.visible = true;
       halo.position.set(secWorld.x, secWorld.y + 0.01, secWorld.z);
       const sh = secretaryHead();
       dotsSprite.visible = s.speaking && sh !== null;
       if (sh !== null) dotsSprite.position.set(sh.x, sh.y + 0.85, sh.z);
 
-      for (const mesh of detail.values()) {
-        // Chỉ số cuối (thư ký) luôn được ghi; các ô trống giữa không dùng nên ẩn bằng ma trận không.
-        mesh.count = MAX_INSTANCES;
-        for (let i = nDetail; i < SECRETARY_INDEX; i++) mesh.setMatrixAt(i, ZERO_MATRIX);
-        if (!asDetail) mesh.setMatrixAt(SECRETARY_INDEX, ZERO_MATRIX);
+      for (const [id, mesh] of detail) {
+        const n = used.get(id) ?? 0;
+        mesh.count = n;
+        mesh.visible = n > 0;
         mesh.instanceMatrix.needsUpdate = true;
         if (mesh.instanceColor !== null) mesh.instanceColor.needsUpdate = true;
       }
       for (const mesh of reduced.values()) {
         mesh.count = nReduced;
+        mesh.visible = nReduced > 0;
         mesh.instanceMatrix.needsUpdate = true;
         if (mesh.instanceColor !== null) mesh.instanceColor.needsUpdate = true;
       }
+      blobs.count = nBlob;
+      blobs.visible = nBlob > 0;
+      blobs.instanceMatrix.needsUpdate = true;
       syncLabels();
       relabel();
       return anchors;
@@ -338,5 +380,3 @@ export function createFigures(): Figures {
     },
   };
 }
-
-const ZERO_MATRIX = new Matrix4().makeScale(0, 0, 0);

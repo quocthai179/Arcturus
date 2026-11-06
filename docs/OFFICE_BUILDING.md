@@ -626,7 +626,7 @@ building ──(không WebGL | import() lỗi | lỗi dựng | webglcontextlost)
 | `ui/src/building/floors.ts` (+ test) | mới | §3 |
 | `ui/src/building/layout.ts` (+ test) | mới | §4 (GEO, LAY, Phòng CEO, chỗ, lối đi) |
 | `ui/src/building/seating.ts` (+ test) | mới | §5 |
-| `ui/src/building/figure.ts` (+ test) | mới | §6 (kích thước, `POSES`, `walkAngles`, `partTransforms`, `fnv1a`, `hairStyle`) |
+| `ui/src/building/figure.ts` (+ test) | mới | §6 (kích thước, `POSES`, `walkAngles`, `partTransforms`, `fnv1a`, `hairStyle`; art pass: `lookFor`, `Look`, `MOOD_FACE`) |
 | `ui/src/building/secretary.ts` (+ test) | mới | §7.2–7.3, §7.5 (mẫu câu trong `SECRETARY_LINES`) |
 | `ui/src/building/route.ts` (+ test) | mới | §7.4 |
 | `ui/src/building/camera.ts` (+ test) | mới | §8.5 |
@@ -640,6 +640,7 @@ building ──(không WebGL | import() lỗi | lỗi dựng | webglcontextlost)
 | `ui/src/building/three/interiors.ts` | mới | builder nội thất từng tầng (§4.3, §4.4), tường trạng thái |
 | `ui/src/building/three/figures.ts` | mới | InstancedMesh nhân vật chi tiết + rút gọn từ `partTransforms` |
 | `ui/src/building/three/labels.ts` | mới | `CanvasTexture` nhãn bàn, màn hình tầng, sprite "!" |
+| `ui/src/building/three/{palette,furniture,decor,figureGeo}.ts` | mới (art pass) | bảng màu ấm; nội thất/cây thủ tục; atlas tranh + blob bóng; hình học từng phần nhân vật |
 | `docs/UI_EXTENSION.md`, `docs/OFFICE.md` | đổi | prop `brief`, cảnh `building`, chuỗi đường lui |
 | `.squad/TASKS.md` | đổi | dòng Nhật ký |
 
@@ -769,3 +770,17 @@ Canvas không biết `onSelect`, không biết `brief`; chỉ báo vật đượ
 - **Mất context WebGL là lùi vĩnh viễn trong lần mount đó**: `webglcontextlost` → `onError` → vỏ chuyển sang `live` cho tới khi Office được mở lại (không tự khôi phục context).
 - **Điều hướng chồng nhau**: mỗi lần chuyển tầng có token; tween cũ kết thúc muộn không được `prune`/đặt `navigating`. `prune` luôn giữ tầng của model hiện hành (`interiorCache.ts`).
 - `useSceneBrief(state, enabled)` chỉ chạy khi cảnh `building` đang chọn và giữ nguyên tham chiếu khi nội dung brief không đổi (`sameBrief`).
+
+### Art pass 2026-11-06
+
+Phản hồi: cảnh "công nghiệp quá" (xám/trắng bê tông, khung thép, đèn lạnh, người hộp). Chỉ đổi lớp vẽ (`three/*`) và phần thuần của nhân vật (`figure.ts`); không đổi hợp đồng vỏ → canvas, `onSelect`, thư ký, bàn phím, đường lui.
+
+- **Bảng màu** (`three/palette.ts`): gỗ sồi sáng `#D9B98C`/`#E8D2AD`, óc chó `#7B5A43`, trắng kem `#F5EEE3`, vải pastel (đất nung, xô thơm, vàng mù tạt, xanh bụi, hồng phấn…). Mỗi tầng có **tường nhấn** = màu nhấn của tầng pha kem 62 % (tường sau), tường trái kem; thảm = màu nhấn pha màu yến mạch. Không còn màu xám lạnh trong nội thất.
+- **Vật liệu**: sàn gỗ ván so le (`plankFloor`, một geometry, màu đỉnh theo ván, khe tối 1,2 cm), ốp gỗ mép sàn và cột góc, nan gỗ dưới trần; hộp bo góc (`Batch.rbox`, 108 tam giác, vật mỏng tự lùi về hộp thường); `Place.ao` làm tối chân vật bằng màu đỉnh; `Batch.link` cho dây/thân/chân; bóng đổ giả (`QuadSet` + blob 64 px, một draw call mỗi tầng); tranh/bảng tường lấy từ **một atlas canvas 512 px** (12 ô: tranh, poster, bảng trắng có note, bảng ghim, roadmap), một draw call mỗi tầng.
+- **Nội thất**: bàn 4 kiểu xen kẽ (chân ghim, giá chữ A, bàn nâng hạ, bàn hộc) với đèn bàn/cây mọng/cốc/sổ/note; ghế xoay 8 màu; sofa vải, ghế bành, bean bag, bàn trà tròn, đèn cây, đèn thả; cây 4 loại (monstera, bàng, lưỡi hổ, cây mọng) + chậu treo; kệ sách thật; bếp/cà phê (Sảnh, Dev, Test), buồng điện thoại (Dev, Test, R&D, Media) và bàn đứng (Dev, Test, Media); Phòng CEO: bàn óc chó có hộc, ghế da, tủ credenza, thảm đỏ gạch, ghế bành khách, khu sofa + bàn trà, kệ sách + cúp, đèn thả đồng; tường trạng thái và bàn chỉ huy của thư ký giữ nguyên.
+- **Ngoại cảnh**: kính xanh nhạt phát ấm khi hoàng hôn/đêm (`emissive`), sàn/cột/mép ốp gỗ, trục thang máy mảnh (cột gỗ 9 cm), vườn mái (chậu dài, cây, ghế lười, ô, dây đèn 17 bóng) và sân hiên tầng 2 dựng trong `world.ts` (thấy cả ở ngoại cảnh), sân trước lát đá ấm, cỏ nhiều tông, cây tròn/thông, luống hoa, ghế gỗ, nhà hàng xóm tông cát.
+- **Ánh sáng**: `ACESFilmicToneMapping`, `outputColorSpace = SRGBColorSpace`, độ phơi sáng theo giờ (ngày 0,92 / hoàng hôn 1,0 / đêm 1,2); hemisphere ấm + một đèn mặt trời đổ bóng (vẫn **một** đèn đổ bóng) + một `PointLight` ấm không bóng (cường độ 0 ban ngày) đặt trên tầng đang xem; nhãn/màn hình/biển đặt `toneMapped: false`.
+- **Nhân vật** (`figure.ts` thuần + `three/figureGeo.ts`): đầu tròn to hơn (chibi-lite, vẫn cao 1,50 m), tai, mũi, mắt, mày (nghiêng/nâng theo mood), miệng (cười/thẳng/há/mếu theo mood, `MOOD_FACE`), má hồng; 7 kiểu tóc (ngắn, bob, búi, dài, xoăn/afro, đuôi ngựa, mũ len) + mái; 6 tông da; 5 kiểu áo (thun trần tay, hoodie có mũ/túi, sơ mi cổ/cổ tay/thắt lưng, len gấu, vest); 4 kiểu quần; 5 màu giày (hình elip); phụ kiện kính, tai nghe, thẻ đeo cổ. Tất cả chọn từ `lookFor(id)` (xorshift/murmur trên hash FNV của id; mọi chuỗi đều hợp lệ, id gần nhau vẫn khác nhau); màu áo/tóc/phụ kiện vẫn từ `AgentView.palette` (qua `safePalette`). Thư ký: vest, quần tây, bob, tai nghe có mic, ăng-ten, bìa kẹp hồ sơ (cả khi đứng), thẻ đeo cổ. Hệ tư thế (`POSES`, FK) giữ nguyên.
+- **Hiệu năng**: mỗi phần nhân vật có danh sách instance dày riêng (chỉ người dùng phần đó; phần không ai dùng thì `visible = false`, không draw call) thay cho 25 ô cố định; chỉ khối lớn đổ bóng (`CASTS_SHADOW`); blob bóng dưới chân bằng một InstancedMesh.
+- **Đo** (Chromium + SwiftShader, 17 agent, ban ngày, gồm lượt bóng; `renderer.info` sau một lần `render`): ngoại cảnh 148 → 138 draw call, 249 k → 117 k tam giác; Phòng CEO 138 → 78 draw call, 248 k → 93 k; tầng Dev 112 → 113 draw call, 243 k → 170 k (25 người ở tầng Dev: 121 draw call, 238 k). Chunk lazy `BuildingCanvas` 66,7 → 102,3 kB (22,6 → 35,3 kB gzip, thêm `RoundedBoxGeometry` ở `three/examples`); chunk chính không đổi (345,2 kB, 111,3 kB gzip). Texture canvas ≤ 512 px: atlas 512² + blob 64² mỗi tầng, đều thuộc `Registry` của tầng và `dispose()` khi rời tầng. Chưa đo RAM/CPU trên máy thật (hàng §9.5 vẫn là đề xuất).
+- **Sửa kèm**: tranh kệ sách và biểu đồ của tầng R&D từng nằm ngoài tường sau (z = −7,7/−5,9 trên sàn sâu 11 m); nay là kệ sách thật và bảng sát tường.

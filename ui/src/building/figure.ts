@@ -6,7 +6,9 @@ import { DEFAULT_PALETTE } from '../components/Character';
 import type { Vec3 } from './layout';
 
 export type PoseId = 'stand' | 'walk' | 'sit_type' | 'sit_read' | 'sit_think' | 'sit_error' | 'raise' | 'cheer' | 'lounge_sit' | 'sleep';
-export type HairStyle = 'short' | 'bob' | 'bun';
+export type HairStyle = 'short' | 'bob' | 'bun' | 'long' | 'curly' | 'ponytail' | 'beanie';
+export type TopStyle = 'tee' | 'hoodie' | 'shirt' | 'sweater' | 'blazer';
+export type BottomStyle = 'jeans' | 'chino' | 'slacks' | 'charcoal';
 
 export interface Limb {
   pitch: number;
@@ -79,66 +81,171 @@ export function fnv1a(s: string): number {
   return h >>> 0;
 }
 
-const HAIR_STYLES: readonly HairStyle[] = ['short', 'bob', 'bun'];
-/** Ổn định theo id, không dựa vào tên. */
-export function hairStyle(agentId: string): HairStyle {
-  return HAIR_STYLES[fnv1a(agentId) % 3] ?? 'short';
+export const HAIR_STYLES: readonly HairStyle[] = ['short', 'bob', 'bun', 'long', 'curly', 'ponytail', 'beanie'];
+export const TOP_STYLES: readonly TopStyle[] = ['tee', 'hoodie', 'shirt', 'sweater', 'blazer'];
+export const BOTTOM_STYLES: readonly BottomStyle[] = ['jeans', 'chino', 'slacks', 'charcoal'];
+/** Tông da từ sáng đến sẫm (chọn theo id, độc lập với màu tóc/áo của agent). */
+export const SKIN_TONES: readonly string[] = ['#FFE0CC', '#F5CBA7', '#E8B48A', '#C98B5E', '#9C6444', '#6B4330'];
+export const SHOE_COLORS: readonly string[] = ['#F2EFE8', '#C9795A', '#2B2B30', '#8A6A4C', '#7C9CBF'];
+
+/** Kiểu dáng của một nhân vật: toàn bộ suy ra từ id, không có chuỗi nào từ agent đi vào hình học. */
+export interface Look {
+  hair: HairStyle;
+  skin: number;
+  top: TopStyle;
+  bottom: BottomStyle;
+  shoe: number;
+  glasses: boolean;
+  headphones: boolean;
+  lanyard: boolean;
 }
+
+export const DEFAULT_LOOK: Look = { hair: 'short', skin: 1, top: 'tee', bottom: 'jeans', shoe: 0, glasses: false, headphones: false, lanyard: false };
+/** Thư ký: vest thanh lịch, quần tây, bob gọn, thẻ đeo cổ (tai nghe, ăng-ten, bìa kẹp hồ sơ thêm ở `partTransforms`). */
+export const SECRETARY_LOOK: Look = { hair: 'bob', skin: 1, top: 'blazer', bottom: 'slacks', shoe: 2, glasses: false, headphones: false, lanyard: true };
+
+/** Bộ trộn bit murmur3 (fmix32): id gần nhau (agt_1, agt_2…) vẫn cho kiểu dáng khác hẳn nhau. */
+function fmix(x: number): number {
+  let h = x >>> 0;
+  h ^= h >>> 16;
+  h = Math.imul(h, 0x85ebca6b);
+  h ^= h >>> 13;
+  h = Math.imul(h, 0xc2b2ae35);
+  h ^= h >>> 16;
+  return h >>> 0;
+}
+
+/** Mỗi thuộc tính một số riêng, suy ra từ hash của id (không tương quan với nhau). */
+function stream(id: string): () => number {
+  const seed = fnv1a(id);
+  let k = 0;
+  return () => fmix(seed + Math.imul(++k, 0x9e3779b9));
+}
+
+/** Ổn định theo id (mọi chuỗi, kể cả rỗng/unicode), không dựa vào tên. */
+export function lookFor(agentId: string): Look {
+  const next = stream(agentId);
+  const pick = <T>(list: readonly T[], fallback: T): T => list[next() % list.length] ?? fallback;
+  const hair = pick(HAIR_STYLES, 'short');
+  const skin = next() % SKIN_TONES.length;
+  const t = next() % 9;
+  const top: TopStyle = t < 2 ? 'tee' : t < 4 ? 'hoodie' : t < 6 ? 'shirt' : t < 8 ? 'sweater' : 'blazer';
+  const bottom = pick(BOTTOM_STYLES, 'jeans');
+  const shoe = next() % SHOE_COLORS.length;
+  return { hair, skin, top, bottom, shoe, glasses: next() % 100 < 30, headphones: next() % 100 < 22, lanyard: next() % 100 < 45 };
+}
+
+/** Kiểu tóc (giữ cho nơi chỉ cần tóc). */
+export function hairStyle(agentId: string): HairStyle {
+  return lookFor(agentId).hair;
+}
+
+/** Khóa bộ nhớ đệm cho các thuộc tính ảnh hưởng tới hình học/tư thế (da, quần, giày chỉ ảnh hưởng màu). */
+export function shapeKey(look: Look): string {
+  return `${look.hair}.${look.top}.${look.glasses ? 1 : 0}${look.headphones ? 1 : 0}${look.lanyard ? 1 : 0}`;
+}
+
+export interface Face {
+  /** Độ nghiêng đuôi mày trong (rad): dương = lo lắng, âm = cau có/tập trung. */
+  browTilt: number;
+  /** Nâng mày (m). */
+  browLift: number;
+  mouth: 'smile' | 'flat' | 'open' | 'frown';
+  mouthScale: number;
+  cheeks: boolean;
+}
+export const MOOD_FACE: Record<Mood, Face> = {
+  idle: { browTilt: 0, browLift: 0, mouth: 'smile', mouthScale: 0.8, cheeks: false },
+  working: { browTilt: -0.15, browLift: -0.004, mouth: 'flat', mouthScale: 0.8, cheeks: false },
+  approval: { browTilt: 0.12, browLift: 0.014, mouth: 'open', mouthScale: 1, cheeks: true },
+  error: { browTilt: 0.42, browLift: 0.006, mouth: 'frown', mouthScale: 0.9, cheeks: false },
+  done: { browTilt: 0, browLift: 0.008, mouth: 'smile', mouthScale: 1.3, cheeks: true },
+};
 
 // --- các phần ---
 
-export type ColorKey = 'skin' | 'hair' | 'outfit' | 'outfitDark' | 'pants' | 'shoe' | 'ink' | 'mouth' | 'cheek' | 'acc' | 'badge' | 'gold' | 'headset' | 'folder';
+export type ColorKey =
+  | 'skin' | 'skinDark' | 'hair' | 'brow' | 'outfit' | 'outfitDark' | 'collar' | 'pants' | 'shoe' | 'ink' | 'mouth' | 'cheek' | 'acc' | 'badge'
+  | 'gold' | 'headset' | 'folder' | 'frame' | 'lanyard' | 'belt' | 'hat';
+/** Hình học tùy biến (nhiều khối gộp) do `three/figures.ts` dựng theo tên. */
+export type CustomShape =
+  | 'hairCap' | 'fringe' | 'hairBob' | 'hairLong' | 'hairCurly' | 'hairPony' | 'beanie' | 'glasses' | 'headphones' | 'headset' | 'lanyard'
+  | 'collar' | 'hood' | 'shoe' | 'clipboard' | 'smile';
 export type PartShape =
   | { k: 'sphere'; r: number }
   | { k: 'box'; w: number; h: number; d: number }
   | { k: 'capsule'; r: number; len: number }
   | { k: 'cylinder'; r: number; h: number }
-  | { k: 'torus'; r: number; tube: number };
+  | { k: 'custom'; name: CustomShape };
 
 export type PartId =
-  | 'head' | 'hairCap' | 'hairBob' | 'hairBun' | 'eyeL' | 'eyeR' | 'mouth' | 'cheekL' | 'cheekR' | 'neck' | 'torso' | 'belt' | 'badge'
-  | 'armL' | 'armR' | 'foreL' | 'foreR' | 'handL' | 'handR' | 'thighL' | 'thighR' | 'shinL' | 'shinR' | 'shoeL' | 'shoeR'
+  | 'head' | 'earL' | 'earR' | 'nose' | 'eyeL' | 'eyeR' | 'browL' | 'browR' | 'mouth' | 'smile' | 'cheekL' | 'cheekR'
+  | 'hairCap' | 'fringe' | 'hairBob' | 'hairLong' | 'hairCurly' | 'hairPony' | 'hairBun' | 'beanie' | 'glasses' | 'headphones'
+  | 'neck' | 'torso' | 'belt' | 'badge' | 'lanyard' | 'collar' | 'hood' | 'pocket' | 'hem'
+  | 'armL' | 'armR' | 'foreL' | 'foreR' | 'cuffL' | 'cuffR' | 'handL' | 'handR' | 'thighL' | 'thighR' | 'shinL' | 'shinR' | 'shoeL' | 'shoeR'
   | 'antStem' | 'antBall' | 'headset' | 'folder';
 
 /** `len` của capsule là độ dài khớp-tới-khớp (gồm hai nắp cầu). */
 export const PART_SPECS: Record<PartId, { shape: PartShape; color: ColorKey }> = {
-  head: { shape: { k: 'sphere', r: 0.165 }, color: 'skin' },
-  hairCap: { shape: { k: 'sphere', r: 0.178 }, color: 'hair' },
-  hairBob: { shape: { k: 'box', w: 0.36, h: 0.22, d: 0.2 }, color: 'hair' },
-  hairBun: { shape: { k: 'sphere', r: 0.07 }, color: 'hair' },
-  eyeL: { shape: { k: 'sphere', r: 0.022 }, color: 'ink' },
-  eyeR: { shape: { k: 'sphere', r: 0.022 }, color: 'ink' },
+  head: { shape: { k: 'sphere', r: 0.185 }, color: 'skin' },
+  earL: { shape: { k: 'sphere', r: 0.036 }, color: 'skin' },
+  earR: { shape: { k: 'sphere', r: 0.036 }, color: 'skin' },
+  nose: { shape: { k: 'sphere', r: 0.02 }, color: 'skinDark' },
+  eyeL: { shape: { k: 'sphere', r: 0.024 }, color: 'ink' },
+  eyeR: { shape: { k: 'sphere', r: 0.024 }, color: 'ink' },
+  browL: { shape: { k: 'box', w: 0.062, h: 0.013, d: 0.012 }, color: 'brow' },
+  browR: { shape: { k: 'box', w: 0.062, h: 0.013, d: 0.012 }, color: 'brow' },
   mouth: { shape: { k: 'box', w: 0.05, h: 0.012, d: 0.01 }, color: 'mouth' },
-  cheekL: { shape: { k: 'cylinder', r: 0.025, h: 0.004 }, color: 'cheek' },
-  cheekR: { shape: { k: 'cylinder', r: 0.025, h: 0.004 }, color: 'cheek' },
+  smile: { shape: { k: 'custom', name: 'smile' }, color: 'mouth' },
+  cheekL: { shape: { k: 'cylinder', r: 0.027, h: 0.004 }, color: 'cheek' },
+  cheekR: { shape: { k: 'cylinder', r: 0.027, h: 0.004 }, color: 'cheek' },
+  hairCap: { shape: { k: 'custom', name: 'hairCap' }, color: 'hair' },
+  fringe: { shape: { k: 'custom', name: 'fringe' }, color: 'hair' },
+  hairBob: { shape: { k: 'custom', name: 'hairBob' }, color: 'hair' },
+  hairLong: { shape: { k: 'custom', name: 'hairLong' }, color: 'hair' },
+  hairCurly: { shape: { k: 'custom', name: 'hairCurly' }, color: 'hair' },
+  hairPony: { shape: { k: 'custom', name: 'hairPony' }, color: 'hair' },
+  hairBun: { shape: { k: 'sphere', r: 0.078 }, color: 'hair' },
+  beanie: { shape: { k: 'custom', name: 'beanie' }, color: 'hat' },
+  glasses: { shape: { k: 'custom', name: 'glasses' }, color: 'frame' },
+  headphones: { shape: { k: 'custom', name: 'headphones' }, color: 'hat' },
   neck: { shape: { k: 'cylinder', r: 0.055, h: 0.06 }, color: 'skin' },
   torso: { shape: { k: 'capsule', r: 0.17, len: 0.46 }, color: 'outfit' },
-  belt: { shape: { k: 'cylinder', r: 0.172, h: 0.05 }, color: 'acc' },
+  belt: { shape: { k: 'cylinder', r: 0.172, h: 0.04 }, color: 'belt' },
   badge: { shape: { k: 'box', w: 0.06, h: 0.08, d: 0.01 }, color: 'badge' },
+  lanyard: { shape: { k: 'custom', name: 'lanyard' }, color: 'lanyard' },
+  collar: { shape: { k: 'custom', name: 'collar' }, color: 'collar' },
+  hood: { shape: { k: 'custom', name: 'hood' }, color: 'outfitDark' },
+  pocket: { shape: { k: 'box', w: 0.15, h: 0.07, d: 0.03 }, color: 'outfitDark' },
+  hem: { shape: { k: 'cylinder', r: 0.17, h: 0.05 }, color: 'outfitDark' },
   armL: { shape: { k: 'capsule', r: 0.05, len: 0.26 }, color: 'outfit' },
   armR: { shape: { k: 'capsule', r: 0.05, len: 0.26 }, color: 'outfit' },
   foreL: { shape: { k: 'capsule', r: 0.045, len: 0.24 }, color: 'outfitDark' },
   foreR: { shape: { k: 'capsule', r: 0.045, len: 0.24 }, color: 'outfitDark' },
-  handL: { shape: { k: 'sphere', r: 0.05 }, color: 'skin' },
-  handR: { shape: { k: 'sphere', r: 0.05 }, color: 'skin' },
+  cuffL: { shape: { k: 'cylinder', r: 0.049, h: 0.035 }, color: 'outfitDark' },
+  cuffR: { shape: { k: 'cylinder', r: 0.049, h: 0.035 }, color: 'outfitDark' },
+  handL: { shape: { k: 'sphere', r: 0.052 }, color: 'skin' },
+  handR: { shape: { k: 'sphere', r: 0.052 }, color: 'skin' },
   thighL: { shape: { k: 'capsule', r: 0.065, len: 0.36 }, color: 'pants' },
   thighR: { shape: { k: 'capsule', r: 0.065, len: 0.36 }, color: 'pants' },
   shinL: { shape: { k: 'capsule', r: 0.058, len: 0.34 }, color: 'pants' },
   shinR: { shape: { k: 'capsule', r: 0.058, len: 0.34 }, color: 'pants' },
-  shoeL: { shape: { k: 'box', w: 0.1, h: 0.07, d: 0.17 }, color: 'shoe' },
-  shoeR: { shape: { k: 'box', w: 0.1, h: 0.07, d: 0.17 }, color: 'shoe' },
+  shoeL: { shape: { k: 'custom', name: 'shoe' }, color: 'shoe' },
+  shoeR: { shape: { k: 'custom', name: 'shoe' }, color: 'shoe' },
   antStem: { shape: { k: 'cylinder', r: 0.01, h: 0.3 }, color: 'gold' },
   antBall: { shape: { k: 'sphere', r: 0.06 }, color: 'gold' },
-  headset: { shape: { k: 'torus', r: 0.17, tube: 0.012 }, color: 'headset' },
-  folder: { shape: { k: 'box', w: 0.2, h: 0.28, d: 0.03 }, color: 'folder' },
+  headset: { shape: { k: 'custom', name: 'headset' }, color: 'headset' },
+  folder: { shape: { k: 'custom', name: 'clipboard' }, color: 'folder' },
 };
 export const PART_IDS = Object.keys(PART_SPECS) as PartId[];
 
 export interface FigureExtras {
   mood: Mood;
-  /** Thư ký: ăng-ten, tai nghe (và kẹp hồ sơ khi đi). */
+  /** Thư ký: ăng-ten, tai nghe có mic (và bìa kẹp hồ sơ khi đi/đứng). */
   secretary: boolean;
   folder: boolean;
+  /** Kiểu dáng (mặc định `DEFAULT_LOOK`; thư ký dùng `SECRETARY_LOOK`). */
+  look?: Look;
 }
 export const NO_EXTRAS: FigureExtras = { mood: 'idle', secretary: false, folder: false };
 
@@ -148,6 +255,8 @@ export interface PartTransform {
   /** Euler XYZ, radian. */
   rot: Vec3;
   scale: Vec3;
+  /** Thay khóa màu của phần (vd. cẳng tay trần của áo thun dùng màu da). */
+  tint?: ColorKey;
 }
 
 // --- toán 3x3 tối thiểu ---
@@ -204,46 +313,69 @@ export function capsuleCylinderLength(p: PartId): number {
   return s.k === 'capsule' ? Math.max(0.001, s.len - 2 * s.r) : 0;
 }
 
-/** FK thuần: gốc ở chân, mặt hướng −z. */
+/** FK thuần: gốc ở chân, mặt hướng −z. `hair` ghi đè `extras.look.hair`. */
 export function partTransforms(a: JointAngles, hair: HairStyle, extras: FigureExtras): PartTransform[] {
   const out: PartTransform[] = [];
-  const put = (part: PartId, pos: Vec3, rot: Vec3 = ZERO, scale: Vec3 = SCALE1) => out.push({ part, pos, rot: V(rot.x, rot.y, rot.z), scale });
+  const put = (part: PartId, pos: Vec3, rot: Vec3 = ZERO, scale: Vec3 = SCALE1, tint?: ColorKey) =>
+    out.push(tint === undefined ? { part, pos, rot: V(rot.x, rot.y, rot.z), scale } : { part, pos, rot: V(rot.x, rot.y, rot.z), scale, tint });
   const hide = (part: PartId) => put(part, ZERO, ZERO, ZERO);
+  const show = (part: PartId, on: boolean, pos: Vec3, rot: Vec3 = ZERO, scale: Vec3 = SCALE1) => (on ? put(part, pos, rot, scale) : hide(part));
+  const look = extras.look ?? DEFAULT_LOOK;
+  const top = look.top;
 
   const hip = V(0, a.pelvisY, 0);
   const Rt = rx(-rad(a.torso)); // nghiêng trước = đỉnh thân ra −z
   const Rh = mul(Rt, rx(-rad(a.head)));
   const up = (v: Vec3) => add(hip, app(Rt, v));
+  const rt = euler(Rt);
 
-  put('torso', up(V(0, 0.24, 0)), euler(Rt), V(1.05, 1, 0.8));
-  put('belt', up(V(0, 0.04, 0)), euler(Rt));
-  put('badge', up(V(-0.08, 0.31, -0.14)), euler(Rt));
-  put('neck', up(V(0, 0.51, 0)), euler(Rt));
+  put('torso', up(V(0, 0.24, 0)), rt, V(1.05, 1, 0.8));
+  show('belt', top === 'shirt' || top === 'blazer', up(V(0, 0.04, 0)), rt, V(1.03, 1, 0.82));
+  show('hem', top === 'sweater' || top === 'hoodie', up(V(0, 0.03, 0)), rt, V(1.1, 1, 0.84));
+  show('pocket', top === 'hoodie', up(V(0, 0.12, -0.133)), rt);
+  show('hood', top === 'hoodie', up(V(0, 0.5, 0.0)), rt);
+  show('collar', top === 'shirt' || top === 'blazer', up(V(0, 0.5, -0.01)), rt);
+  show('lanyard', look.lanyard, up(V(0, 0.3, -0.14)), rt);
+  put('badge', up(look.lanyard ? V(0, 0.3, -0.147) : V(-0.08, 0.31, -0.14)), rt);
+  put('neck', up(V(0, 0.5, 0)), rt);
 
-  const neck = up(V(0, 0.51, 0));
-  const inHead = (v: Vec3) => add(neck, app(Rh, add(V(0, 0.08, 0), v)));
+  const neck = up(V(0, 0.5, 0));
+  const inHead = (v: Vec3) => add(neck, app(Rh, add(V(0, 0.075, 0), v)));
   const hr = euler(Rh);
-  put('head', inHead(ZERO), hr, V(1, 1.04, 0.96));
-  put('hairCap', inHead(V(0, 0.04, 0.03)), hr, V(1, 0.8, 1));
-  if (hair === 'bob') put('hairBob', inHead(V(0, -0.02, 0.1)), hr); else hide('hairBob');
-  if (hair === 'bun' || extras.secretary) {
-    if (hair === 'bun') put('hairBun', inHead(V(0, 0.13, 0.1)), hr); else hide('hairBun');
-  } else hide('hairBun');
-  put('eyeL', inHead(V(-0.058, 0.01, -0.15)), hr);
-  put('eyeR', inHead(V(0.058, 0.01, -0.15)), hr);
-  const m = extras.mood;
-  const mouthScale = m === 'done' || m === 'approval' ? V(1.6, 1.3, 1) : m === 'error' ? V(0.8, 0.8, 1) : m === 'working' ? V(0.7, 0.8, 1) : V(1, 1, 1);
-  put('mouth', inHead(V(0, -0.07, -0.155)), hr, mouthScale);
-  if (m === 'done' || m === 'approval') {
-    // Đĩa má: trục y mặc định của cylinder cần xoay về +z (rx 90°).
-    put('cheekL', inHead(V(-0.09, -0.04, -0.13)), euler(mul(Rh, rx(Math.PI / 2))));
-    put('cheekR', inHead(V(0.09, -0.04, -0.13)), euler(mul(Rh, rx(Math.PI / 2))));
-  } else {
-    hide('cheekL');
-    hide('cheekR');
-  }
+  put('head', inHead(ZERO), hr, V(1, 1.02, 0.97));
+  put('earL', inHead(V(-0.178, -0.01, 0.01)), hr, V(0.55, 1, 0.8));
+  put('earR', inHead(V(0.178, -0.01, 0.01)), hr, V(0.55, 1, 0.8));
+  put('nose', inHead(V(0, -0.02, -0.18)), hr, V(1, 1, 0.8));
+
+  // Tóc: mũ len thay tóc ngắn; chỉ hiện đúng phần của kiểu đã chọn.
+  const beanie = hair === 'beanie';
+  show('hairCap', !beanie && hair !== 'curly', inHead(V(0, 0.01, 0.02)), hr);
+  show('fringe', hair === 'short' || hair === 'bob' || hair === 'long' || hair === 'ponytail' || hair === 'bun', inHead(ZERO), hr);
+  show('hairBob', hair === 'bob', inHead(ZERO), hr);
+  show('hairLong', hair === 'long', inHead(ZERO), hr);
+  show('hairCurly', hair === 'curly', inHead(ZERO), hr);
+  show('hairPony', hair === 'ponytail', inHead(ZERO), hr);
+  show('hairBun', hair === 'bun', inHead(V(0, 0.215, 0.07)), hr);
+  show('beanie', beanie, inHead(ZERO), hr);
+
+  // Mặt: mắt, mày, miệng theo tâm trạng.
+  const face = MOOD_FACE[extras.mood];
+  put('eyeL', inHead(V(-0.064, 0.012, -0.17)), hr, V(1, 1.3, 0.55));
+  put('eyeR', inHead(V(0.064, 0.012, -0.17)), hr, V(1, 1.3, 0.55));
+  put('browL', inHead(V(-0.064, 0.072 + face.browLift, -0.172)), euler(mul(Rh, rz(face.browTilt))));
+  put('browR', inHead(V(0.064, 0.072 + face.browLift, -0.172)), euler(mul(Rh, rz(-face.browTilt))));
+  const ms = face.mouthScale;
+  show('mouth', face.mouth === 'flat' || face.mouth === 'open', inHead(V(0, -0.078, -0.172)), hr, face.mouth === 'open' ? V(0.5, 3.4, 1) : V(ms, 1, 1));
+  show('smile', face.mouth === 'smile' || face.mouth === 'frown', inHead(V(0, face.mouth === 'smile' ? -0.058 : -0.1, -0.172)), face.mouth === 'smile' ? euler(mul(Rh, rz(Math.PI))) : hr, V(ms, ms, 1));
+  const blush = euler(mul(Rh, rx(Math.PI / 2)));
+  // Đĩa má: trục y mặc định của cylinder cần xoay về +z (rx 90°).
+  show('cheekL', face.cheeks, inHead(V(-0.1, -0.04, -0.15)), blush);
+  show('cheekR', face.cheeks, inHead(V(0.1, -0.04, -0.15)), blush);
+  show('glasses', look.glasses, inHead(ZERO), hr);
+  show('headphones', look.headphones && !extras.secretary, inHead(ZERO), hr);
 
   // Tay
+  const sleeves = top !== 'tee';
   for (const side of ['L', 'R'] as const) {
     const sx = side === 'R' ? 1 : -1;
     const limb = side === 'R' ? a.armR : a.armL;
@@ -253,9 +385,10 @@ export function partTransforms(a: JointAngles, hair: HairStyle, extras: FigureEx
     put(side === 'R' ? 'armR' : 'armL', upper.center, euler(Ru));
     const Rf = mul(Ru, rx(rad(limb.bend)));
     const fore = segment(upper.end, Rf, SPEC_LEN('foreL'));
-    put(side === 'R' ? 'foreR' : 'foreL', fore.center, euler(Rf));
+    put(side === 'R' ? 'foreR' : 'foreL', fore.center, euler(Rf), SCALE1, sleeves ? undefined : 'skin');
+    show(side === 'R' ? 'cuffR' : 'cuffL', sleeves, add(fore.end, app(Rf, V(0, 0.03, 0))), euler(Rf));
     put(side === 'R' ? 'handR' : 'handL', add(fore.end, app(Rf, V(0, -0.03, 0))), ZERO);
-    if (side === 'L' && extras.folder) put('folder', add(fore.end, app(Rf, V(0.0, -0.02, -0.06))), euler(Rf));
+    if (side === 'L' && extras.folder) put('folder', add(fore.end, app(Rf, V(0.0, -0.02, -0.07))), euler(Rf));
   }
   if (!extras.folder) hide('folder');
 
@@ -273,27 +406,25 @@ export function partTransforms(a: JointAngles, hair: HairStyle, extras: FigureEx
     put(side === 'R' ? 'shoeR' : 'shoeL', add(shin.end, V(0, -0.005, -0.03)), ZERO);
   }
 
-  if (extras.secretary) {
-    put('antStem', inHead(V(0, 0.33, 0)), hr);
-    put('antBall', inHead(V(0, 0.5, 0)), hr);
-    put('headset', inHead(V(0, 0.0, 0)), euler(mul(Rh, rz(Math.PI / 2))), V(1, 1, 1));
-  } else {
-    hide('antStem');
-    hide('antBall');
-    hide('headset');
-  }
+  show('antStem', extras.secretary, inHead(V(0, 0.36, 0)), hr);
+  show('antBall', extras.secretary, inHead(V(0, 0.53, 0)), hr);
+  show('headset', extras.secretary, inHead(ZERO), hr);
   return out;
 }
 
-/** Màu từng phần theo bảng màu + màu nhấn của tầng. */
-export function partColors(p: Palette, accent: string): Record<ColorKey, string> {
-  const dark = (hex: string, k: number) => {
+/** Màu từng phần theo bảng màu + màu nhấn của tầng + kiểu dáng (da, quần, giày). */
+export function partColors(p: Palette, accent: string, look: Look = DEFAULT_LOOK): Record<ColorKey, string> {
+  const shade = (hex: string, k: number) => {
     const n = parseInt(hex.slice(1), 16);
-    const ch = (s: number) => Math.round(((n >> s) & 255) * k).toString(16).padStart(2, '0');
+    const ch = (s: number) => Math.min(255, Math.round(((n >> s) & 255) * k)).toString(16).padStart(2, '0');
     return `#${ch(16)}${ch(8)}${ch(0)}`;
   };
+  const skin = SKIN_TONES[look.skin % SKIN_TONES.length] ?? '#F5CBA7';
+  const pants = { jeans: '#41648F', chino: '#B79F7C', slacks: '#3A3F4B', charcoal: '#2C2F36' }[look.bottom];
+  const badge = HEX.test(accent) ? accent : p.acc;
   return {
-    skin: '#FFE6D8', hair: p.hair, outfit: p.outfit, outfitDark: dark(p.outfit, 0.85), pants: '#2C3140', shoe: '#1A1D25', ink: '#241B4D',
-    mouth: '#B4445E', cheek: '#FF8FA8', acc: p.acc, badge: HEX.test(accent) ? accent : p.acc, gold: '#FFD166', headset: '#2B2F3C', folder: '#E8EAF0',
+    skin, skinDark: shade(skin, 0.86), hair: p.hair, brow: shade(p.hair, 0.75), outfit: p.outfit, outfitDark: shade(p.outfit, 0.86), collar: '#F7F4EE', pants,
+    shoe: SHOE_COLORS[look.shoe % SHOE_COLORS.length] ?? '#2B2B30', ink: '#2A2030', mouth: '#A8465A', cheek: '#FF9AA8', acc: p.acc, badge, gold: '#FFD166',
+    headset: '#2B2F3C', folder: '#E8EAF0', frame: '#2E2B33', lanyard: badge, belt: '#4B3A2E', hat: p.acc,
   };
 }

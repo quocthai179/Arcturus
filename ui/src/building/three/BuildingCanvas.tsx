@@ -4,7 +4,7 @@
 // Canvas KHÔNG biết `onSelect`/`brief`: chỉ báo vật được chọn (`onHover`/`onPick`); vỏ DOM quyết định phần còn lại.
 import { useEffect, useRef } from 'react';
 import {
-  InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, PCFShadowMap, PlaneGeometry, Raycaster, SRGBColorSpace, Vector2, Vector3, WebGLRenderer, Color,
+  ACESFilmicToneMapping, InstancedMesh, Matrix4, Mesh, MeshBasicMaterial, Object3D, PerspectiveCamera, PCFShadowMap, PlaneGeometry, Raycaster, SRGBColorSpace, Vector2, Vector3, WebGLRenderer, Color,
 } from 'three';
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js';
 import type { Mood } from '../../protocol';
@@ -65,6 +65,8 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
     try {
     renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
     renderer.outputColorSpace = SRGBColorSpace;
+    renderer.toneMapping = ACESFilmicToneMapping;
+    renderer.toneMappingExposure = 1;
     renderer.shadowMap.enabled = true;
     renderer.shadowMap.type = PCFShadowMap;
     renderer.shadowMap.autoUpdate = false;
@@ -151,6 +153,11 @@ export default function BuildingCanvas(props: BuildingCanvasProps) {
       const g5 = GEO[5];
       if (g5 !== undefined) world.roof.position.set(g5.cx, ROOF_Y + (S.lifts[6] ?? 0), g5.cz);
       world.roof.visible = (S.lifts[6] ?? 0) < 0.45 * LIFT;
+      // Đèn ấm trong nhà theo tầng đang xem (ngoại cảnh: giữa tòa).
+      const wf = typeof S.model.view === 'number' ? S.model.view : 2;
+      const wg = GEO[wf];
+      if (wg !== undefined) world.warm.position.set(wg.cx - 1, (BASE[wf] ?? 0) + (S.lifts[wf] ?? 0) + wg.H + 3.5, wg.cz + 1);
+      renderer.toneMappingExposure = world.exposure;
       for (const node of world.floors) node.edge.color.setScalar(IDLE_EDGE);
       if (S.hoverFloor !== null) world.floors[S.hoverFloor]?.edge.color.setScalar(HOVER_EDGE);
     }
