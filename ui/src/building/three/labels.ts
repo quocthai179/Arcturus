@@ -134,7 +134,7 @@ export function drawDots(g: CanvasRenderingContext2D, w: number, h: number): voi
 }
 
 export function spriteMaterial(reg: Registry, t: CanvasTexture): SpriteMaterial {
-  return reg.add(new SpriteMaterial({ map: t, transparent: true, depthWrite: false, depthTest: false }));
+  return reg.add(new SpriteMaterial({ map: t, transparent: true, depthWrite: false, depthTest: false, toneMapped: false }));
 }
 
 export function drawSign(g: CanvasRenderingContext2D, w: number, h: number, text: string, color: string, bg = 'rgba(0,0,0,0)'): void {
