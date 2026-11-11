@@ -174,7 +174,8 @@ chạy fmt/clippy/test Rust, test + build + `pnpm audit` cho UI, shellcheck và 
 | `docs/DOGFOOD.md` | Bạn | Cài/gỡ hook, chạy app, đo chỉ số dùng thật |
 | `docs/OFFICE.md`, `docs/OFFICE_LIVE.md`, `docs/OFFICE_BUILDING.md` | Cả hai | Văn phòng 2D, cảnh `live`, cảnh Tòa nhà 3D và thư ký |
 | `docs/UI_EXTENSION.md` | Cả hai | Điểm thay thế giao diện mà không đụng logic duyệt |
-| `docs/adr/` | Cả hai | ADR 0001 Pet v1, ADR 0002 nghiên cứu orchestrator tầng 2, ADR 0003 Tòa nhà 3D |
+| `docs/CHARACTER_STYLES.md`, `docs/mockups/character-styles.html` | Cả hai | Kiểu nhân vật 2D A (Chibi Plus, mặc định) và C (Pixel Sprite): thiết kế, mẫu chạy được, kế hoạch C1–C6 |
+| `docs/adr/` | Cả hai | ADR 0001 Pet v1, ADR 0002 nghiên cứu orchestrator tầng 2, ADR 0003 Tòa nhà 3D, ADR 0004 kiểu nhân vật 2D |
 | `.squad/TASKS.md`, `.squad/reports/` | Cả hai | Bảng task, nhật ký, báo cáo cổng mốc |
 | `.claude/settings.json` | Claude Code | Quyền: cho phép build/test, hỏi khi push, chặn lệnh nguy hiểm và đọc bí mật |
 | `.claude/agents/` | Claude | `hook-spike` (thực nghiệm hook), `budget-guard` (đo ngân sách) |

@@ -1,0 +1,307 @@
+<!doctype html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Arcturus Character Styles</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Be+Vietnam+Pro:wght@400;500;600;700&family=JetBrains+Mono:wght@400;600&display=swap">
+<style>
+/* Layout: one sticky control bar, then three style bands (A, B, C) stacked for side-by-side reading, then a comparison table.
+   Single dark look, tokens taken from ui/src/index.css of Arcturus. */
+:root {
+  --bg: #111318;
+  --surface: #1a1d24;
+  --raised: #222631;
+  --border: #2c303b;
+  --text: #e8eaf0;
+  --muted: #a3a9b8;
+  --approval: #ffb020;
+  --working: #8b7cf6;
+  --ok: #34d1b5;
+  --error: #ff6b5a;
+  --floor-a: #262b3a;
+  --floor-b: #1c202b;
+  --tag-bg: rgba(12, 14, 20, 0.78);
+  --font-ui: 'Be Vietnam Pro', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, 'SFMono-Regular', Menlo, monospace;
+  color-scheme: dark;
+}
+html, body { background: var(--bg); color: var(--text); }
+body { font-family: var(--font-ui); font-size: 14px; line-height: 1.5; }
+body::before { content: ""; position: fixed; inset: 0 0 auto; height: env(safe-area-inset-top, 0px); z-index: 10; background: var(--bg); }
+.wrap {
+  max-width: 1180px; margin: 0 auto;
+  padding-left: max(16px, env(safe-area-inset-left, 0px));
+  padding-right: max(16px, env(safe-area-inset-right, 0px));
+  padding-block: 24px 48px;
+  display: grid; gap: 28px;
+}
+header h1 { margin: 0; font-size: 24px; font-weight: 700; text-wrap: balance; }
+header p { margin: 6px 0 0; color: var(--muted); max-width: 68ch; }
+.eyebrow { font-size: 11px; letter-spacing: .18em; text-transform: uppercase; color: var(--working); font-weight: 600; }
+
+.bar {
+  position: sticky; top: env(safe-area-inset-top, 0px); z-index: 5;
+  background: var(--bg); border-bottom: 1px solid var(--border);
+  padding-block: 10px; display: flex; flex-wrap: wrap; gap: 10px 16px; align-items: center;
+}
+.bar .lbl { color: var(--muted); font-size: 12.5px; }
+.seg { display: inline-flex; flex-wrap: wrap; border: 1px solid var(--border); border-radius: 999px; overflow: hidden; background: var(--surface); }
+.seg button { font: inherit; font-size: 12.5px; color: var(--muted); background: none; border: 0; padding: 6px 12px; cursor: pointer; }
+.seg button[aria-pressed="true"] { background: var(--raised); color: var(--text); }
+.btn { font: inherit; font-size: 12.5px; color: var(--text); background: var(--surface); border: 1px solid var(--border); border-radius: 999px; padding: 6px 12px; cursor: pointer; }
+.btn:hover { background: var(--raised); }
+button:focus-visible { outline: 2px solid var(--approval); outline-offset: 2px; }
+
+.style { display: grid; gap: 14px; border-top: 1px solid var(--border); padding-top: 22px; }
+.style-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 6px 14px; }
+.style-head .letter { font-family: var(--font-mono); font-weight: 600; font-size: 28px; line-height: 1; color: var(--accent); }
+.style-head h2 { margin: 0; font-size: 19px; }
+.style-head .stat { margin-left: auto; font-family: var(--font-mono); font-size: 12px; color: var(--muted); }
+.style p.desc { margin: 0; color: var(--muted); max-width: 72ch; }
+.cols { display: grid; grid-template-columns: minmax(0, 5fr) minmax(0, 6fr); gap: 14px; }
+@media (max-width: 860px) { .cols { grid-template-columns: minmax(0, 1fr); } }
+.block { min-width: 0; display: grid; gap: 6px; align-content: start; }
+.block h3 { margin: 0; font-size: 11px; letter-spacing: .1em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.stage {
+  min-height: 0;
+  border-radius: 12px; border: 1px solid var(--border);
+  background: linear-gradient(180deg, var(--floor-b) 0 62%, var(--floor-a) 62% 100%);
+  padding: 14px 10px 10px; display: flex; flex-wrap: wrap; justify-content: space-around; align-items: flex-end; gap: 6px 2px;
+}
+.stage.small { padding: 10px; justify-content: flex-start; gap: 14px; }
+.fig { display: grid; justify-items: center; gap: 4px; min-width: 0; }
+.fig svg { display: block; max-width: 100%; height: auto; }
+.fig .tag { font-size: 10.5px; line-height: 1.2; text-align: center; background: var(--tag-bg); border-radius: 999px; padding: 2px 8px; white-space: nowrap; }
+.fig .tag small { display: block; color: var(--muted); font-family: var(--font-mono); font-size: 9.5px; }
+.fig .mood { font-size: 11px; color: var(--muted); }
+.fig.is-on .mood { color: var(--text); font-weight: 600; }
+.px { image-rendering: pixelated; }
+
+.tbl { overflow-x: auto; border: 1px solid var(--border); border-radius: 12px; }
+table { border-collapse: collapse; width: 100%; min-width: 640px; font-size: 13px; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { font-size: 11px; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; background: var(--surface); }
+tr:last-child td { border-bottom: 0; }
+td.num { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+td b { font-family: var(--font-mono); }
+.pick { border: 1px solid var(--border); border-radius: 12px; background: var(--surface); padding: 14px 16px; }
+.pick b { color: var(--text); }
+.pick p { margin: 0; color: var(--muted); max-width: 72ch; }
+.pick p + p { margin-top: 8px; }
+h2.sec { margin: 0; font-size: 16px; }
+</style>
+
+</head><body>
+<div class="wrap">
+  <header>
+    <div class="eyebrow">Arcturus · 2D office</div>
+    <h1>Character styles: A and C</h1>
+    <p>Two directions kept for the 2D office characters (B, Flat Editorial, was dropped on 2026-11-11). Design doc: <code>docs/CHARACTER_STYLES.md</code>. Every figure is still built from the same three persona colours (hair, outfit, accent) and the same five moods the hub reports, so any of them can replace the current character without touching the hub. These are static samples; walking and typing motion comes later.</p>
+  </header>
+
+  <div class="bar" role="group" aria-label="Preview controls">
+    <span class="lbl">Team mood</span>
+    <div class="seg" id="moods"></div>
+    <button class="btn" type="button" id="shuffle">Shuffle colours</button>
+    <span class="lbl" id="hint"></span>
+  </div>
+
+  <div id="styles"></div>
+
+  <section style="display:grid;gap:12px">
+    <h2 class="sec">Side by side</h2>
+    <div class="tbl">
+      <table>
+        <thead><tr><th>Style</th><th>Feel</th><th>Reads at office size</th><th>SVG nodes each</th><th>Effort to build</th><th>Watch out for</th></tr></thead>
+        <tbody id="cmp"></tbody>
+      </table>
+    </div>
+    <div class="pick">
+      <p><b>Decision (2026-11-11):</b> keep A as the default style and C as a selectable alternative. Both go through <code>AVATAR_RENDERERS</code> in <code>ui/src/components/AgentAvatar.tsx</code>.</p>
+    </div>
+  </section>
+</div>
+
+<script>
+(() => {
+  'use strict';
+  const MOODS = [['idle', 'Idle'], ['working', 'Working'], ['approval', 'Needs approval'], ['error', 'Error'], ['done', 'Done']];
+  const TEAM0 = [
+    { name: 'Khoa', role: 'backend', hair: '#1F1F24', outfit: '#4C8DF6', acc: '#FFD166', skin: '#F2C9A5', hs: 1, ax: 'headphones' },
+    { name: 'Linh', role: 'frontend', hair: '#2E2A5C', outfit: '#8B7CF6', acc: '#FF7A59', skin: '#FFE0CC', hs: 0, ax: 'none' },
+    { name: 'Minh', role: 'tester', hair: '#5A3A22', outfit: '#2BB5A0', acc: '#FFD166', skin: '#E8B48C', hs: 5, ax: 'glasses' },
+    { name: 'Vy', role: 'researcher', hair: '#8A3B2E', outfit: '#F2994A', acc: '#56CCF2', skin: '#FFE6D8', hs: 2, ax: 'none' },
+    { name: 'Deneb', role: 'developer', hair: '#3A2A20', outfit: '#E0679A', acc: '#7EE6CF', skin: '#C98E66', hs: 3, ax: 'glasses' },
+    { name: 'Spica', role: 'qa-engineer', hair: '#C9A227', outfit: '#34D1B5', acc: '#8B7CF6', skin: '#8D5B3E', hs: 4, ax: 'headphones' },
+  ];
+  const state = { mood: 'working', shift: 0 };
+  const INK = '#2a2140', MOUTH = '#b4445e', PANTS = '#3a4266', AMBER = '#ffb020', RED = '#ff6b5a', TEAL = '#34d1b5';
+
+  function shade(hex, a) {
+    const n = parseInt(hex.slice(1), 16), t = a < 0 ? 0 : 255, p = Math.abs(a);
+    return '#' + [n >> 16, (n >> 8) & 255, n & 255].map((v) => Math.round(v + (t - v) * p).toString(16).padStart(2, '0')).join('');
+  }
+  function team() {
+    const k = state.shift, n = TEAM0.length;
+    return TEAM0.map((a, i) => ({ ...a, outfit: TEAM0[(i + k) % n].outfit, acc: TEAM0[(i + 2 * k) % n].acc, hair: TEAM0[(i + 3 * k) % n].hair }));
+  }
+  const star = (x, y, r, f) => `<path d="M${x} ${y - r}L${x + r * .28} ${y - r * .28} ${x + r} ${y} ${x + r * .28} ${y + r * .28} ${x} ${y + r} ${x - r * .28} ${y + r * .28} ${x - r} ${y} ${x - r * .28} ${y - r * .28}Z" fill="${f}"/>`;
+  const svg = (vb, vw, vh, h, label, body, cls = '') => `<svg class="${cls}" viewBox="${vb}" width="${Math.round(h * vw / vh)}" height="${h}" role="img" aria-label="${label}">${body}</svg>`;
+
+  /* ---------- A · Chibi Plus ---------- */
+  function charA(a, mood, h) {
+    const H = a.hair, HL = shade(H, .28), O = a.outfit, OL = shade(O, .3), S = a.skin, SD = shade(S, -.14), A = a.acc;
+    const arm = (d) => `<path d="${d}" fill="none" stroke="${O}" stroke-width="9" stroke-linecap="round"/>`;
+    const hand = (x, y) => `<circle cx="${x}" cy="${y}" r="5" fill="${S}"/>`;
+    const ARMS = {
+      idle: [['M42 91Q33 101 36 113', 36, 116], ['M78 91Q87 101 84 113', 84, 116]],
+      working: [['M42 91Q34 103 44 110', 45, 111], ['M78 91Q86 103 76 110', 75, 111]],
+      approval: [['M42 91Q33 101 36 113', 36, 116], ['M78 91Q93 82 93 63', 93, 59]],
+      error: [['M42 91Q25 86 31 67', 32, 63], ['M78 91Q95 86 89 67', 88, 63]],
+      done: [['M42 91Q28 83 26 65', 25, 61], ['M78 91Q92 83 94 65', 95, 61]],
+    }[mood];
+    let s = '<ellipse cx="60" cy="145" rx="26" ry="4.5" fill="rgba(0,0,0,.35)"/>';
+    // tóc sau
+    if (a.hs === 4) s += `<path d="M24 54Q22 15 60 15Q98 15 96 54V98Q96 106 87 102V54H33V102Q24 106 24 98Z" fill="${H}"/>`;
+    if (a.hs === 0) s += `<path d="M25 54Q23 16 60 16Q97 16 95 54V72Q95 80 87 80H33Q25 80 25 72Z" fill="${H}"/>`;
+    if (a.hs === 2) s += `<path d="M88 30Q114 34 109 66Q106 84 95 86Q103 66 91 50Z" fill="${H}"/><circle cx="92" cy="36" r="4.5" fill="${A}"/>`;
+    if (a.hs === 3) s += `<circle cx="60" cy="13" r="11" fill="${H}"/><rect x="50" y="20" width="20" height="4" rx="2" fill="${A}"/>`;
+    // chân, giày
+    s += `<rect x="46" y="118" width="11" height="22" rx="4" fill="${PANTS}"/><rect x="63" y="118" width="11" height="22" rx="4" fill="${PANTS}"/>`;
+    s += `<rect x="43" y="136" width="16" height="8" rx="4" fill="#f4f5fa"/><rect x="61" y="136" width="16" height="8" rx="4" fill="#f4f5fa"/>`;
+    s += `<rect x="43" y="141" width="16" height="3" rx="1.5" fill="${A}"/><rect x="61" y="141" width="16" height="3" rx="1.5" fill="${A}"/>`;
+    // thân áo hoodie
+    s += `<path d="M40 92Q40 82 52 82H68Q80 82 80 92V118Q80 124 74 124H46Q40 124 40 118Z" fill="${O}"/>`;
+    s += `<path d="M68 82Q80 82 80 92V118Q80 124 74 124H68Z" fill="rgba(0,0,0,.14)"/>`;
+    s += `<path d="M47 82Q60 97 73 82Q60 89 47 82Z" fill="${OL}"/>`;
+    s += `<path d="M55 90v9M65 90v9" stroke="#fff" stroke-width="1.6" stroke-linecap="round" opacity=".85"/>`;
+    s += `<path d="M50 108H70V115Q60 120 50 115Z" fill="rgba(0,0,0,.13)"/>`;
+    s += `<rect x="63" y="99" width="7" height="6" rx="1.5" fill="${A}"/>`;
+    s += arm(ARMS[0][0]) + arm(ARMS[1][0]);
+    if (mood === 'working') {
+      s += `<rect x="40" y="100" width="40" height="25" rx="3.5" fill="#2b3040"/><rect x="40" y="100" width="40" height="25" rx="3.5" fill="none" stroke="#454c61" stroke-width="1.2"/>`;
+      s += `<circle cx="60" cy="112" r="4" fill="${A}"/><circle cx="60" cy="112" r="7.5" fill="${A}" opacity=".18"/>`;
+    }
+    s += hand(ARMS[0][1], ARMS[0][2]) + hand(ARMS[1][1], ARMS[1][2]);
+    // đầu
+    const tilt = mood === 'working' ? 'rotate(4 60 82)' : mood === 'error' ? 'rotate(-4 60 82)' : '';
+    s += `<g transform="${tilt}">`;
+    s += `<rect x="55" y="76" width="10" height="9" fill="${SD}"/>`;
+    s += `<circle cx="28" cy="56" r="5" fill="${S}"/><circle cx="92" cy="56" r="5" fill="${S}"/>`;
+    s += `<ellipse cx="60" cy="52" rx="33" ry="30" fill="${S}"/>`;
+    s += `<ellipse cx="41" cy="63" rx="5.5" ry="3.2" fill="#ff8fa3" opacity=".5"/><ellipse cx="79" cy="63" rx="5.5" ry="3.2" fill="#ff8fa3" opacity=".5"/>`;
+    const eye = (x, ry, dy) => `<ellipse cx="${x}" cy="${54 + dy}" rx="4.6" ry="${ry}" fill="${INK}"/><circle cx="${x + 1.6}" cy="${51.6 + dy}" r="1.8" fill="#fff"/><circle cx="${x - 1.6}" cy="${56 + dy}" r=".9" fill="#fff"/>`;
+    const line = (d, w = 2.2, c = INK) => `<path d="${d}" fill="none" stroke="${c}" stroke-width="${w}" stroke-linecap="round" stroke-linejoin="round"/>`;
+    if (mood === 'idle') s += eye(47, 6, 0) + eye(73, 6, 0) + line('M54 66q6 4.5 12 0');
+    if (mood === 'working') s += eye(47, 4.6, 1.5) + eye(73, 4.6, 1.5) + line('M41 46l11 2M79 46l-11 2', 2, shade(H, -.1)) + line('M56 67h8');
+    if (mood === 'approval') s += eye(47, 7, 0) + eye(73, 7, 0) + line('M41 43q6-4 11-1M79 43q-6-4-11-1', 2, shade(H, -.1)) + `<ellipse cx="60" cy="68" rx="3.2" ry="4.2" fill="${MOUTH}"/>`;
+    if (mood === 'error') s += line('M42 50l9 4-9 4M78 50l-9 4 9 4', 2.6) + line('M52 69q4-5 8 0t8 0');
+    if (mood === 'done') s += line('M41 56q6-8 12 0M67 56q6-8 12 0', 2.6) + `<path d="M51 63q9 11 18 0Z" fill="${MOUTH}"/><path d="M56 68q4 3 8 0q-4-2-8 0Z" fill="#ff9aa8"/>`;
+    // tóc trước
+    const fringe = `<path d="M27 50Q26 20 60 20Q94 20 93 50Q84 38 74 36Q70 44 60 44Q56 38 50 36Q38 38 27 50Z" fill="${H}"/>`;
+    if (a.hs === 0 || a.hs === 2 || a.hs === 3) s += fringe;
+    if (a.hs === 1) s += `<path d="M44 21L50 8 56 18 62 5 68 18 76 9 79 23Z" fill="${H}"/><path d="M27 48Q24 18 60 16Q96 18 93 48L86 38 80 46 72 36 64 46 56 36 48 46 40 38 34 46Z" fill="${H}"/>`;
+    if (a.hs === 4) s += `<path d="M27 50Q26 20 60 20Q94 20 93 50Q82 32 60 34Q44 34 36 46Q32 48 27 50Z" fill="${H}"/>`;
+    if (a.hs === 5) s += [[34, 36, 12], [46, 26, 13], [60, 22, 14], [74, 26, 13], [86, 36, 12], [29, 50, 9], [91, 50, 9]].map(([x, y, r]) => `<circle cx="${x}" cy="${y}" r="${r}" fill="${H}"/>`).join('');
+    s += `<path d="M40 30Q52 23 66 26" fill="none" stroke="${HL}" stroke-width="3" stroke-linecap="round" opacity=".55"/>`;
+    if (a.ax === 'headphones') s += `<path d="M27 52Q26 12 60 12Q94 12 93 52" fill="none" stroke="${A}" stroke-width="5" stroke-linecap="round"/><rect x="20" y="46" width="11" height="19" rx="5.5" fill="${A}"/><rect x="89" y="46" width="11" height="19" rx="5.5" fill="${A}"/><rect x="22.5" y="50" width="3" height="11" rx="1.5" fill="rgba(0,0,0,.2)"/>`;
+    if (a.ax === 'glasses') s += `<rect x="38" y="46" width="18" height="15" rx="6" fill="rgba(255,255,255,.14)" stroke="${INK}" stroke-width="1.8"/><rect x="64" y="46" width="18" height="15" rx="6" fill="rgba(255,255,255,.14)" stroke="${INK}" stroke-width="1.8"/><path d="M56 52h8" stroke="${INK}" stroke-width="1.8"/>`;
+    s += '</g>';
+    // dấu hiệu trạng thái
+    if (mood === 'approval') s += `<circle cx="104" cy="34" r="10" fill="${AMBER}"/><path d="M104 28v7" stroke="#1d1500" stroke-width="3" stroke-linecap="round"/><circle cx="104" cy="39.5" r="1.7" fill="#1d1500"/>`;
+    if (mood === 'working') s += `<rect x="88" y="12" width="26" height="14" rx="7" fill="#fffdf6"/><circle cx="95" cy="19" r="2" fill="${INK}"/><circle cx="101" cy="19" r="2" fill="${INK}" opacity=".6"/><circle cx="107" cy="19" r="2" fill="${INK}" opacity=".3"/>`;
+    if (mood === 'error') s += `<path d="M102 22q6 9 0 13q-6-4 0-13Z" fill="#7cc8ff"/><path d="M12 22l8 8M20 22l-8 8" stroke="${RED}" stroke-width="3" stroke-linecap="round"/>`;
+    if (mood === 'done') s += star(14, 40, 7, '#ffd27a') + star(106, 34, 8, '#ffd27a') + star(98, 14, 4.5, TEAL);
+    return svg('0 0 120 150', 120, 150, h, `${a.name}, ${mood}`, s);
+  }
+
+  /* ---------- C · Pixel sprite ---------- */
+  const PX = [
+    '....kkkkkkkk....', '...khhhhhhhhk...', '..khiihhhhhhhk..', '..khhhhhhhhhhk..', '..khhsssssshhk..', '..khsssssssshk..',
+    '..kssessssessk..', '..kssessssessk..', '..kscsssssscsk..', '...ksssmmsssk...', '....kkkkkkkk....', '...kooaaaaook...',
+    '..kooooaaooook..', '..kokooooookok..', '..kskooooooksk..', '...kkooooookk...', '....kppppppk....', '....kppkkppk....',
+    '....kppkkppk....', '...kbbbkkbbbk...', '...kkkkkkkkkk...',
+  ];
+  const PX_MOOD = {
+    idle: {},
+    working: { 6: '..kssssssssssk..', 7: '..kssessssessk..', 13: '..kkLLLLLLLLkk..', 14: '..ksLLLGGLLLsk..', 15: '...kLLLLLLLLk...' },
+    approval: { 13: '..kokooooook....', 14: '..kskooooook....' },
+    error: { 6: '..kssssssssssk..', 7: '..kseesssseesk..' },
+    done: { 7: '..ksesessesesk..', 9: '...kssmmmmssk...', 13: '....kooooook....', 14: '....kooooook....' },
+  };
+  const ARM_UP = [[14, 5, 'k'], [14, 6, 's'], [15, 6, 'k'], [14, 7, 's'], [15, 7, 'k'], [14, 8, 'o'], [15, 8, 'k'], [14, 9, 'o'], [15, 9, 'k'], [14, 10, 'o'], [15, 10, 'k'], [13, 11, 'o'], [14, 11, 'o'], [15, 11, 'k'], [13, 12, 'o'], [14, 12, 'k']];
+  function charC(a, mood, h) {
+    const col = { k: '#1a1423', h: a.hair, i: shade(a.hair, .3), s: a.skin, c: shade(a.skin, -.0) === a.skin ? '#f29aa0' : '#f29aa0', e: '#241b4d', m: '#a8384f', o: a.outfit, a: a.acc, D: shade(a.acc, -.22), p: PANTS, b: '#eef0f7', L: '#cfd4e3', G: a.acc, A: AMBER, R: RED, B: '#7cc8ff', Y: '#ffd27a', T: TEAL };
+    const g = new Map();
+    const put = (x, y, c) => { if (c === '.') g.delete(x + ',' + y); else g.set(x + ',' + y, c); };
+    const rows = PX.map((r, y) => PX_MOOD[mood][y] ?? r);
+    rows.forEach((r, y) => [...r].forEach((c, x) => put(x, y, c)));
+    const v = a.hs % 4;
+    if (v === 1) for (let y = 4; y <= 11; y++) { put(2, y, 'h'); put(13, y, 'h'); put(1, y, 'k'); put(14, y, 'k'); }
+    if (v === 2) { for (let x = 6; x <= 9; x++) { put(x, -2, 'k'); put(x, -1, 'h'); } put(5, -1, 'k'); put(10, -1, 'k'); }
+    if (v === 3) { for (let y = 1; y <= 3; y++) for (let x = 3; x <= 12; x++) if (g.get(x + ',' + y) === 'h' || g.get(x + ',' + y) === 'i') put(x, y, 'a'); for (let x = 3; x <= 12; x++) put(x, 4, 'D'); put(13, 4, 'D'); put(14, 4, 'k'); }
+    if (a.ax === 'headphones') { for (let x = 4; x <= 11; x++) put(x, 0, 'a'); [5, 6, 7].forEach((y) => { put(2, y, 'a'); put(13, y, 'a'); }); }
+    if (a.ax === 'glasses') { [4, 6, 9, 11].forEach((x) => put(x, 6, 'k')); put(7, 6, 'k'); put(8, 6, 'k'); }
+    if (mood === 'approval' || mood === 'done') ARM_UP.forEach(([x, y, c]) => put(x, y, c));
+    if (mood === 'done') ARM_UP.forEach(([x, y, c]) => put(15 - x, y, c));
+    if (mood === 'approval') [[18, 0], [18, 1], [18, 2], [18, 3], [18, 5]].forEach(([x, y]) => put(x, y, 'A'));
+    if (mood === 'error') { [[17, 1], [19, 1], [18, 2], [17, 3], [19, 3]].forEach(([x, y]) => put(x, y, 'R')); put(0, 5, 'B'); put(0, 6, 'B'); put(1, 6, 'B'); }
+    if (mood === 'done') { [[18, -1], [17, 0], [18, 0], [19, 0], [18, 1]].forEach(([x, y]) => put(x, y, 'Y')); put(-2, 3, 'T'); put(19, 4, 'T'); }
+    if (mood === 'working') [[16, 2], [18, 2], [20, 2]].forEach(([x, y]) => put(x, y, 'b'));
+    // gộp các ô cùng màu trên một hàng thành một rect
+    const cells = [...g.entries()].map(([k, c]) => { const [x, y] = k.split(',').map(Number); return { x, y, c }; }).sort((p, q) => p.y - q.y || p.x - q.x);
+    let s = '<rect x="2" y="21" width="12" height="1" fill="rgba(0,0,0,.35)"/>';
+    for (let i = 0; i < cells.length;) {
+      let j = i;
+      while (j + 1 < cells.length && cells[j + 1].y === cells[i].y && cells[j + 1].c === cells[i].c && cells[j + 1].x === cells[j].x + 1) j++;
+      s += `<rect x="${cells[i].x}" y="${cells[i].y}" width="${j - i + 1}" height="1" fill="${col[cells[i].c]}"/>`;
+      i = j + 1;
+    }
+    return svg('-3 -3 24 26', 24, 26, h, `${a.name}, ${mood}`, s, 'px').replace('<svg ', '<svg shape-rendering="crispEdges" ');
+  }
+
+  const STYLES = [
+    { id: 'A', name: 'Chibi Plus', accent: 'var(--working)', draw: charA, big: 118, small: 62,
+      desc: 'The current character grown up: full body, layered hair with highlights, real eyes, hands, a hoodie with drawstrings and a badge. Six hairstyles, headphones or glasses. The pose changes with the mood (laptop, raised hand, hands on head, arms up), so you can read a room at a glance.',
+      feel: 'Friendly, expressive', read: 'Good: big head and pose carry the mood', effort: 'Medium: one SVG component, parts switched by mood', risk: 'More parts to draw and test than today; keep hair shapes simple' },
+    { id: 'C', name: 'Pixel Sprite', accent: 'var(--approval)', draw: charC, big: 104, small: 62,
+      desc: 'A 16-pixel-wide sprite with a dark outline, drawn from a small text grid. Hair, cap, headphones and glasses are pixel overlays. Mood shows through arms, eyes and a small icon. It has the most SVG nodes of the three (one rectangle per pixel run), but it is the simplest to author and to animate with two or three frames.',
+      feel: 'Playful, game-like', read: 'Very good: hard edges stay crisp at any size', effort: 'Low: grid data plus a tiny renderer', risk: 'Highest node count unless drawn to a canvas; a big change of tone, so cards and popup need matching pixel avatars' },
+  ];
+
+  function render() {
+    const t = team(), lead = t[1];
+    document.getElementById('moods').innerHTML = MOODS.map(([id, label]) => `<button type="button" data-mood="${id}" aria-pressed="${state.mood === id}">${label}</button>`).join('');
+    let html = '', cmp = '';
+    for (const st of STYLES) {
+      const moods = MOODS.map(([id, label]) => `<div class="fig${state.mood === id ? ' is-on' : ''}">${st.draw(lead, id, Math.round(st.big * .85))}<span class="mood">${label}</span></div>`).join('');
+      const line = t.map((a) => `<div class="fig">${st.draw(a, state.mood, st.big)}<span class="tag">${a.name}<small>${a.role}</small></span></div>`).join('');
+      const small = t.map((a) => `<div class="fig">${st.draw(a, state.mood, st.small)}</div>`).join('');
+      const tmp = document.createElement('div'); tmp.innerHTML = t.map((a) => st.draw(a, state.mood, 100)).join('');
+      const nodes = Math.round(tmp.querySelectorAll('svg *').length / t.length);
+      html += `<section class="style" style="--accent:${st.accent}" aria-label="Style ${st.id}">
+        <div class="style-head"><span class="letter">${st.id}</span><h2>${st.name}</h2><span class="stat">≈ ${nodes} SVG nodes per character</span></div>
+        <p class="desc">${st.desc}</p>
+        <div class="cols">
+          <div class="block"><h3>Five moods · ${lead.name}</h3><div class="stage">${moods}</div></div>
+          <div class="block"><h3>Team</h3><div class="stage">${line}</div></div>
+        </div>
+        <div class="block"><h3>At office size</h3><div class="stage small">${small}</div></div>
+      </section>`;
+      cmp += `<tr><td><b>${st.id}</b> ${st.name}</td><td>${st.feel}</td><td>${st.read}</td><td class="num">≈ ${nodes}</td><td>${st.effort}</td><td>${st.risk}</td></tr>`;
+    }
+    document.getElementById('styles').innerHTML = html;
+    document.getElementById('cmp').innerHTML = cmp;
+    document.getElementById('hint').textContent = 'Team rows show: ' + MOODS.find(([id]) => id === state.mood)[1];
+  }
+  document.addEventListener('click', (e) => {
+    const b = e.target.closest('[data-mood]');
+    if (b) { state.mood = b.dataset.mood; render(); }
+  });
+  document.getElementById('shuffle').addEventListener('click', () => { state.shift = (state.shift + 1) % TEAM0.length; render(); });
+  render();
+})();
+</script>
+
+</body></html>
